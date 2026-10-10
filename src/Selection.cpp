@@ -2,6 +2,9 @@
    License: GPLv3 */
 
 #include "base/Base.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 #include "base/Pixmap.h"
 #include <uiautomationcore.h>
 #include "gui/Dpi.h"
@@ -551,6 +554,32 @@ static void PaintTouchSelHandles(MainWindow* win, Gfx* gfx) {
     gfx->FillEllipse(end, col);
 }
 
+static u8 SelectionColorAlpha(const ParsedColor* parsed) {
+    u8 alpha = GetAlpha(parsed->col);
+    if (alpha != 0) return alpha;
+    // A six-digit color uses the historical overlay opacity. An explicit
+    // eight-digit alpha00 is the user's choice of a transparent background.
+    Str value = parsed->s;
+    while (len(value) && str::IsWs(value.s[0])) value = Str(value.s + 1, len(value) - 1);
+    while (len(value) && str::IsWs(value.s[len(value) - 1])) value = Str(value.s, len(value) - 1);
+    if (!str::TrimPrefix(value, StrL("0x"))) str::TrimPrefix(value, StrL("#"));
+    return parsed->parsedOk && len(value) == 8 ? 0 : kSelectionDefaultAlpha;
+}
+
+#if IS_DEBUG
+void Selection_UnitTestsColor() {
+    const Str values[] = {StrL("#123456"), StrL("#00123456"), StrL(" 0x00123456 "), StrL("#a0123456")};
+    const u8 expected[] = {kSelectionDefaultAlpha, 0, 0, 0xa0};
+    for (int i = 0; i < dimof(values); i++) {
+        ParsedColor parsed;
+        parsed.s = values[i];
+        ParseColor(parsed);
+        utassert(parsed.parsedOk);
+        utassert(SelectionColorAlpha(&parsed) == expected[i]);
+    }
+}
+#endif
+
 void PaintSelection(MainWindow* win, Gfx* gfx) {
     ReportIf(!win->AsFixed());
 
@@ -615,10 +644,7 @@ void PaintSelection(MainWindow* win, Gfx* gfx) {
     // honor the alpha channel of SelectionColor (#aarrggbb): a smaller alpha makes
     // the overlay more transparent so the selected text stays crisp (issue #3209).
     // Fall back to the historical default when no alpha is given (e.g. #rrggbb).
-    u8 alpha = GetAlpha(parsedCol->col);
-    if (alpha == 0) {
-        alpha = kSelectionDefaultAlpha;
-    }
+    u8 alpha = SelectionColorAlpha(parsedCol);
     if (len(quadPts) > 0) {
         PaintTransparentQuads(gfx, win->canvasRc, quadPts, parsedCol->col, alpha, /*drawBorder*/ true);
     }
@@ -868,6 +894,8 @@ void OnSelectAll(MainWindow* win, bool textOnly) {
     }
 
     DisplayModel* dm = win->AsFixed();
+    // A command replaces the drag selection; later mouse moves must not rewrite it.
+    CancelDrag(win);
     if (textOnly) {
         int pageNo;
         for (pageNo = 1; !dm->PageShown(pageNo); pageNo++) {
@@ -903,6 +931,7 @@ void OnSelectCurrentPage(MainWindow* win) {
     if (!win->ctrl->ValidPageNo(pageNo)) {
         return;
     }
+    CancelDrag(win);
     dm->textSelection->StartAt(pageNo, 0);
     dm->textSelection->SelectUpTo(pageNo, -1);
     win->selectionRect = Rect::FromXY(INT_MIN / 2, INT_MIN / 2, INT_MAX, INT_MAX);
@@ -1003,12 +1032,14 @@ void OnSelectionEdgeAutoscroll(MainWindow* win, int x, int y) {
     }
 }
 
-void OnSelectionStart(MainWindow* win, int x, int y, WPARAM /*key*/, bool forceRect) {
+void OnSelectionStart(MainWindow* win, int x, int y, WPARAM key, bool forceRect) {
     ReportIf(!win->AsFixed());
-    // selecting with the mouse takes over: leave keyboard selection mode so its
-    // caret and help bar don't linger over a mouse selection
+    DisplayModel* dm = win->AsFixed();
+    bool isShift = IsShiftPressed() || (key & MK_SHIFT);
+    bool isCtrl = IsCtrlPressed() || (key & MK_CONTROL);
+    bool extend = !forceRect && isShift && !isCtrl && win->showSelection && dm->textSelection->result.len > 0;
     StopSelectTextWithKeyboard(win);
-    DeleteOldSelectionInfo(win, true);
+    DeleteOldSelectionInfo(win, !extend);
 
     win->selectionDragEdge = SelectionDragEdge::None;
     win->selectionRect = Rect(x, y, 0, 0);
@@ -1016,17 +1047,18 @@ void OnSelectionStart(MainWindow* win, int x, int y, WPARAM /*key*/, bool forceR
     win->selectingByWord = false;
     win->mouseAction = MouseAction::Selecting;
 
-    bool isShift = IsShiftPressed();
-    bool isCtrl = IsCtrlPressed();
-
     // Ctrl+drag (or forceRect, used when placing a new signature) is a
     // rectangular selection, not a text one
     if (!forceRect && (!isCtrl || isShift)) {
-        DisplayModel* dm = win->AsFixed();
         int pageNo = dm->GetPageNoByPoint(Point(x, y));
         if (dm->ValidPageNo(pageNo)) {
             PointF pt = dm->CvtFromScreen(Point(x, y), pageNo);
-            dm->textSelection->StartAt(pageNo, pt.x, pt.y);
+            if (extend) {
+                dm->textSelection->SelectUpTo(pageNo, pt.x, pt.y);
+                UpdateTextSelection(win, false);
+            } else {
+                dm->textSelection->StartAt(pageNo, pt.x, pt.y);
+            }
             win->mouseAction = MouseAction::SelectingText;
         }
     }
@@ -1037,9 +1069,6 @@ void OnSelectionStart(MainWindow* win, int x, int y, WPARAM /*key*/, bool forceR
 }
 
 void OnSelectionStop(MainWindow* win, int x, int y, bool aborted) {
-    if (GetCapture() == win->hwndCanvas) {
-        ReleaseCapture();
-    }
     KillTimer(win->hwndCanvas, kSelectSmoothScrollTimerID);
 
     bool editingRect = win->selectionDragEdge != SelectionDragEdge::None && win->mouseAction == MouseAction::Selecting;
@@ -1083,6 +1112,10 @@ void OnSelectionStop(MainWindow* win, int x, int y, bool aborted) {
         win->selectionDragEdge = SelectionDragEdge::None;
     }
     win->selectingByWord = false;
+    win->mouseAction = MouseAction::None;
+    if (GetCapture() == win->hwndCanvas) {
+        ReleaseCapture();
+    }
     // refresh selection-dependent toolbar buttons once, when the selection is
     // finalized, rather than on every repaint while dragging (UpdateTextSelection
     // runs from PaintSelection on each frame, which flickered the toolbar)

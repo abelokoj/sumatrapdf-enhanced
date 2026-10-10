@@ -2,6 +2,9 @@
    License: GPLv3 */
 
 #include "base/Base.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 #include "base/WinDynCalls.h"
 #include "gui/Dpi.h"
 #include "base/File.h"
@@ -340,6 +343,7 @@ void ToggleLaserPointer(MainWindow* win) {
     CancelAnnotationPlacement(win);
     CancelAnnotationLasso(win);
     win->handTool = false;
+    win->textSelectTool = false;
     win->laserPointerActive = true;
     SendMessageW(win->hwndCanvas, WM_SETCURSOR, 0, 0);
 }
@@ -1362,10 +1366,16 @@ static void StopSmoothScroll(MainWindow* win) {
     }
     KillTimer(win->hwndCanvas, kSmoothScrollTimerID);
     win->scrollAnimActive = false;
+    win->scrollAnimModel = nullptr;
     if (win->scrollAnimHiResTimer) {
         timeEndPeriod(1);
         win->scrollAnimHiResTimer = false;
     }
+}
+
+static bool SmoothScrollContextChanged(MainWindow* win) {
+    DisplayModel* dm = win->AsFixed();
+    return !dm || dm != win->scrollAnimModel || dm->viewChangeId != win->scrollAnimViewChange;
 }
 
 // Set/update destination for smooth vertical scroll. Does not restart motion
@@ -1374,6 +1384,9 @@ static void StartOrUpdateSmoothScrollY(MainWindow* win, int targetY) {
     DisplayModel* dm = win->AsFixed();
     if (!dm) {
         return;
+    }
+    if (win->scrollAnimActive && SmoothScrollContextChanged(win)) {
+        StopSmoothScroll(win);
     }
     int current = dm->yOffset();
     if (current == targetY && !win->scrollAnimActive) {
@@ -1387,6 +1400,8 @@ static void StartOrUpdateSmoothScrollY(MainWindow* win, int targetY) {
     win->scrollTargetY = targetY;
     if (!win->scrollAnimActive) {
         win->scrollAnimY = (double)current;
+        win->scrollAnimModel = dm;
+        win->scrollAnimViewChange = dm->viewChangeId;
         win->scrollAnimLastTime = TimeGet();
         win->scrollAnimActive = true;
         // 1 ms timer resolution while animating so WM_TIMER is less jumpy
@@ -1533,6 +1548,9 @@ static void OnVScroll(MainWindow* win, WPARAM wp, int lineSteps = 1, int scrollP
     // a fast stream of wheel / key-repeat events advances only a fraction of
     // what the same events do with SmoothScroll off (issue #5857). Step from
     // the pending target instead, so they accumulate the same total distance.
+    if (win->scrollAnimActive && SmoothScrollContextChanged(win)) {
+        StopSmoothScroll(win);
+    }
     if (useSmoothScroll && win->scrollAnimActive) {
         si.nPos = win->scrollTargetY;
     }
@@ -1729,11 +1747,18 @@ void SetHandTool(MainWindow* win, bool enabled) {
     win->lastInputWasTouch = false;
     HideTouchSelHandles(win);
     win->handTool = enabled;
+    win->textSelectTool = false;
     DeleteOldSelectionInfo(win, true);
     if (win->CurrentTab()) SetSelectedAnnotation(win->CurrentTab(), nullptr);
     win->annotationUnderCursor = nullptr;
     HideAnnotationHoverOverlay(win);
     if (win->infotip) win->DeleteToolTip();
+    SendMessageW(win->hwndCanvas, WM_SETCURSOR, 0, 0);
+}
+
+void SetTextSelectTool(MainWindow* win) {
+    SetHandTool(win, false);
+    win->textSelectTool = true;
     SendMessageW(win->hwndCanvas, WM_SETCURSOR, 0, 0);
 }
 
@@ -1990,20 +2015,20 @@ void FinishAnnotationNudge(MainWindow* win) {
 }
 
 static void StopMouseDrag(MainWindow* win, int x, int y, bool aborted) {
-    if (GetCapture() != win->hwndCanvas) {
+    if (GetCapture() != win->hwndCanvas && !aborted) {
         return;
     }
 
     if (GetCursor()) {
         SetCanvasCursor(win, IDC_ARROW);
     }
-    ReleaseCapture();
+    // ReleaseCapture synchronously delivers WM_CAPTURECHANGED. Finish the
+    // gesture first so normal button-up is not mistaken for cancellation.
+    win->mouseAction = MouseAction::None;
+    bool wasAnnotation = StopDraggingAnnotation(win, x, y, aborted);
+    if (GetCapture() == win->hwndCanvas) ReleaseCapture();
 
-    if (StopDraggingAnnotation(win, x, y, aborted)) {
-        return;
-    }
-
-    if (aborted) {
+    if (wasAnnotation || aborted) {
         return;
     }
 
@@ -2218,6 +2243,16 @@ static bool LassoContains(const Vec<PointF>& path, PointF p) {
     return inside;
 }
 
+static RectF LassoRect(PointF a, PointF b) {
+    return {std::min(a.x, b.x), std::min(a.y, b.y), fabsf(a.x - b.x), fabsf(a.y - b.y)};
+}
+
+static bool LassoEncloses(const AnnotationLasso& lasso, PointF p) {
+    if (!lasso.rectangular) return LassoContains(lasso.path, p);
+    RectF r = lasso.preview;
+    return !r.IsEmpty() && p.x >= r.x && p.x <= r.Right() && p.y >= r.y && p.y <= r.Bottom();
+}
+
 static void ClearLassoSelection(AnnotationLasso& lasso) {
     VecClear(lasso.path);
     VecClear(lasso.selected);
@@ -2249,6 +2284,7 @@ void ToggleAnnotationLasso(MainWindow* win) {
     CancelAnnotationPlacement(win);
     StopLaserPointer(win);
     win->handTool = false;
+    win->textSelectTool = false;
     DeleteOldSelectionInfo(win, true);
     SetSelectedAnnotation(win->CurrentTab(), nullptr);
     win->annotationLasso.active = true;
@@ -2270,7 +2306,7 @@ static bool ValidateLasso(MainWindow* win) {
     }
     for (Annotation* annot : lasso.selected) {
         if (!EngineOwnsAnnotation(dm->GetEngine(), annot, lasso.pageNo) || !AnnotationIsLive(annot) ||
-            annot->pageNo != lasso.pageNo) {
+            annot->pageNo != lasso.pageNo || AnnotationIsReadOnly(annot)) {
             ClearLassoSelection(lasso);
             break;
         }
@@ -2297,6 +2333,11 @@ static bool CanRotateLasso(AnnotationLasso& lasso) {
         if (!AnnotationCanBeRotated(annot->type)) return false;
     }
     return true;
+}
+
+bool AnnotationLassoCanRotate(MainWindow* win) {
+    return win && ValidateLasso(win) && !win->annotationLasso.drawing && !win->annotationLasso.transforming &&
+           CanRotateLasso(win->annotationLasso);
 }
 
 static PointF RotateLassoPoint(PointF p, RectF bounds, float degrees) {
@@ -2358,7 +2399,9 @@ static bool LassoOnDown(MainWindow* win, Point pt) {
         if (!dm->ValidPageNo(page)) return true;
         lasso.pageNo = page;
         lasso.drawing = true;
-        VecAppend(lasso.path, dm->CvtFromScreen(pt, page));
+        lasso.origin = dm->CvtFromScreen(pt, page);
+        lasso.preview = LassoRect(lasso.origin, lasso.origin);
+        VecAppend(lasso.path, lasso.origin);
     }
     HwndSetFocus(win->hwndFrame);
     SetCapture(win->hwndCanvas);
@@ -2374,9 +2417,12 @@ static bool LassoOnMove(MainWindow* win, Point pt, WPARAM key) {
     auto* dm = win->AsFixed();
     PointF p = dm->CvtFromScreen(pt, lasso.pageNo);
     if (lasso.drawing) {
-        if (len(lasso.path) < 16384 &&
-            (len(lasso.path) == 0 || dm->CvtToScreen(lasso.pageNo, VecLast(lasso.path)) != pt))
+        if (lasso.rectangular) {
+            lasso.preview = LassoRect(lasso.origin, p);
+        } else if (len(lasso.path) < 16384 &&
+                   (len(lasso.path) == 0 || dm->CvtToScreen(lasso.pageNo, VecLast(lasso.path)) != pt)) {
             VecAppend(lasso.path, p);
+        }
     } else if (lasso.transforming) {
         RectF r = lasso.bounds;
         float dx = p.x - lasso.origin.x, dy = p.y - lasso.origin.y;
@@ -2435,33 +2481,39 @@ static void CommitLassoTransform(MainWindow* win) {
     }
 }
 
+static void CollectLassoAnnotations(AnnotationLasso& lasso, EngineBase* engine) {
+    VecClear(lasso.selected);
+    Vec<Annotation*> annotations;
+    EngineMupdfGetAnnotations(engine, annotations);
+    for (Annotation* annot : annotations) {
+        if (annot->pageNo != lasso.pageNo || !AnnotationIsLive(annot) || AnnotationIsReadOnly(annot) ||
+            (!AnnotationCanBeCopied(annot->type) && !AnnotationIsTextMarkup(annot->type) &&
+             annot->type != AnnotationType::FileAttachment))
+            continue;
+        RectF r = GetBounds(annot);
+        if (annot->type == AnnotationType::Ink) {
+            Vec<int> counts;
+            Vec<PointF> points;
+            GetInkList(annot, counts, points);
+            bool enclosed = len(points) > 0;
+            for (PointF p : points) enclosed &= LassoEncloses(lasso, p);
+            if (enclosed) VecAppend(lasso.selected, annot);
+            continue;
+        }
+        // Fully enclosed items are selected, including separate strokes of a handwritten word.
+        if (LassoEncloses(lasso, {r.x, r.y}) && LassoEncloses(lasso, {r.Right(), r.y}) &&
+            LassoEncloses(lasso, {r.x, r.Bottom()}) && LassoEncloses(lasso, {r.Right(), r.Bottom()}))
+            VecAppend(lasso.selected, annot);
+    }
+}
+
 static bool LassoOnUp(MainWindow* win, Point pt) {
     if (!ValidateLasso(win)) return false;
     auto& lasso = win->annotationLasso;
     LassoOnMove(win, pt, MK_LBUTTON);
-    if (lasso.drawing && len(lasso.path) >= 3) {
-        Vec<Annotation*> annotations;
-        EngineMupdfGetAnnotations(win->AsFixed()->GetEngine(), annotations);
-        for (Annotation* annot : annotations) {
-            if (annot->pageNo != lasso.pageNo ||
-                (!AnnotationCanBeCopied(annot->type) && !AnnotationIsTextMarkup(annot->type) &&
-                 annot->type != AnnotationType::FileAttachment))
-                continue;
-            RectF r = GetBounds(annot);
-            if (annot->type == AnnotationType::Ink) {
-                Vec<int> counts;
-                Vec<PointF> points;
-                GetInkList(annot, counts, points);
-                bool enclosed = len(points) > 0;
-                for (PointF p : points) enclosed &= LassoContains(lasso.path, p);
-                if (enclosed) VecAppend(lasso.selected, annot);
-                continue;
-            }
-            // Fully enclosed items are selected, including separate strokes of a handwritten word.
-            if (LassoContains(lasso.path, {r.x, r.y}) && LassoContains(lasso.path, {r.Right(), r.y}) &&
-                LassoContains(lasso.path, {r.x, r.Bottom()}) && LassoContains(lasso.path, {r.Right(), r.Bottom()}))
-                VecAppend(lasso.selected, annot);
-        }
+    bool selecting = lasso.drawing && (lasso.rectangular ? !lasso.preview.IsEmpty() : len(lasso.path) >= 3);
+    if (selecting) {
+        CollectLassoAnnotations(lasso, win->AsFixed()->GetEngine());
         UpdateLassoBounds(lasso);
     } else if (lasso.transforming) {
         CommitLassoTransform(win);
@@ -2470,6 +2522,7 @@ static bool LassoOnUp(MainWindow* win, Point pt) {
     VecClear(lasso.path);
     if (GetCapture() == win->hwndCanvas) ReleaseCapture();
     HwndInvalidate(win->hwndCanvas);
+    if (selecting && len(lasso.selected) > 0) ShowLassoToolbarActions(win);
     return true;
 }
 
@@ -2499,16 +2552,98 @@ static bool DuplicateLasso(MainWindow* win) {
     return true;
 }
 
+static void DeleteLassoAnnotations(EngineBase* engine, Vec<Annotation*>& selected) {
+    EngineMupdfBeginOperation(engine, "Delete lasso selection");
+    for (Annotation* annot : selected) {
+        DetachAnnotationFromUI(annot);
+        DeleteAnnotation(annot);
+    }
+    EngineMupdfEndOperation(engine);
+    VecClear(selected);
+}
+
+static void DeleteLasso(MainWindow* win) {
+    auto& lasso = win->annotationLasso;
+    Vec<Annotation*> selected = lasso.selected;
+    ClearLassoSelection(lasso);
+    DeleteLassoAnnotations(win->AsFixed()->GetEngine(), selected);
+    RefreshAnnotationLists(win->CurrentTab());
+    NotifyAnnotationsChanged(win->CurrentTab());
+    MainWindowRerender(win);
+}
+
+static bool StyleLasso(EngineBase* engine, AnnotationLasso& lasso, int cmdId, Color color) {
+    bool width = cmdId == CmdLassoThinner || cmdId == CmdLassoThicker;
+    EngineMupdfBeginOperation(engine, width ? "Change selection thickness" : "Recolor selection");
+    bool changed = false;
+    for (Annotation* annot : lasso.selected) {
+        if (width && AnnotationSupportsBorder(annot->type)) {
+            float oldWidth = BorderWidthF(annot);
+            float newWidth = ClampF(oldWidth * (cmdId == CmdLassoThinner ? 0.8f : 1.25f), 0.1f, 72.f);
+            if (newWidth == oldWidth) continue;
+            SetBorderWidth(annot, newWidth);
+            changed = true;
+        } else if (!width) {
+            PdfColor pdfColor = MkPdfColor(GetRValue(color), GetGValue(color), GetBValue(color), (u8)Opacity(annot));
+            if (annot->type == AnnotationType::FreeText) {
+                if (DefaultAppearanceTextColor(annot) == pdfColor) continue;
+                SetDefaultAppearanceTextColor(annot, pdfColor);
+                changed = true;
+            } else if (AnnotationSupportsColor(annot->type)) {
+                changed |= SetColor(annot, pdfColor);
+            }
+        }
+    }
+    EngineMupdfEndOperation(engine);
+    return changed;
+}
+
+void RecolorAnnotationLasso(MainWindow* win, Color color) {
+    if (!win || !ValidateLasso(win) || win->annotationLasso.drawing || win->annotationLasso.transforming ||
+        len(win->annotationLasso.selected) == 0)
+        return;
+    auto& lasso = win->annotationLasso;
+    bool changed = StyleLasso(win->AsFixed()->GetEngine(), lasso, CmdLassoRecolor, color);
+    UpdateLassoBounds(lasso);
+    if (changed) {
+        NotifyAnnotationsChanged(win->CurrentTab());
+        MainWindowRerender(win);
+    }
+    HwndInvalidate(win->hwndCanvas);
+}
+
 bool HandleAnnotationLassoCommand(MainWindow* win, int cmdId) {
+    if (cmdId == CmdLassoFreehand || cmdId == CmdLassoRectangle) {
+        auto& lasso = win->annotationLasso;
+        lasso.rectangular = cmdId == CmdLassoRectangle;
+        if (!lasso.active)
+            ToggleAnnotationLasso(win);
+        else if (lasso.drawing || lasso.transforming) {
+            ClearLassoSelection(lasso);
+            if (GetCapture() == win->hwndCanvas) ReleaseCapture();
+        }
+        ToolbarUpdateStateForWindow(win, true);
+        HwndInvalidate(win->hwndCanvas);
+        return true;
+    }
     bool rotate = cmdId == CmdLassoRotateLeft || cmdId == CmdLassoRotateRight;
     bool width = cmdId == CmdLassoThinner || cmdId == CmdLassoThicker;
-    if (!rotate && !width && cmdId != CmdLassoDuplicate && cmdId != CmdLassoRecolor) return false;
+    if (!rotate && !width && cmdId != CmdLassoDuplicate && cmdId != CmdLassoRecolor && cmdId != CmdLassoDelete)
+        return false;
     if (!ValidateLasso(win) || win->annotationLasso.drawing || win->annotationLasso.transforming ||
         len(win->annotationLasso.selected) == 0)
         return true;
     auto& lasso = win->annotationLasso;
+    if (cmdId == CmdLassoDelete) {
+        DeleteLasso(win);
+        return true;
+    }
     if (cmdId == CmdLassoDuplicate) {
         DuplicateLasso(win);
+        return true;
+    }
+    if (cmdId == CmdLassoRecolor) {
+        RecolorAnnotationLasso(win, InkPenColor(win));
         return true;
     }
     if (rotate) {
@@ -2527,27 +2662,7 @@ bool HandleAnnotationLassoCommand(MainWindow* win, int cmdId) {
         HwndInvalidate(win->hwndCanvas);
         return true;
     }
-    auto* engine = win->AsFixed()->GetEngine();
-    EngineMupdfBeginOperation(engine, width ? "Change selection thickness" : "Recolor selection");
-    bool changed = false;
-    Color color = InkPenColor(win);
-    for (Annotation* annot : lasso.selected) {
-        if (width && AnnotationSupportsBorder(annot->type)) {
-            float oldWidth = BorderWidthF(annot);
-            float newWidth = ClampF(oldWidth * (cmdId == CmdLassoThinner ? 0.8f : 1.25f), 0.1f, 72.f);
-            if (newWidth == oldWidth) continue;
-            SetBorderWidth(annot, newWidth);
-            changed = true;
-        } else if (!width) {
-            PdfColor pdfColor = MkPdfColor(GetRValue(color), GetGValue(color), GetBValue(color), (u8)Opacity(annot));
-            if (annot->type == AnnotationType::FreeText) {
-                SetDefaultAppearanceTextColor(annot, pdfColor);
-                changed = true;
-            } else if (AnnotationSupportsColor(annot->type))
-                changed |= SetColor(annot, pdfColor);
-        }
-    }
-    EngineMupdfEndOperation(engine);
+    bool changed = StyleLasso(win->AsFixed()->GetEngine(), lasso, cmdId, InkPenColor(win));
     UpdateLassoBounds(lasso);
     if (changed) {
         NotifyAnnotationsChanged(win->CurrentTab());
@@ -2571,14 +2686,7 @@ bool AnnotationLassoOnKeyDown(MainWindow* win, WPARAM key) {
         return true;
     }
     if (key == VK_DELETE && len(lasso.selected) > 0) {
-        auto* engine = win->AsFixed()->GetEngine();
-        EngineMupdfBeginOperation(engine, "Delete lasso selection");
-        for (Annotation* annot : lasso.selected) DeleteAnnotation(annot);
-        EngineMupdfEndOperation(engine);
-        ClearLassoSelection(lasso);
-        RefreshAnnotationLists(win->CurrentTab());
-        NotifyAnnotationsChanged(win->CurrentTab());
-        MainWindowRerender(win);
+        DeleteLasso(win);
         return true;
     }
     if (!IsCtrlPressed() && !IsAltPressed() && len(lasso.selected) > 0 &&
@@ -2611,7 +2719,10 @@ static void PaintAnnotationLasso(MainWindow* win, HDC hdc) {
     Gdiplus::Color color(255, GetRValue(rgb), GetGValue(rgb), GetBValue(rgb));
     Gdiplus::Pen pen(color, (float)DpiScale(2));
     pen.SetDashStyle(Gdiplus::DashStyleDash);
-    if (lasso.drawing && len(lasso.path) > 1) {
+    if (lasso.drawing && lasso.rectangular) {
+        Rect r = dm->CvtToScreen(lasso.pageNo, lasso.preview);
+        gfx.DrawRectangle(&pen, r.x, r.y, r.dx, r.dy);
+    } else if (lasso.drawing && len(lasso.path) > 1) {
         Vec<Gdiplus::Point> points;
         for (PointF p : lasso.path) {
             Point screen = dm->CvtToScreen(lasso.pageNo, p);
@@ -2662,6 +2773,117 @@ static void PaintAnnotationLasso(MainWindow* win, HDC hdc) {
 }
 
 #if IS_DEBUG
+static void TestLassoEditing() {
+    const char* objects[] = {
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >>",
+        "<< /Type /Annot /Subtype /Ink /Rect [9 169 31 191] /BS << /W 1 >> /C [0 0 0] /CA 0.65 "
+        "/InkList [[10 190 30 170]] >>",
+        "<< /Type /Annot /Subtype /FreeText /Rect [40 150 70 180] /DA (/Helv 12 Tf 0 0 0 rg) /Contents (Text) >>",
+        "<< /Type /Annot /Subtype /Square /Rect [90 110 130 130] /C [0 0 0] >>",
+        "<< /Type /Annot /Subtype /Ink /Rect [9 119 31 141] /F 64 /BS << /W 1 >> /C [0 0 0] "
+        "/InkList [[10 140 30 120]] >>",
+        "<< /Type /Annot /Subtype /Ink /Rect [49 119 71 141] /F 128 /BS << /W 1 >> /C [0 0 0] "
+        "/InkList [[50 140 70 120]] >>",
+    };
+    str::Builder pdf;
+    pdf.Append(StrL("%PDF-1.4\n"));
+    Vec<int> offsets;
+    for (int i = 0; i < dimof(objects); i++) {
+        VecAppend(offsets, len(pdf));
+        pdf.Append(fmt("%d 0 obj\n%s\nendobj\n", i + 1, Str(objects[i])));
+    }
+    int xref = len(pdf);
+    pdf.Append(fmt("xref\n0 %d\n0000000000 65535 f \n", dimof(objects) + 1));
+    for (int offset : offsets) pdf.Append(fmt("%010d 00000 n \n", offset));
+    pdf.Append(fmt("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", dimof(objects) + 1, xref));
+    EngineBase* engine = CreateEngineMupdfFromData(ToStr(pdf), StrL("lasso-editing.pdf"), nullptr);
+    utassert(engine != nullptr);
+    if (!engine) return;
+
+    AnnotationLasso lasso;
+    lasso.rectangular = true;
+    lasso.pageNo = 1;
+    lasso.preview = {0, 0, 100, 100};
+    CollectLassoAnnotations(lasso, engine);
+    utassert(len(lasso.selected) == 2);
+    if (len(lasso.selected) != 2) {
+        SafeEngineRelease(&engine);
+        return;
+    }
+    Annotation* ink = nullptr;
+    Annotation* text = nullptr;
+    for (Annotation* annot : lasso.selected) {
+        if (annot->type == AnnotationType::Ink) ink = annot;
+        if (annot->type == AnnotationType::FreeText) text = annot;
+    }
+    utassert(ink && text);
+    if (!ink || !text) {
+        SafeEngineRelease(&engine);
+        return;
+    }
+    int alpha = Opacity(ink);
+    Color color = RGB(30, 80, 140);
+    utassert(StyleLasso(engine, lasso, CmdLassoRecolor, color));
+    utassert((GetColor(ink) & 0x00ffffff) == (MkPdfColor(30, 80, 140) & 0x00ffffff) && Opacity(ink) == alpha);
+    utassert((DefaultAppearanceTextColor(text) & 0x00ffffff) == (MkPdfColor(30, 80, 140) & 0x00ffffff));
+    utassert(StyleLasso(engine, lasso, CmdLassoThicker, color));
+    utassert(fabsf(BorderWidthF(ink) - 1.25f) < 0.001f);
+    VecClear(lasso.selected);
+    Vec<Annotation*> removed;
+    utassert(EngineMupdfUndo(engine, removed));
+    CollectLassoAnnotations(lasso, engine);
+    utassert(len(lasso.selected) == 2);
+    for (Annotation* annot : lasso.selected) {
+        if (annot->type == AnnotationType::Ink) utassert(fabsf(BorderWidthF(annot) - 1.f) < 0.001f);
+    }
+
+    DeleteLassoAnnotations(engine, lasso.selected);
+    utassert(len(lasso.selected) == 0);
+    Vec<Annotation*> remaining;
+    EngineMupdfGetAnnotations(engine, remaining);
+    utassert(len(remaining) == 3);
+    utassert(EngineMupdfUndo(engine, removed));
+    CollectLassoAnnotations(lasso, engine);
+    utassert(len(lasso.selected) == 2);
+    VecClear(lasso.selected);
+    SafeEngineRelease(&engine);
+}
+
+void Canvas_UnitTestsLasso() {
+    AnnotationLasso lasso;
+    for (PointF p : {PointF{0, 0}, PointF{100, 0}, PointF{100, 30}, PointF{30, 30}, PointF{30, 100}, PointF{0, 100}})
+        VecAppend(lasso.path, p);
+    utassert(LassoEncloses(lasso, {20, 20}));
+    utassert(LassoEncloses(lasso, {20, 80}));
+    utassert(!LassoEncloses(lasso, {80, 80}));
+
+    lasso.rectangular = true;
+    lasso.origin = {100, 100};
+    lasso.preview = LassoRect(lasso.origin, {0, 0});
+    utassert(lasso.preview == RectF(0, 0, 100, 100));
+    VecClear(lasso.path);
+    VecAppend(lasso.path, lasso.origin);
+    utassert(LassoEncloses(lasso, {80, 80}));
+    utassert(LassoEncloses(lasso, {0, 0}));
+    utassert(LassoEncloses(lasso, {100, 100}));
+    utassert(!LassoEncloses(lasso, {-1, 50}));
+    utassert(!LassoEncloses(lasso, {50, 101}));
+    lasso.preview = {0, 0, 0, 100};
+    utassert(!LassoEncloses(lasso, {0, 50}));
+
+    lasso.active = lasso.drawing = lasso.transforming = lasso.rotating = true;
+    lasso.rotation = 15;
+    lasso.edge = SelectionDragEdge::Move;
+    ClearLassoSelection(lasso);
+    utassert(lasso.active && lasso.rectangular);
+    utassert(!lasso.drawing && !lasso.transforming && !lasso.rotating && lasso.rotation == 0);
+    utassert(len(lasso.path) == 0 && len(lasso.selected) == 0 && lasso.bounds.IsEmpty() && lasso.preview.IsEmpty());
+    utassert(lasso.edge == SelectionDragEdge::None);
+    TestLassoEditing();
+}
+
 bool Canvas_UnitTestLassoGeometry() {
     Vec<PointF> path;
     for (PointF p : {PointF{0, 0}, PointF{100, 0}, PointF{100, 30}, PointF{30, 30}, PointF{30, 100}, PointF{0, 100}})
@@ -3139,6 +3361,7 @@ static bool StopAnnotationResize(MainWindow* win, bool aborted) {
     win->annotationBeingResized = false;
     win->annotationResizeOutlineOnly = false;
     win->annotationBeingDragged = nullptr;
+    win->mouseAction = MouseAction::None;
     CancelAnnotationResizeRerender(win);
 
     // Release mouse capture and reset cursor
@@ -3286,6 +3509,16 @@ static void OnMouseLeftButtonDown(MainWindow* win, int x, int y, WPARAM key) {
     DisplayModel* dm = win->AsFixed();
     ReportIf(!dm);
     Point pt{x, y};
+    bool shift = IsShiftPressed() || (key & MK_SHIFT);
+    if (shift && !MouseHasCtrl(key) && HasPermission(Perm::CopySelection) && win->showSelection &&
+        dm->textSelection->result.len > 0 && dm->IsOverText(pt)) {
+        win->dragStart = pt;
+        win->dragStartPending = false;
+        win->textDragPending = false;
+        win->linkOnLastButtonDown = nullptr;
+        OnSelectionStart(win, x, y, key);
+        return;
+    }
 
     // placing a new signature: the next drag draws the box, a click puts a
     // default-size one at the pointer (issue #5967). Consume the press so it
@@ -3299,7 +3532,7 @@ static void OnMouseLeftButtonDown(MainWindow* win, int x, int y, WPARAM key) {
 
     // Edit PDF with an annotation selected: a press anywhere but on that
     // annotation or its resize handles only deselects it
-    Annotation* locked = AnnotationLockingMouse(win);
+    Annotation* locked = win->textSelectTool ? nullptr : AnnotationLockingMouse(win);
     if (locked) {
         bool onHandle =
             AnnotationCanBeResized(locked->type) && GetResizeHandleAt(win, pt, locked) != ResizeHandle::None;
@@ -3352,7 +3585,7 @@ static void OnMouseLeftButtonDown(MainWindow* win, int x, int y, WPARAM key) {
     // text or choice field starts in-place editing. Widgets are hit-tested on
     // their own list (GetWidgetAtPos), separate from markup annotations. Consume
     // the click in either case so it doesn't start a drag/selection.
-    Annotation* widget = locked ? nullptr : dm->GetWidgetAtPos(pt);
+    Annotation* widget = (locked || win->textSelectTool) ? nullptr : dm->GetWidgetAtPos(pt);
     if (ToggleFormButton(widget)) {
         MainWindowRerender(win);
         win->mouseAction = MouseAction::None;
@@ -3373,7 +3606,7 @@ static void OnMouseLeftButtonDown(MainWindow* win, int x, int y, WPARAM key) {
     // before hit-testing other annotations: otherwise an overlapping annot
     // steals the click, selection jumps, and we resize the wrong one (#5818).
     ResizeHandle resizeHandle = ResizeHandle::None;
-    if (tab->selectedAnnotation && AnnotationCanBeResized(tab->selectedAnnotation->type)) {
+    if (!win->textSelectTool && tab->selectedAnnotation && AnnotationCanBeResized(tab->selectedAnnotation->type)) {
         resizeHandle = GetResizeHandleAt(win, pt, tab->selectedAnnotation);
     }
     if (resizeHandle != ResizeHandle::None) {
@@ -3385,8 +3618,9 @@ static void OnMouseLeftButtonDown(MainWindow* win, int x, int y, WPARAM key) {
     }
 
     // the highlighter only selects text: a click never picks an annotation
-    Annotation* annot =
-        IsPlacingHighlighterAnnotation(win) ? nullptr : dm->GetAnnotationAtPos(pt, tab->selectedAnnotation);
+    Annotation* annot = (win->textSelectTool || IsPlacingHighlighterAnnotation(win))
+                            ? nullptr
+                            : dm->GetAnnotationAtPos(pt, tab->selectedAnnotation);
     if (MouseHasCtrl(key) && annot && tab) {
         EnablePdfAnnotationsToolbar(win);
     }
@@ -3437,7 +3671,7 @@ static void OnMouseLeftButtonDown(MainWindow* win, int x, int y, WPARAM key) {
         }
         ReportIf(win->linkOnLastButtonDown);
         IPageElement* pageEl = dm->GetElementAtPos(pt, nullptr);
-        if (pageEl && pageEl->Is(kindPageElementDest) && !gSettings->disableLinks) {
+        if (!win->textSelectTool && pageEl && pageEl->Is(kindPageElementDest) && !gSettings->disableLinks) {
             win->linkOnLastButtonDown = pageEl;
         }
     }
@@ -3452,8 +3686,8 @@ static void OnMouseLeftButtonDown(MainWindow* win, int x, int y, WPARAM key) {
     // - pressing Ctrl forces a rectangular selection
     // - pressing Ctrl+Shift forces text selection
     // - not having CopySelection permission forces dragging
-    bool isShift = IsShiftPressed();
-    bool isCtrl = IsCtrlPressed();
+    bool isShift = shift;
+    bool isCtrl = MouseHasCtrl(key);
     bool canCopy = HasPermission(Perm::CopySelection);
     bool isOverText = win->AsFixed()->IsOverText(pt);
 
@@ -3521,7 +3755,7 @@ static void OnMouseLeftButtonDown(MainWindow* win, int x, int y, WPARAM key) {
     // selects, so letting touch start a selection here only flashes a
     // rectangle before the gesture takes over (issue #538).
     bool startDrag = resizeHandle != ResizeHandle::None || isMoveableAnnot || !canCopy || win->lastInputWasTouch ||
-                     (isShift || !isOverText) && !isCtrl;
+                     (!win->textSelectTool && (isShift || !isOverText) && !isCtrl);
     if (startDrag) {
         StartMouseDrag(win, x, y);
     } else {
@@ -3815,7 +4049,7 @@ static void OnMouseLeftButtonDblClk(MainWindow* win, int x, int y, WPARAM key) {
     }
     // while an annotation is selected, double-clicking it (to edit free text in
     // place) is the only double-click there is
-    Annotation* locked = AnnotationLockingMouse(win);
+    Annotation* locked = win->textSelectTool ? nullptr : AnnotationLockingMouse(win);
     if (locked) {
         DisplayModel* dmLocked = win->AsFixed();
         bool onLocked = dmLocked && dmLocked->GetAnnotationAtPos(Point{x, y}, locked) == locked;
@@ -3825,11 +4059,11 @@ static void OnMouseLeftButtonDblClk(MainWindow* win, int x, int y, WPARAM key) {
         return;
     }
     // a double-click on free text edits its text where it sits on the page
-    if (!IsPlacingHighlighterAnnotation(win) && StartFreeTextInPlaceEditAt(win, Point{x, y})) {
+    if (!win->textSelectTool && !IsPlacingHighlighterAnnotation(win) && StartFreeTextInPlaceEditAt(win, Point{x, y})) {
         return;
     }
     auto isLeft = bit::IsMaskSet(key, (WPARAM)MK_LBUTTON);
-    if (gSettings->enableTeXEnhancements && !gDisableInteractiveInverseSearch && isLeft) {
+    if (!win->textSelectTool && gSettings->enableTeXEnhancements && !gDisableInteractiveInverseSearch && isLeft) {
         bool dontSelect = OnInverseSearch(win, x, y);
         if (dontSelect) {
             return;
@@ -5220,6 +5454,11 @@ static LRESULT OnSetCursor(MainWindow* win, HWND hwnd) {
         if (win->infotip) win->DeleteToolTip();
         return TRUE;
     }
+    if (win->textSelectTool && win->mouseAction == MouseAction::None && win->AsFixed()) {
+        SetTextOrArrorCursor(win->AsFixed(), HwndGetCursorPos(hwnd));
+        if (win->infotip) win->DeleteToolTip();
+        return TRUE;
+    }
     if (ValidateLasso(win)) {
         Point pt = HwndGetCursorPos(hwnd);
         SelectionDragEdge edge = LassoHandle(win, pt);
@@ -5377,6 +5616,7 @@ static void ZoomByMouseWheel(MainWindow* win, WPARAM wp) {
 // that scroll do anything" have to compare the target instead, or they see no
 // movement on every wheel event.
 static int WheelScrollPosOrTarget(MainWindow* win) {
+    if (win->scrollAnimActive && SmoothScrollContextChanged(win)) StopSmoothScroll(win);
     if (gSettings->smoothScroll && win->scrollAnimActive) {
         return win->scrollTargetY;
     }
@@ -5508,7 +5748,8 @@ static LRESULT CanvasOnMouseWheel(MainWindow* win, UINT msg, WPARAM wp, LPARAM l
         return 0;
     }
 
-    bool hScroll = (LOWORD(wp) & MK_SHIFT) || IsShiftPressed();
+    bool textSelection = win->textSelectTool || (dm && win->showSelection && dm->textSelection->result.len > 0);
+    bool hScroll = ((LOWORD(wp) & MK_SHIFT) || IsShiftPressed()) && !textSelection;
     bool vScroll = !hScroll;
     bool isCont = !IsContinuous(win->ctrl->GetDisplayMode());
 
@@ -5640,32 +5881,32 @@ static LRESULT CanvasOnMouseWheel(MainWindow* win, UINT msg, WPARAM wp, LPARAM l
         return 0;
     }
 
-    // For SinglePage mode with zoomed content, use continuous scrolling with page transitions
-    if (isSinglePageMode && vScroll && dm) {
-        if (dm->NeedVScroll()) {
-            // Use continuous scrolling that handles page transitions at boundaries
-            SCROLLINFO si{};
-            si.cbSize = sizeof(si);
-            si.fMask = SIF_PAGE;
-            GetScrollInfo(win->hwndCanvas, hScroll ? SB_HORZ : SB_VERT, &si);
-            int scrollBy = -MulDiv((int)si.nPage, delta * 30, WHEEL_DELTA);
-            // on sensitive touchpads delta can be very small
-            if (scrollBy == 0) {
-                return 0;
-            }
-            if (hScroll) {
-                dm->ScrollXBy(scrollBy);
+    // The page-number scrollbar is independent of the page's pixel offset.
+    if (isSinglePageMode && vScroll && dm && dm->NeedVScroll()) {
+        int amount = gDeltaPerLine < 0 ? dm->GetViewPort().dy : DpiScale(ScrollLineAmount(gSettings->scrollLineAmount));
+        int denominator = gDeltaPerLine < 0 ? WHEEL_DELTA : gDeltaPerLine;
+        int pixels = WheelScrollPixels(delta, amount, denominator, win->wheelPixelRemainderY);
+        if (!pixels) return 0;
+        if (win->scrollAnimActive && SmoothScrollContextChanged(win)) StopSmoothScroll(win);
+        int origin = gSettings->smoothScroll && win->scrollAnimActive ? win->scrollTargetY : dm->yOffset();
+        int maxY = std::max(0, dm->GetCanvasSize().dy - dm->GetViewPort().dy);
+        int target = limitValue(origin - pixels, 0, maxY);
+        if (target != origin) {
+            if (gSettings->smoothScroll) {
+                StartOrUpdateSmoothScrollY(win, target);
             } else {
-                dm->ScrollYBy(scrollBy, gSettings->scrollEdgeTurnsPage);
+                StopSmoothScroll(win);
+                dm->ScrollYTo(target);
+                ReadAloudOnUserViewChanged(win);
             }
-            // ScrollYBy updates the thumb via UpdateScrollbars; also force the
-            // thin smart bar to appear for wheel-only reading (#5859).
-            if (ScrollbarsUseOverlay()) {
-                OverlayScrollbarNotifyScroll(hScroll ? win->overlayScrollH : win->overlayScrollV);
-            }
+        } else if (origin == dm->yOffset() && gSettings->scrollEdgeTurnsPage && WheelMayTurnPage(win)) {
+            StopSmoothScroll(win);
+            dm->ScrollYBy(-pixels, true);
+            OnWheelPageTurn(win);
             ReadAloudOnUserViewChanged(win);
-            return 0;
         }
+        if (ScrollbarsUseOverlay()) OverlayScrollbarNotifyScroll(win->overlayScrollV);
+        return 0;
     }
 
     if (gDeltaPerLine < 0 && dm) {
@@ -6267,9 +6508,27 @@ static LRESULT WndProcCanvasFixedPageUI(MainWindow* win, HWND hwnd, UINT msg, WP
             return 0;
 
         case WM_CAPTURECHANGED:
+            if (win->mouseAction == MouseAction::Selecting || win->mouseAction == MouseAction::SelectingText) {
+                Point end = win->selectionRect.BR();
+                OnSelectionStop(win, end.x, end.y, false);
+                win->linkOnLastButtonDown = nullptr;
+                HideSelectionToolbar(win);
+            }
+            // Button-up may now go to the new capture owner. Disarm pending
+            // drag-out and touch handles before an unpressed move can use them.
+            win->dragStartPending = false;
+            win->textDragPending = false;
+            win->imageDragPending = false;
+            win->imageDragElement = nullptr;
+            win->imageDragPageNo = -1;
+            win->touchSelDragging = TouchSelHandle::None;
+            KillTimer(win->hwndCanvas, kTouchLongPressTimerID);
             AnnotationPlacementCaptureLost(win);
-            if (win->handTool && win->mouseAction == MouseAction::Dragging && !win->annotationBeingDragged) {
-                StopHandDrag(win);
+            if (win->mouseAction == MouseAction::Dragging) {
+                if (win->annotationBeingDragged)
+                    CancelDrag(win);
+                else
+                    StopHandDrag(win);
             }
             FinishLaserStroke(win);
             ReadingBarCancelDrag(win);
@@ -6791,7 +7050,7 @@ static void OnTimer(MainWindow* win, HWND hwnd, WPARAM timerId) {
         case kSmoothScrollTimerID: {
             DisplayModel* dm = win->AsFixed();
             // Window/tab may have changed while the timer was running.
-            if (!dm || !win->scrollAnimActive) {
+            if (!dm || !win->scrollAnimActive || SmoothScrollContextChanged(win)) {
                 StopSmoothScroll(win);
                 break;
             }
@@ -6808,11 +7067,7 @@ static void OnTimer(MainWindow* win, HWND hwnd, WPARAM timerId) {
             double dt = dtMs / 1000.0;
 
             int target = win->scrollTargetY;
-            // Keep anim state in sync if something else moved the view.
             int viewY = dm->yOffset();
-            if (fabs(win->scrollAnimY - (double)viewY) > 1.5) {
-                win->scrollAnimY = (double)viewY;
-            }
 
             double remaining = (double)target - win->scrollAnimY;
             if (fabs(remaining) < kSmoothScrollSnapPx) {
@@ -6832,6 +7087,7 @@ static void OnTimer(MainWindow* win, HWND hwnd, WPARAM timerId) {
             int y = (int)lround(win->scrollAnimY);
             if (y != viewY) {
                 dm->ScrollYTo(y);
+                win->scrollAnimViewChange = dm->viewChangeId;
                 // If ScrollYTo clamped (document edge), stop chasing an
                 // unreachable target.
                 int after = dm->yOffset();
@@ -7390,3 +7646,416 @@ LRESULT CALLBACK WndProcCanvas(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return WndProcCanvasLoadError(win, hwnd, msg, wp, lp);
     }
 }
+
+#if IS_DEBUG
+struct SelectionTestCallback : DocControllerCallback {
+    void PageNoChanged(DocController*, int) override {}
+    void ZoomChanged(DocController*, float) override {}
+    void GotoLink(IPageDestination*) override {}
+    void Repaint() override {}
+    void UpdateScrollbars(DisplayModel*, Size) override {}
+    void RequestRendering(DisplayModel*, int) override {}
+    void RequestPredictiveRendering(DisplayModel*, int, const int*, int) override {}
+    void CleanUp(DisplayModel*) override {}
+    void RenderThumbnail(DisplayModel*, Size, const OnBitmapRendered*) override {}
+    void FocusFrame(bool) override {}
+    void SaveDownload(Str, Str) override {}
+    void FindResultReceived(int, int, int) override {}
+    void FindAllResultReceived(Str) override {}
+    void TocChanged(DocController*) override {}
+    void PagesRenumbered(DisplayModel*) override {}
+};
+
+void Selection_UnitTestsColor();
+
+static LRESULT CALLBACK SelectionTestCaptureProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR data) {
+    if (msg == WM_CAPTURECHANGED) WndProcCanvasFixedPageUI((MainWindow*)data, hwnd, msg, wp, lp);
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+void Canvas_UnitTestsTextSelect() {
+    Selection_UnitTestsColor();
+    RenderCache* savedCache = gRenderCache;
+    if (!savedCache) gRenderCache = new RenderCache();
+    defer {
+        if (!savedCache) {
+            delete gRenderCache;
+            gRenderCache = nullptr;
+        }
+    };
+    const char* objects[] = {
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Count 3 /Kids [3 0 R 4 0 R 5 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >> /Contents 7 0 R "
+        ">>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >> /Contents 7 0 R "
+        ">>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 6 0 R >> >> /Contents 7 0 R "
+        ">>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    };
+    Str content = StrL("BT /F1 18 Tf 50 700 Td (First line of text) Tj 0 -25 Td (Second line of text) Tj ET\n");
+    str::Builder pdf;
+    pdf.Append(StrL("%PDF-1.4\n"));
+    Vec<int> offsets;
+    for (int i = 0; i < dimof(objects); i++) {
+        VecAppend(offsets, len(pdf));
+        pdf.Append(fmt("%d 0 obj\n%s\nendobj\n", i + 1, Str(objects[i])));
+    }
+    VecAppend(offsets, len(pdf));
+    pdf.Append(fmt("7 0 obj\n<< /Length %d >>\nstream\n%sendstream\nendobj\n", len(content), content));
+    int xref = len(pdf);
+    pdf.Append(fmt("xref\n0 %d\n0000000000 65535 f \n", len(offsets) + 1));
+    for (int offset : offsets) pdf.Append(fmt("%010d 00000 n \n", offset));
+    pdf.Append(fmt("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(offsets) + 1, xref));
+    EngineBase* engine = CreateEngineMupdfFromData(ToStr(pdf), StrL("shift-selection-test.pdf"), nullptr);
+    utassert(engine != nullptr);
+    if (!engine) return;
+    HWND canvas = CreateWindowExW(0, L"STATIC", L"Selection input fixture", WS_POPUP | WS_VSCROLL | WS_HSCROLL, 0, 0,
+                                  640, 450, nullptr, nullptr, GetInstance(), nullptr);
+    utassert(canvas != nullptr);
+    if (!canvas) {
+        engine->Release();
+        return;
+    }
+    MainWindow win(nullptr);
+    win.hwndFrame = canvas;
+    win.tabsCtrl = new TabsCtrl();
+    win.hwndCanvas = canvas;
+    win.canvasRc = {0, 0, 640, 450};
+    WindowTab tab(&win);
+    tab.SetFilePath(StrL("shift-selection-test.pdf"));
+    SelectionTestCallback callback;
+    auto* dm = new DisplayModel(engine, &callback);
+    tab.win = &win;
+    tab.ctrl = dm;
+    win.ctrl = dm;
+    win.currentTabTemp = &tab;
+    BYTE savedKeys[256]{};
+    GetKeyboardState(savedKeys);
+    BYTE keys[256]{};
+    SetKeyboardState(keys);
+    defer {
+        SetKeyboardState(savedKeys);
+        DeleteOldSelectionInfo(&win, true);
+        HideSelectionToolbar(&win);
+        tab.ctrl = nullptr;
+        win.ctrl = nullptr;
+        win.currentTabTemp = nullptr;
+        delete dm;
+        DestroyWindow(canvas);
+        win.hwndCanvas = nullptr;
+        win.hwndFrame = nullptr;
+    };
+    dm->SetInitialViewSettings(DisplayMode::Continuous, 1, {640, 450}, 96);
+    dm->Relayout(100, 0);
+    auto* selection = dm->textSelection;
+    PageText text = engine->ExtractPageText(1);
+    utassert(text.nCodepoints > 25 && text.coords);
+    if (!text.coords || text.nCodepoints <= 25) {
+        FreePageText(&text);
+        return;
+    }
+    auto pointAt = [&](int page, int glyph) {
+        Rect r = text.coords[glyph];
+        return dm->CvtToScreen(page, PointF(r.x + r.dx * 0.25f, r.y + r.dy * 0.5f));
+    };
+    auto clickShift = [&](int page, int glyph) {
+        dm->GoToPage(page, false);
+        Point p = pointAt(page, glyph);
+        int endpoint = selection->FindClosestGlyphAt(page, dm->CvtFromScreen(p, page).x, dm->CvtFromScreen(p, page).y);
+        keys[VK_SHIFT] = 0x80;
+        SetKeyboardState(keys);
+        OnMouseLeftButtonDown(&win, p.x, p.y, MK_LBUTTON | MK_SHIFT);
+        OnMouseLeftButtonUp(&win, p.x, p.y, MK_SHIFT);
+        keys[VK_SHIFT] = 0;
+        SetKeyboardState(keys);
+        utassert(selection->endPage == page && selection->endGlyph == endpoint);
+        utassert(win.showSelection && win.mouseAction == MouseAction::None && GetCapture() != canvas);
+    };
+    selection->StartAt(1, 2);
+    selection->SelectUpTo(1, 12);
+    UpdateTextSelection(&win, false);
+    clickShift(3, 25);
+    utassert(selection->startPage == 1 && selection->startGlyph == 2);
+    clickShift(2, 8);
+    utassert(selection->startPage == 1 && selection->startGlyph == 2);
+    selection->StartAt(3, 25);
+    selection->SelectUpTo(3, 14);
+    UpdateTextSelection(&win, false);
+    clickShift(1, 3);
+    utassert(selection->startPage == 3 && selection->startGlyph == 25);
+    int horizontal = dm->GetViewPort().x;
+    int vertical = dm->GetViewPort().y;
+    keys[VK_SHIFT] = 0x80;
+    SetKeyboardState(keys);
+    bool savedSmooth = gSettings->smoothScroll;
+    gSettings->smoothScroll = false;
+    UpdateDeltaPerLine();
+    CanvasOnMouseWheel(&win, WM_MOUSEWHEEL, MAKEWPARAM(MK_SHIFT, -WHEEL_DELTA), MAKELPARAM(10, 10));
+    gSettings->smoothScroll = savedSmooth;
+    keys[VK_SHIFT] = 0;
+    SetKeyboardState(keys);
+    utassert(dm->GetViewPort().x == horizontal && dm->GetViewPort().y > vertical);
+    utassert(selection->startPage == 3 && selection->startGlyph == 25);
+    SetTextSelectTool(&win);
+    utassert(win.textSelectTool && !win.handTool && !win.laserPointerActive && !win.annotationLasso.active);
+    dm->GoToPage(1, false);
+    Point start = pointAt(1, 3), end = pointAt(1, 25);
+    PointF startDoc = dm->CvtFromScreen(start, 1), endDoc = dm->CvtFromScreen(end, 1);
+    int startGlyph = selection->FindClosestGlyphAt(1, startDoc.x, startDoc.y);
+    int endGlyph = selection->FindClosestGlyphAt(1, endDoc.x, endDoc.y);
+    OnMouseLeftButtonDown(&win, start.x, start.y, MK_LBUTTON);
+    OnMouseMove(&win, end.x, end.y, MK_LBUTTON);
+    OnMouseLeftButtonUp(&win, end.x, end.y, 0);
+    utassert(selection->startPage == 1 && selection->startGlyph == startGlyph);
+    utassert(selection->endPage == 1 && selection->endGlyph == endGlyph && win.showSelection);
+    OnMouseLeftButtonDblClk(&win, start.x, start.y, MK_LBUTTON);
+    utassert(win.selectingByWord && selection->result.len > 0);
+    OnMouseLeftButtonUp(&win, start.x, start.y, 0);
+    SetHandTool(&win, true);
+    utassert(win.handTool && !win.textSelectTool);
+    SetTextSelectTool(&win);
+    ToggleLaserPointer(&win);
+    utassert(win.laserPointerActive && !win.textSelectTool);
+    StopLaserPointer(&win);
+    VecAppend(gWindows, &win);
+    defer {
+        VecRemove(gWindows, &win);
+    };
+    SetTextSelectTool(&win);
+    dm->GoToPage(1, false);
+    start = pointAt(1, 3);
+    end = pointAt(1, 25);
+    OnSelectionStart(&win, start.x, start.y, MK_LBUTTON);
+    win.selectionRect.dx = end.x - start.x;
+    win.selectionRect.dy = end.y - start.y;
+    UpdateTextSelection(&win, true);
+    int selectedEnd = selection->endGlyph;
+    HWND takeover = CreateWindowExW(0, L"STATIC", L"Capture fixture", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr,
+                                    GetInstance(), nullptr);
+    utassert(takeover != nullptr);
+    if (takeover) {
+        SetCapture(takeover);
+        WndProcCanvasFixedPageUI(&win, canvas, WM_CAPTURECHANGED, 0, (LPARAM)takeover);
+        utassert(win.mouseAction == MouseAction::None && !win.dragStartPending);
+        utassert(win.showSelection && selection->endGlyph == selectedEnd && GetCapture() == takeover);
+        ReleaseCapture();
+        win.mouseAction = MouseAction::None;
+        KillTimer(canvas, kSelectSmoothScrollTimerID);
+
+        SetHandTool(&win, false);
+        dm->GoToPage(1, false);
+        Point pan = dm->CvtToScreen(1, PointF(400, 300));
+        OnMouseLeftButtonDown(&win, pan.x, pan.y, MK_LBUTTON);
+        OnMouseMove(&win, pan.x - 20, pan.y - 20, MK_LBUTTON);
+        utassert(win.mouseAction == MouseAction::Dragging && !win.handTool);
+        SetCapture(takeover);
+        WndProcCanvasFixedPageUI(&win, canvas, WM_CAPTURECHANGED, 0, (LPARAM)takeover);
+        utassert(win.mouseAction == MouseAction::None && !win.dragStartPending);
+        Point capturedView = dm->GetViewPort().TL();
+        OnMouseMove(&win, pan.x - 40, pan.y - 40, 0);
+        utassert(dm->GetViewPort().TL() == capturedView);
+        CancelDrag(&win);
+
+        StartMouseDrag(&win, pan.x, pan.y, true);
+        SetCapture(takeover);
+        WndProcCanvasFixedPageUI(&win, canvas, WM_CAPTURECHANGED, 0, (LPARAM)takeover);
+        utassert(win.mouseAction == MouseAction::None && !win.dragRightClick && GetCapture() == takeover);
+        CancelDrag(&win);
+        ReleaseCapture();
+
+        for (int command = 0; command < 3; command++) {
+            SetTextSelectTool(&win);
+            dm->GoToPage(1, false);
+            start = pointAt(1, 3);
+            end = pointAt(1, 25);
+            OnSelectionStart(&win, start.x, start.y, MK_LBUTTON);
+            win.selectionRect.dx = end.x - start.x;
+            win.selectionRect.dy = end.y - start.y;
+            UpdateTextSelection(&win, true);
+            if (command < 2)
+                OnSelectAll(&win, command == 1);
+            else
+                OnSelectCurrentPage(&win);
+            utassert(win.mouseAction == MouseAction::None && GetCapture() != canvas);
+            utassert(win.showSelection && tab.selectionOnPage && len(*tab.selectionOnPage) > 0);
+            CancelDrag(&win);
+            KillTimer(canvas, kSelectSmoothScrollTimerID);
+        }
+        // Clicking existing text first arms a possible OLE drag. Capture
+        // loss must disarm it without throwing away the selected text.
+        SetTextSelectTool(&win);
+        dm->GoToPage(1, false);
+        OnSelectCurrentPage(&win);
+        start = pointAt(1, 12);
+        OnMouseLeftButtonDown(&win, start.x, start.y, MK_LBUTTON);
+        utassert(win.textDragPending && GetCapture() == canvas);
+        SetCapture(takeover);
+        WndProcCanvasFixedPageUI(&win, canvas, WM_CAPTURECHANGED, 0, (LPARAM)takeover);
+        utassert(!win.textDragPending && !win.dragStartPending && win.showSelection);
+        win.textDragPending = false;
+        win.dragStartPending = false;
+        CancelDrag(&win);
+        ReleaseCapture();
+
+        // Image drag-out and touch-handle gestures also wait for button-up.
+        // Do not leave them armed if it is delivered to another window.
+        win.imageDragPending = true;
+        win.imageDragPageNo = 1;
+        SetCapture(canvas);
+        SetCapture(takeover);
+        WndProcCanvasFixedPageUI(&win, canvas, WM_CAPTURECHANGED, 0, (LPARAM)takeover);
+        utassert(!win.imageDragPending && !win.imageDragElement && win.imageDragPageNo == -1);
+        win.imageDragPending = false;
+        win.imageDragPageNo = -1;
+        ReleaseCapture();
+
+        win.touchSelDragging = TouchSelHandle::End;
+        SetCapture(canvas);
+        SetCapture(takeover);
+        WndProcCanvasFixedPageUI(&win, canvas, WM_CAPTURECHANGED, 0, (LPARAM)takeover);
+        utassert(win.touchSelDragging == TouchSelHandle::None);
+        win.touchSelDragging = TouchSelHandle::None;
+        ReleaseCapture();
+
+        // Capture may be taken by another app before an annotation gesture
+        // receives its button-up. End the gesture and its open edit operation.
+        AnnotCreateArgs args;
+        args.annotType = AnnotationType::Square;
+        args.hasRect = true;
+        args.rect = {100, 200, 80, 60};
+        Annotation* annot = EngineMupdfCreateAnnotation(engine, 1, args.rect.TL(), &args);
+        utassert(annot);
+        if (annot) {
+            SetHandTool(&win, false);
+            DeleteOldSelectionInfo(&win, true);
+            dm->GoToPage(1, false);
+            Point pos = dm->CvtToScreen(1, args.rect.TL());
+            StartMouseDrag(&win, pos.x, pos.y);
+            StartAnnotationDrag(&win, annot, pos);
+            SetCapture(takeover);
+            WndProcCanvasFixedPageUI(&win, canvas, WM_CAPTURECHANGED, 0, (LPARAM)takeover);
+            utassert(win.mouseAction == MouseAction::None && !win.annotationBeingDragged && GetCapture() == takeover);
+            if (win.annotationBeingDragged) StopDraggingAnnotation(&win, pos.x, pos.y, true);
+            CancelDrag(&win);
+            ReleaseCapture();
+
+            StartAnnotationResize(&win, annot, pos, ResizeHandle::TopLeft);
+            utassert(win.pdfEditOperationActive && win.annotationBeingResized);
+            SetCapture(takeover);
+            WndProcCanvasFixedPageUI(&win, canvas, WM_CAPTURECHANGED, 0, (LPARAM)takeover);
+            utassert(win.mouseAction == MouseAction::None && !win.annotationBeingDragged &&
+                     !win.annotationBeingResized && !win.pdfEditOperationActive && GetCapture() == takeover);
+            CancelDrag(&win);
+            ReleaseCapture();
+
+            // Unlike the STATIC fixture's default wndproc, real canvases get a
+            // synchronous WM_CAPTURECHANGED while ReleaseCapture runs.
+            constexpr UINT_PTR captureSubclass = 0x53544341;
+            bool subclassed =
+                SetWindowSubclass(canvas, SelectionTestCaptureProc, captureSubclass, (DWORD_PTR)&win) != 0;
+            utassert(subclassed);
+            if (subclassed) {
+                RectF before = GetRect(annot);
+                Point moved = dm->CvtToScreen(1, PointF(before.x + 20, before.y + 20));
+                StartMouseDrag(&win, pos.x, pos.y);
+                StartAnnotationDrag(&win, annot, pos);
+                win.dragStart = pos;
+                win.dragStartPending = false;
+                OnMouseLeftButtonUp(&win, moved.x, moved.y, 0);
+                RectF after = GetRect(annot);
+                utassert(win.mouseAction == MouseAction::None && !win.annotationBeingDragged && GetCapture() != canvas);
+                utassert(after.x > before.x && after.y > before.y);
+
+                Point handle = dm->CvtToScreen(1, after.TL());
+                StartAnnotationResize(&win, annot, handle, ResizeHandle::TopLeft);
+                win.dragStartPending = false;
+                OnMouseLeftButtonUp(&win, handle.x, handle.y, 0);
+                utassert(win.mouseAction == MouseAction::None && !win.annotationBeingDragged &&
+                         !win.annotationBeingResized && !win.pdfEditOperationActive && GetCapture() != canvas);
+                RemoveWindowSubclass(canvas, SelectionTestCaptureProc, captureSubclass);
+            }
+            DeleteAnnotation(annot);
+        }
+        DestroyWindow(takeover);
+    }
+    FreePageText(&text);
+
+    // An unfinished wheel gesture must not pull a later navigation back.
+    bool smooth = gSettings->smoothScroll;
+    bool singleScrollbar = gSettings->scrollbarInSinglePage;
+    defer {
+        StopSmoothScroll(&win);
+        gSettings->smoothScroll = smooth;
+        gSettings->scrollbarInSinglePage = singleScrollbar;
+    };
+    gSettings->smoothScroll = true;
+    dm->GoToPage(1, false);
+    StartOrUpdateSmoothScrollY(&win, dm->yOffset() + 96);
+    dm->GoToPage(3, false);
+    int navigatedY = dm->yOffset();
+    OnTimer(&win, canvas, kSmoothScrollTimerID);
+    utassert(!win.scrollAnimActive && dm->yOffset() == navigatedY);
+    StopSmoothScroll(&win);
+
+    dm->GoToPage(1, false);
+    StartOrUpdateSmoothScrollY(&win, dm->yOffset() + 96);
+    dm->GoToPage(1, false);
+    int samePageY = dm->yOffset();
+    OnTimer(&win, canvas, kSmoothScrollTimerID);
+    utassert(!win.scrollAnimActive && dm->yOffset() == samePageY);
+    StopSmoothScroll(&win);
+
+    dm->Relayout(200, 0);
+    dm->GoToPage(1, false);
+    StartOrUpdateSmoothScrollY(&win, dm->yOffset() + 96);
+    dm->ScrollXTo(24);
+    OnTimer(&win, canvas, kSmoothScrollTimerID);
+    utassert(win.scrollAnimActive && dm->yOffset() > 0 && dm->yOffset() < win.scrollTargetY);
+    StopSmoothScroll(&win);
+    dm->Relayout(100, 0);
+
+    dm->GoToPage(1, false);
+    StartOrUpdateSmoothScrollY(&win, dm->yOffset() + 96);
+    engine->AddRef();
+    auto* other = new DisplayModel(engine, &callback);
+    other->SetInitialViewSettings(DisplayMode::Continuous, 1, {640, 450}, 96);
+    other->Relayout(100, 0);
+    other->GoToPage(1, false);
+    win.ctrl = tab.ctrl = other;
+    int otherY = other->yOffset();
+    OnTimer(&win, canvas, kSmoothScrollTimerID);
+    utassert(!win.scrollAnimActive && other->yOffset() == otherY);
+    StopSmoothScroll(&win);
+    win.ctrl = tab.ctrl = dm;
+    delete other;
+
+    // Page-number scrollbars must not multiply a wheel notch by 30 pages.
+    gSettings->smoothScroll = false;
+    gSettings->scrollbarInSinglePage = true;
+    dm->SetDisplayMode(DisplayMode::SinglePage);
+    dm->GoToPage(1, false);
+    dm->Relayout(200, 0);
+    dm->ScrollYTo(0);
+    SCROLLINFO scroll{};
+    scroll.cbSize = sizeof(scroll);
+    scroll.fMask = SIF_ALL;
+    scroll.nMax = dm->GetCanvasSize().dy - 1;
+    scroll.nPage = dm->GetViewPort().dy;
+    SetScrollInfo(canvas, SB_VERT, &scroll, FALSE);
+    win.wheelAccumDelta = win.wheelPixelRemainderY = 0;
+    gDeltaPerLine = WHEEL_DELTA / 3;
+    CanvasOnMouseWheel(&win, WM_MOUSEWHEEL, MAKEWPARAM(0, -WHEEL_DELTA), MAKELPARAM(10, 10));
+    int line = DpiScale(ScrollLineAmount(gSettings->scrollLineAmount));
+    utassert(dm->CurrentPageNo() == 1 && dm->yOffset() == line * 3);
+    dm->ScrollYTo(0);
+    gSettings->smoothScroll = true;
+    CanvasOnMouseWheel(&win, WM_MOUSEWHEEL, MAKEWPARAM(0, -WHEEL_DELTA), MAKELPARAM(10, 10));
+    utassert(win.scrollAnimActive && win.scrollTargetY == line * 3 && dm->yOffset() == 0);
+    OnTimer(&win, canvas, kSmoothScrollTimerID);
+    utassert(win.scrollAnimActive && dm->yOffset() > 0 && dm->yOffset() < line * 3);
+    CanvasOnMouseWheel(&win, WM_MOUSEWHEEL, MAKEWPARAM(0, -WHEEL_DELTA), MAKELPARAM(10, 10));
+    utassert(win.scrollAnimActive && win.scrollTargetY == line * 6);
+}
+#endif

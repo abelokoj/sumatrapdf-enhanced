@@ -372,6 +372,10 @@ const commandsRaw = [
     "CmdLassoRecolor", "Selected Annotations: Apply Pen Color",
     "CmdLassoThinner", "Selected Annotations: Thinner",
     "CmdLassoThicker", "Selected Annotations: Thicker",
+    "CmdTextSelectTool", "Select text: drag or Shift-click",
+    "CmdLassoFreehand", "Lasso: Freehand Selection",
+    "CmdLassoRectangle", "Lasso: Rectangular Selection",
+    "CmdLassoDelete", "Lasso: Delete Selected Annotations",
 ];
 
 // removed slots are dropped: nothing outside the generators should see them

@@ -293,6 +293,12 @@ struct DisplayModel : DocController {
     // returns this instead of asking the engine live, so pagesInfo indexing
     // stays consistent even after the engine's chapter layout has moved on
     int pageCount = 0;
+    u64 viewChangeId = 0;
+    mutable bool visibleSummaryValid = false;
+    mutable int visibleFirstPage = 0;
+    mutable int visibleLastPage = 0;
+    mutable int visibleCurrentPage = 0;
+
     // guards pagesInfo/pageCount against the render thread reading them while
     // SyncWithEngineLayout() swaps in a freshly rebuilt array. UI-thread code
     // reads pagesInfo/pageCount lock-free, same as before

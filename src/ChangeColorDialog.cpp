@@ -92,6 +92,8 @@ struct ChangeColorWnd : WindowBase {
     bool previewSelected = true;
     bool updatingEdit = false;
     bool colorInputValid = true;
+    bool opacityInputValid = true;
+    bool updatingOpacityEdit = false;
     ColorModel colorModel = ColorModel::Hex;
 
     Pixmap* hsvPx = nullptr;
@@ -112,6 +114,7 @@ struct ChangeColorWnd : WindowBase {
     VirtText* opacityLabel = nullptr;
     VirtSlider* opacitySlider = nullptr;
     VirtText* opacityValue = nullptr;
+    Edit* opacityEdit = nullptr;
     Checkbox* radioThisFile = nullptr;
     Checkbox* radioAllFiles = nullptr;
     VirtButton* btnRemove = nullptr;
@@ -132,10 +135,12 @@ struct ChangeColorWnd : WindowBase {
     void InvalidateSwatches();
     void UpdateSwatchVis();
     void UpdateRemoveBtn();
+    ILayout* CreateOpacityRow();
     void UpdateOpacityVis();
     void UpdateOpacityValue();
     void SyncOpacityFromColor();
     void OnOpacityChanged();
+    void OnOpacityEdit();
     void SetCustomColor(int idx, Color);
     void RemoveCustom(int idx);
     void PickFromArea(Point ptLocal);
@@ -236,6 +241,14 @@ static Color WithAlpha(Color c, u8 a) {
 static u8 OpacityOf(Color c) {
     u8 a = GetAlpha(c);
     return a == 0 ? 0xff : a;
+}
+
+static int OpacityPercent(int alpha) {
+    return (alpha * 100 + 127) / 255;
+}
+
+static u8 PercentOpacity(int percent) {
+    return (u8)((limitValue(percent, 0, 100) * 255 + 50) / 100);
 }
 
 static int ColorChannelCount(ColorModel model) {
@@ -489,13 +502,20 @@ void ChangeColorWnd::UpdateOpacityVis() {
     opacityLabel->SetVisibility(vis);
     opacitySlider->SetVisibility(vis);
     opacityValue->SetVisibility(vis);
+    if (opacityEdit) opacityEdit->SetVisibility(vis);
 }
 
 void ChangeColorWnd::UpdateOpacityValue() {
     if (!opacityValue) {
         return;
     }
-    opacityValue->SetText(fmt("%d", (int)opacity));
+    opacityInputValid = true;
+    if (opacityEdit) {
+        updatingOpacityEdit = true;
+        opacityEdit->SetText(fmt("%d", OpacityPercent(opacity)));
+        updatingOpacityEdit = false;
+    }
+    if (btnOk) btnOk->SetIsEnabled(colorInputValid);
     if (hwnd && layout) {
         DoLayout(HwndClientRect(hwnd).Size());
         HwndInvalidate(hwnd);
@@ -506,9 +526,9 @@ void ChangeColorWnd::SyncOpacityFromColor() {
     if (!withOpacity) {
         return;
     }
-    opacity = isCheckered ? 0xff : OpacityOf(currentColor);
+    if (!isCheckered) opacity = GetAlpha(currentColor);
     if (opacitySlider) {
-        opacitySlider->SetValue(opacity, false);
+        opacitySlider->SetValue(OpacityPercent(opacity), false);
     }
     UpdateOpacityValue();
 }
@@ -517,12 +537,33 @@ void ChangeColorWnd::OnOpacityChanged() {
     if (!opacitySlider) {
         return;
     }
-    opacity = (u8)limitValue(opacitySlider->value, 0, 255);
+    opacity = PercentOpacity(opacitySlider->value);
     if (!isCheckered) {
         currentColor = WithAlpha(currentColor, opacity);
-        UpdateEditFromColor();
+        if (colorInputValid)
+            UpdateEditFromColor();
+        else
+            InvalidateSwatches();
     }
     UpdateOpacityValue();
+}
+
+void ChangeColorWnd::OnOpacityEdit() {
+    if (updatingOpacityEdit || !opacityEdit) return;
+    double percent = 0;
+    opacityInputValid =
+        ParseColorChannel(opacityEdit->GetTextTemp(), ColorModel::Cmyk, 0, percent) && percent == floor(percent);
+    if (btnOk) btnOk->SetIsEnabled(colorInputValid && opacityInputValid);
+    if (!opacityInputValid) return;
+    opacity = PercentOpacity((int)percent);
+    if (opacitySlider) opacitySlider->SetValue((int)percent, false);
+    if (!isCheckered) {
+        currentColor = WithAlpha(currentColor, opacity);
+        if (colorInputValid)
+            UpdateEditFromColor();
+        else
+            InvalidateSwatches();
+    }
 }
 
 // setting a color on the empty slot defines it, which opens a new empty slot
@@ -586,7 +627,7 @@ void ChangeColorWnd::UpdateEditFromColor() {
     }
     updatingEdit = false;
     colorInputValid = true;
-    if (btnOk) btnOk->SetIsEnabled(true);
+    if (btnOk) btnOk->SetIsEnabled(opacityInputValid);
     if (selectedCustomIdx >= 0 && !isCheckered) {
         SetCustomColor(selectedCustomIdx, currentColor);
     }
@@ -627,7 +668,7 @@ void ChangeColorWnd::OnEditChanged() {
     }
     bool valid = TryParseEdit();
     colorInputValid = valid;
-    if (btnOk) btnOk->SetIsEnabled(valid);
+    if (btnOk) btnOk->SetIsEnabled(valid && opacityInputValid);
     if (!valid) {
         return;
     }
@@ -737,7 +778,7 @@ void ChangeColorWnd::OnSwatchClick(VirtMouseEvent* ev) {
             isCheckered = true;
         } else {
             isCheckered = false;
-            currentColor = col;
+            currentColor = withOpacity ? WithAlpha(col, 0xff) : col;
         }
         SelectPreview();
         SyncOpacityFromColor();
@@ -842,8 +883,9 @@ static void PaintSwatch(VirtCustom* sw, VirtPaintCtx* ctx) {
     if (checkered) {
         PaintCheckerboard(ctx->gfx, rc, kColWhite, kColCheckerDark);
     } else {
-        u8 a = GetAlpha(col);
-        bool blend = wnd->withOpacity && a != 0 && a != 0xff;
+        bool preset = id >= kIdPreset0 && id < kIdPreset0 + kNumPresets;
+        u8 a = preset ? 0xff : GetAlpha(col);
+        bool blend = wnd->withOpacity && a != 0xff;
         if (blend) {
             // show the color over a checkerboard, so opacity is visible
             PaintCheckerboard(ctx->gfx, rc, BlendOver(col, kColWhite, a), BlendOver(col, kColCheckerDark, a));
@@ -869,6 +911,7 @@ void ChangeColorWnd::NotifyColorsArgs(CloseAction action) {
     }
     args->color = isCheckered ? kColorUnset : currentColor;
     args->didSelect = (action == CloseAction::Select);
+    if (args->didSelect && withOpacity) args->opacityPercent = OpacityPercent(opacity);
     args->colorsChanged = customColorsChanged;
     args->onClose.Call(args);
     delete args;
@@ -948,7 +991,7 @@ void ChangeColorWnd::ApplyBackground() {
 }
 
 void ChangeColorWnd::OnOk(VirtMouseEvent*) {
-    if (!colorInputValid) return;
+    if (!colorInputValid || !opacityInputValid) return;
     Finish(CloseAction::Select);
 }
 
@@ -989,11 +1032,16 @@ void ChangeColorWnd::ClassifyTab(WindowTab* t) {
 }
 
 void ChangeColorWnd::LoadCurrentColor() {
+    colorInputValid = opacityInputValid = true;
     if (colorsArgs) {
         currentColor = colorsArgs->color;
         isCheckered = (currentColor == kColorUnset);
-        if (isCheckered) {
-            currentColor = ThemeControlBackgroundColor();
+        if (isCheckered) currentColor = ThemeControlBackgroundColor();
+        if (withOpacity) {
+            opacity = colorsArgs->opacityPercent >= 0 ? PercentOpacity(colorsArgs->opacityPercent)
+                      : isCheckered                   ? 0xff
+                                                      : OpacityOf(currentColor);
+            if (!isCheckered) currentColor = WithAlpha(currentColor, opacity);
         }
         return;
     }
@@ -1153,6 +1201,53 @@ static HBox* SwatchRow(VirtCustom** items, int n, int gap) {
     return row;
 }
 
+ILayout* ChangeColorWnd::CreateOpacityRow() {
+    bool isRtl = IsUIRtl();
+    auto* row = new HBox();
+    row->alignMain = MainAxisAlign::MainStart;
+    row->alignCross = CrossAxisAlign::CrossCenter;
+    row->gap = DpiScale(4);
+
+    opacityLabel = NewVirtText({
+        .s = Tr("Opacity:"),
+        .font = font,
+        .isRtl = isRtl,
+    });
+    row->AddChild(opacityLabel);
+
+    auto* sl = new VirtSlider();
+    sl->minVal = 0;
+    sl->maxVal = 100;
+    sl->value = OpacityPercent(opacity);
+    sl->idealDx = DpiScale(200);
+    sl->onValueChanged = MkMethod0<ChangeColorWnd, &ChangeColorWnd::OnOpacityChanged>(this);
+    opacitySlider = sl;
+    row->AddChild(sl);
+
+    Edit::CreateArgs args;
+    args.parent = hwnd;
+    args.font = GetFont();
+    args.withBorder = true;
+    args.numbersOnly = true;
+    args.selectAllOnFocus = true;
+    args.isRtl = isRtl;
+    args.idealWidthChars = 4;
+    args.maxWidthChars = 4;
+    opacityEdit = new Edit();
+    opacityEdit->Create(args);
+    opacityEdit->onTextChanged = MkMethod0<ChangeColorWnd, &ChangeColorWnd::OnOpacityEdit>(this);
+    row->AddChild(opacityEdit);
+
+    opacityValue = NewVirtText({
+        .s = StrL("%"),
+        .font = font,
+        .isRtl = isRtl,
+    });
+    row->AddChild(opacityValue);
+    opacityRow = new Padding(row, DpiScaledInsets(4, 0, 0, 0));
+    return opacityRow;
+}
+
 bool ChangeColorWnd::Create(MainWindow* mainWin) {
     win = mainWin;
 
@@ -1189,37 +1284,7 @@ bool ChangeColorWnd::Create(MainWindow* mainWin) {
         vbox->AddChild(c);
     }
 
-    {
-        auto* row = new HBox();
-        row->alignMain = MainAxisAlign::MainStart;
-        row->alignCross = CrossAxisAlign::CrossCenter;
-        row->gap = DpiScale(4);
-
-        opacityLabel = NewVirtText({
-            .s = Tr("Opacity:"),
-            .font = font,
-            .isRtl = isRtl,
-        });
-        row->AddChild(opacityLabel);
-
-        auto* sl = new VirtSlider();
-        sl->minVal = 0;
-        sl->maxVal = 255;
-        sl->value = opacity;
-        sl->idealDx = DpiScale(200);
-        sl->onValueChanged = MkMethod0<ChangeColorWnd, &ChangeColorWnd::OnOpacityChanged>(this);
-        opacitySlider = sl;
-        row->AddChild(sl);
-
-        opacityValue = NewVirtText({
-            .s = StrL("255"),
-            .font = font,
-            .isRtl = isRtl,
-        });
-        row->AddChild(opacityValue);
-        opacityRow = new Padding(row, DpiScaledInsets(4, 0, 0, 0));
-        vbox->AddChild(opacityRow);
-    }
+    vbox->AddChild(CreateOpacityRow());
 
     {
         auto* row = new HBox();
@@ -1430,6 +1495,8 @@ void ShowChangeBackgroundColorDialog(MainWindow* win) {
 
 void ShowChangeColorsDialog(ChangeColorsArgs* args) {
     if (!IsMainWindowValidAndNotClosing(args->win)) {
+        args->didSelect = false;
+        args->onClose.Call(args);
         delete args;
         return;
     }
@@ -1455,6 +1522,193 @@ void ShowChangeColorsDialog(ChangeColorsArgs* args) {
 }
 
 #if defined(DEBUG)
+struct OpacityPickerReply {
+    int closed = 0;
+    int percent = -2;
+    int alpha = -1;
+    bool selected = false;
+};
+
+static void OpacityPickerClosed(OpacityPickerReply* reply, ChangeColorsArgs* args) {
+    reply->closed++;
+    reply->percent = args->opacityPercent;
+    reply->alpha = GetAlpha(args->color);
+    reply->selected = args->didSelect;
+}
+static bool CheckCustomColorOpacity() {
+    const Color colors[] = {MkRgba(19, 200, 91, 0), MkRgba(18, 52, 86, 94), MkRgba(212, 63, 30, 255)};
+    Vec<Color> saved;
+    for (Color color : colors) VecAppend(saved, color);
+    for (bool reopened : {false, true}) {
+        ChangeColorWnd wnd;
+        OpacityPickerReply reply;
+        auto* args = new ChangeColorsArgs();
+        args->withOpacity = true;
+        args->color = MkRgba(1, 2, 3, 255);
+        args->opacityPercent = 100;
+        args->onClose = MkFunc1(OpacityPickerClosed, &reply);
+        if (reopened)
+            ParseColorList(SerializeColorList(saved), args->colors, kMaxCustomColors);
+        else
+            args->colors = saved;
+        wnd.SetTargetColors(args);
+        wnd.LoadColors();
+        if (wnd.nCustom != dimof(colors)) return false;
+        for (int i = 0; i < dimof(colors); i++) {
+            if (wnd.customColors[i] != colors[i]) {
+                printf("Color picker check failed: custom alpha lost (reopened=%d, index=%d)\n", reopened ? 1 : 0, i);
+                return false;
+            }
+        }
+        VirtCustom swatch;
+        swatch.id = kIdCustom0;
+        VirtMouseEvent ev;
+        ev.hit = &swatch;
+        wnd.OnSwatchClick(&ev);
+        if (!ev.didHandle || wnd.currentColor != colors[0] || wnd.opacity != 0) return false;
+        wnd.NotifyColorsArgs(CloseAction::Select);
+        if (!reply.selected || reply.percent != 0 || reply.alpha != 0) return false;
+    }
+    return true;
+}
+
+bool ChangeColor_UnitTestsOpacity() {
+    if (!CheckCustomColorOpacity()) return false;
+    OpacityPickerReply missingOwnerReply;
+    auto* missingOwnerArgs = new ChangeColorsArgs();
+    missingOwnerArgs->onClose = MkFunc1(OpacityPickerClosed, &missingOwnerReply);
+    ShowChangeColorsDialog(missingOwnerArgs);
+    if (missingOwnerReply.closed != 1 || missingOwnerReply.selected) {
+        printf("Color picker check failed: missing owner did not cancel callback\n");
+        return false;
+    }
+    ChangeColorWnd wnd;
+    wnd.SetFont(GetAppFont());
+    CreateCustomArgs args;
+    args.visible = false;
+    args.style = WS_POPUP;
+    args.font = wnd.GetFont();
+    wnd.CreateCustom(args);
+    if (!wnd.hwnd) return false;
+    SetWindowPos(wnd.hwnd, nullptr, 0, 0, 400, 100, SWP_NOACTIVATE | SWP_NOZORDER);
+    wnd.withOpacity = true;
+    wnd.currentColor = MkRgba(19, 200, 91, 128);
+    auto* box = new VBox();
+    box->AddChild(wnd.CreateOpacityRow());
+    Edit::CreateArgs colorEditArgs;
+    colorEditArgs.parent = wnd.hwnd;
+    colorEditArgs.font = wnd.GetFont();
+    colorEditArgs.withBorder = true;
+    wnd.editRgb = new Edit();
+    wnd.editRgb->Create(colorEditArgs);
+    wnd.editRgb->onTextChanged = MkMethod0<ChangeColorWnd, &ChangeColorWnd::OnEditChanged>(&wnd);
+    box->AddChild(wnd.editRgb);
+    wnd.btnOk = new VirtButton(StrL("Select"), wnd.GetFont());
+    box->AddChild(wnd.btnOk);
+    wnd.layout = box;
+    wnd.UpdateOpacityVis();
+    wnd.SyncOpacityFromColor();
+    wnd.DoLayout({400, 100});
+    if (wnd.opacitySlider->minVal != 0 || wnd.opacitySlider->maxVal != 100 || wnd.opacitySlider->value != 50)
+        return false;
+    if (!wnd.opacityEdit || !wnd.opacityEdit->hwnd || !str::Eq(wnd.opacityEdit->GetTextTemp(), StrL("50")))
+        return false;
+    if (!str::Eq(wnd.opacityValue->s, StrL("%"))) return false;
+    for (int percent : {0, 1, 25, 50, 99, 100}) {
+        TempStr text = fmt("%d", percent);
+        SendMessageW(wnd.opacityEdit->hwnd, WM_SETTEXT, 0, (LPARAM)ToWStrTemp(text).s);
+        int alpha = (percent * 255 + 50) / 100;
+        if (wnd.opacity != alpha || GetAlpha(wnd.currentColor) != alpha || wnd.opacitySlider->value != percent ||
+            !wnd.btnOk->IsEnabled())
+            return false;
+    }
+    for (const WCHAR* invalid : {L"", L"-1", L"101", L"12x"}) {
+        SendMessageW(wnd.opacityEdit->hwnd, WM_SETTEXT, 0, (LPARAM)invalid);
+        if (wnd.btnOk->IsEnabled() || wnd.opacity != 255) return false;
+    }
+    SendMessageW(wnd.opacityEdit->hwnd, WM_SETTEXT, 0, (LPARAM)L"0");
+    if (wnd.opacity != 0 || !wnd.btnOk->IsEnabled()) return false;
+    wnd.SyncOpacityFromColor();
+    if (wnd.opacity != 0 || wnd.opacitySlider->value != 0) return false;
+    for (int percent : {100, 0, 37}) {
+        wnd.opacitySlider->SetValue(percent, true);
+        int alpha = (percent * 255 + 50) / 100;
+        if (wnd.opacity != alpha || GetAlpha(wnd.currentColor) != alpha ||
+            !str::Eq(wnd.opacityEdit->GetTextTemp(), fmt("%d", percent)))
+            return false;
+    }
+    for (bool slider : {false, true}) {
+        SendMessageW(wnd.editRgb->hwnd, WM_SETTEXT, 0, (LPARAM)L"#invalid");
+        if (wnd.colorInputValid || wnd.btnOk->IsEnabled()) return false;
+        if (slider)
+            wnd.opacitySlider->SetValue(50, true);
+        else
+            SendMessageW(wnd.opacityEdit->hwnd, WM_SETTEXT, 0, (LPARAM)L"50");
+        if (wnd.colorInputValid || wnd.btnOk->IsEnabled() || !str::Eq(wnd.editRgb->GetTextTemp(), StrL("#invalid"))) {
+            printf("Color picker check failed: opacity change accepted invalid color (%d)\n", slider ? 1 : 0);
+            return false;
+        }
+        SendMessageW(wnd.editRgb->hwnd, WM_SETTEXT, 0, (LPARAM)L"#123456");
+        if (!wnd.colorInputValid || !wnd.btnOk->IsEnabled() || wnd.currentColor != MkRgba(18, 52, 86, 128))
+            return false;
+    }
+    wnd.withOpacity = false;
+    wnd.UpdateOpacityVis();
+    if (wnd.opacityEdit->GetVisibility() != Visibility::Collapse) return false;
+    for (int percent : {-1, 0, 37, 100}) {
+        ChangeColorWnd initial;
+        OpacityPickerReply reply;
+        auto* colorsArgs = new ChangeColorsArgs();
+        colorsArgs->withOpacity = true;
+        colorsArgs->color = MkRgb(19, 200, 91);
+        colorsArgs->opacityPercent = percent;
+        colorsArgs->onClose = MkFunc1(OpacityPickerClosed, &reply);
+        initial.SetTargetColors(colorsArgs);
+        initial.SyncOpacityFromColor();
+        int expectedPercent = percent < 0 ? 100 : percent;
+        int alpha = (expectedPercent * 255 + 50) / 100;
+        if (initial.opacity != alpha || GetAlpha(initial.currentColor) != alpha) return false;
+        initial.NotifyColorsArgs(CloseAction::Select);
+        if (!reply.selected || reply.percent != expectedPercent || reply.alpha != alpha) return false;
+    }
+    wnd.withOpacity = true;
+    SendMessageW(wnd.opacityEdit->hwnd, WM_SETTEXT, 0, (LPARAM)L"101");
+    if (wnd.btnOk->IsEnabled()) return false;
+    wnd.SetTargetBackground(nullptr);
+    if (!wnd.btnOk->IsEnabled() || wnd.withOpacity) {
+        printf("Color picker check failed: invalid opacity survived target change\n");
+        return false;
+    }
+    ChangeColorWnd unset;
+    OpacityPickerReply unsetReply;
+    auto* unsetArgs = new ChangeColorsArgs();
+    unsetArgs->withOpacity = true;
+    unsetArgs->color = kColorUnset;
+    unsetArgs->opacityPercent = 37;
+    unsetArgs->onClose = MkFunc1(OpacityPickerClosed, &unsetReply);
+    unset.SetTargetColors(unsetArgs);
+    unset.SyncOpacityFromColor();
+    if (unset.opacity != PercentOpacity(37)) return false;
+    unset.NotifyColorsArgs(CloseAction::Select);
+    if (!unsetReply.selected || unsetReply.percent != 37) return false;
+    wnd.withOpacity = true;
+    wnd.opacitySlider->SetValue(37, true);
+    wnd.isCheckered = true;
+    wnd.SyncOpacityFromColor();
+    if (wnd.opacitySlider->value != 37 || wnd.opacity != PercentOpacity(37)) return false;
+    ChangeColorWnd cancelled;
+    OpacityPickerReply reply;
+    auto* colorsArgs = new ChangeColorsArgs();
+    colorsArgs->withOpacity = true;
+    colorsArgs->color = MkRgb(19, 200, 91);
+    colorsArgs->opacityPercent = 37;
+    colorsArgs->onClose = MkFunc1(OpacityPickerClosed, &reply);
+    cancelled.SetTargetColors(colorsArgs);
+    cancelled.opacity = 0;
+    cancelled.NotifyColorsArgs(CloseAction::Cancel);
+    return !reply.selected && reply.percent == 37;
+}
+
 bool ChangeColor_UnitTests() {
     Color color;
     double values[kMaxColorChannels] = {255, 128, 0, 0};

@@ -59,6 +59,7 @@
 #include "SvgIcons.h"
 #include "EnhancedIcons.h"
 #include "Theme.h"
+#include "DarkMode.h"
 #include "ReadAloud.h"
 #include "RenderCache.h"
 #include "Toolbar.h"
@@ -80,8 +81,12 @@ struct ToolbarButtonInfo {
 
 static void CollectPaletteControls(ILayout*, Vec<VirtCtrl*>&);
 static int PinnedToolCommand(Str);
-static int PinnedToolIndex(MainWindow*, int);
+static int PinnedToolIndex(MainWindow*, int, Color = kColorUnset);
+static void TogglePinnedTool(MainWindow*, int, Color = kColorUnset);
+static ILayout* NewPaletteHeader(MainWindow*, Str, int, ILayout* = nullptr);
 static bool ShowPinToolMenu(MainWindow*, int);
+static const char* kTextSelectToolIcon =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M8 4h2c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H8m8-16h-2c-1.1 0-2 .9-2 2m4 14h-2c-1.1 0-2-.9-2-2M9 12h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>)";
 static const char* kHandToolIcon =
     R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M8 12V6a2 2 0 0 1 4 0v5-7a2 2 0 0 1 4 0v7-5a2 2 0 0 1 4 0v8c0 5-3 8-7 8-2 0-4-1-5-3l-4-5a2 2 0 0 1 3-3l1 1Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>)";
 static const char* kHandQuillIcon =
@@ -173,6 +178,11 @@ static int LocationEditCap(int available, int fixedDx, int reservedDx, int field
 #if IS_DEBUG
 static void ToolbarInteractionTests();
 static void ToolbarPaletteTests();
+static void ToolbarReorderTests();
+
+void ToolbarReorder_UnitTests() {
+    ToolbarReorderTests();
+}
 
 void ToolbarLayout_UnitTests() {
     Vec<int> widths;
@@ -468,6 +478,7 @@ static ToolbarButtonInfo gToolbarButtons[] = {
     {nullptr, 0, {}},
     {kHandQuillIcon, CmdToggleEditPDF, TrN("Edit PDF")},
     {kHandToolIcon, CmdHandTool, TrN("Hand tool: drag to pan")},
+    {kTextSelectToolIcon, CmdTextSelectTool, TrN("Select text: drag to select; Shift-click to extend")},
     {kLassoToolIcon, CmdAnnotationLasso, TrN("Lasso: select, move, resize or delete annotations")},
     {kEnhancedIconInk, CmdCreateAnnotInk, TrN("Pen: tools, colors and thickness")},
     {kEnhancedIconHighlight, CmdAnnotationHighlightBrush, TrN("Text highlighter")},
@@ -504,6 +515,7 @@ constexpr int kButtonsCount = dimof(gToolbarButtons);
 
 static ToolbarButtonInfo gPdfAnnotationButtons[] = {
     {kHandToolIcon, CmdHandTool, TrN("Hand tool: drag to pan")},
+    {kTextSelectToolIcon, CmdTextSelectTool, TrN("Select text: drag to select; Shift-click to extend")},
     {kLassoToolIcon, CmdAnnotationLasso, TrN("Lasso: select, move, resize or delete annotations")},
     {kEnhancedIconHighlight, CmdAnnotationHighlightBrush, TrN("Highlighter: select text to highlight it")},
     {kEnhancedIconInk, CmdCreateAnnotInk, TrN("Ink")},
@@ -538,6 +550,7 @@ static ToolbarButtonInfo gPdfAnnotationButtons[] = {
 };
 
 constexpr int kPdfAnnotationButtonsCount = dimof(gPdfAnnotationButtons);
+static ToolbarButtonInfo gAnnotationButtons[kPdfAnnotationButtonsCount];
 
 // The built-in buttons actually on the toolbar, which is gToolbarButtons unless
 // ToolbarCustomLayout asks for a different set / order (issue #5095). A layout
@@ -546,6 +559,7 @@ constexpr int kMaxLayoutButtons = 64;
 static ToolbarButtonInfo gLayoutButtons[kMaxLayoutButtons];
 static int gLayoutButtonsCount = 0;
 static Str gLayoutParsedFrom;
+static Str gOrderParsedFrom;
 static bool gLayoutParsed = false;
 
 // 128 should be more than enough
@@ -798,6 +812,39 @@ static void SetToolbarButtonCheckedByIdx(MainWindow* win, int idx, bool isChecke
     ib->Invalidate();
 }
 
+// Keep separators and the native page box in their slots. New tools remain available.
+static void ApplyToolbarOrder(ToolbarButtonInfo* buttons, int count, Str order) {
+    Vec<ToolbarButtonInfo> tools;
+    Vec<int> slots;
+    for (int i = 0; i < count; i++) {
+        if (!buttons[i].cmdId || buttons[i].cmdId == PageInfoId || !HasToolbarButtonContent(buttons[i])) continue;
+        VecAppend(tools, buttons[i]);
+        VecAppend(slots, i);
+    }
+    Vec<bool> used;
+    for (int i = 0; i < len(tools); i++) VecAppend(used, false);
+    Vec<ToolbarButtonInfo> sorted;
+    StrVec names;
+    Split(&names, order, StrL(" "), true);
+    for (Str name : names) {
+        int cmd = GetCommandIdByName(name);
+        for (int i = 0; i < len(tools); i++) {
+            if (used[i] || tools[i].cmdId != cmd) continue;
+            VecAppend(sorted, tools[i]);
+            used[i] = true;
+            break;
+        }
+    }
+    for (int i = 0; i < len(tools); i++)
+        if (!used[i]) VecAppend(sorted, tools[i]);
+    for (int i = 0; i < len(slots); i++) buttons[slots[i]] = sorted[i];
+}
+
+static void PopulateAnnotationOrder() {
+    for (int i = 0; i < kPdfAnnotationButtonsCount; i++) gAnnotationButtons[i] = gPdfAnnotationButtons[i];
+    ApplyToolbarOrder(gAnnotationButtons, kPdfAnnotationButtonsCount, gSettings->toolbarAnnotationOrder);
+}
+
 // Work out which built-in buttons the toolbar has, and in which order. Empty
 // ToolbarCustomLayout (the default) means the standard layout; otherwise the
 // setting lists the buttons the user wants: a command name puts that button
@@ -805,13 +852,17 @@ static void SetToolbarButtonCheckedByIdx(MainWindow* win, int idx, bool isChecke
 // out is how you hide it (issue #5095).
 static void PopulateToolbarLayout() {
     Str setting = gSettings->toolbarCustomLayout;
-    if (gLayoutParsed && str::Eq(setting, gLayoutParsedFrom)) {
+    if (gLayoutParsed && str::Eq(setting, gLayoutParsedFrom) && str::Eq(gSettings->toolbarOrder, gOrderParsedFrom)) {
         return;
     }
     str::Free(gLayoutParsedFrom);
     gLayoutParsedFrom = str::Dup(setting);
+    str::ReplaceWithCopy(&gOrderParsedFrom, gSettings->toolbarOrder);
     gLayoutParsed = true;
     gLayoutButtonsCount = 0;
+    defer {
+        ApplyToolbarOrder(gLayoutButtons, gLayoutButtonsCount, gSettings->toolbarOrder);
+    };
 
     auto addButton = [](const ToolbarButtonInfo& tbi) {
         if (gLayoutButtonsCount < kMaxLayoutButtons) {
@@ -893,6 +944,13 @@ void SetToolbarButtonCheckedState(MainWindow* win, int cmdId, bool isChecked) {
         if (OriginalCommandId(tbi.cmdId) == originalCmdId) {
             SetToolbarButtonCheckedByIdx(win, i, isChecked);
         }
+    }
+    for (int i = 0; i < kPdfAnnotationButtonsCount; i++) {
+        if (gAnnotationButtons[i].cmdId != originalCmdId) continue;
+        auto* button = AsVirtIconButton(PdfAnnotationToolbarItemAt(win, i));
+        if (!button || button->isSelected == isChecked) continue;
+        button->isSelected = isChecked;
+        button->Invalidate();
     }
 }
 
@@ -1048,7 +1106,7 @@ void UpdateToolbarButtonsToolTipsForWindow(MainWindow* win) {
         }
     }
     for (int i = 0; i < kPdfAnnotationButtonsCount; i++) {
-        const ToolbarButtonInfo& bi = gPdfAnnotationButtons[i];
+        const ToolbarButtonInfo& bi = gAnnotationButtons[i];
         if (len(bi.toolTip) == 0) {
             continue;
         }
@@ -1167,6 +1225,7 @@ void ToolbarUpdateStateForWindow(MainWindow* win, bool setButtonsVisibility) {
     SetToolbarButtonCheckedState(win, CmdInkEraser, win->inkEraseMode == 1);
     SetToolbarButtonCheckedState(win, CmdToggleLaserPointer, IsLaserPointerActive(win));
     SetToolbarButtonCheckedState(win, CmdHandTool, win->handTool);
+    SetToolbarButtonCheckedState(win, CmdTextSelectTool, win->textSelectTool);
     SetToolbarButtonCheckedState(win, CmdAnnotationLasso, win->annotationLasso.active);
 
     bool showPdfAnnotationsToolbar = win->pdfAnnotationsToolbarEnabled && ctx->isPdf && ctx->supportsAnnots;
@@ -1175,7 +1234,7 @@ void ToolbarUpdateStateForWindow(MainWindow* win, bool setButtonsVisibility) {
     bool annotButtonsEnabled = showPdfAnnotationsToolbar;
     bool annotVisibilityChanged = false;
     for (int i = 0; i < kPdfAnnotationButtonsCount; i++) {
-        const ToolbarButtonInfo& bi = gPdfAnnotationButtons[i];
+        const ToolbarButtonInfo& bi = gAnnotationButtons[i];
         if (!HasToolbarButtonContent(bi)) {
             continue;
         }
@@ -1275,7 +1334,7 @@ void SetToolbarButtonEnableState(MainWindow* win, int cmdId, bool isEnabled) {
         }
     }
     for (int i = 0; i < kPdfAnnotationButtonsCount; i++) {
-        if (gPdfAnnotationButtons[i].cmdId == originalCmdId) {
+        if (gAnnotationButtons[i].cmdId == originalCmdId) {
             SetPdfAnnotationButtonEnabledByIdx(win, i, isEnabled);
         }
     }
@@ -1496,8 +1555,14 @@ void RevealOverlayToolbar(MainWindow* win) {
 
 // the delayed-hide timer fired on the toolbar's own host
 static void OnHoverDropdownTimer(MainWindow* win, int timerId);
+static void OnToolbarDragTimer(MainWindow*);
+static void CancelToolbarDrag(MainWindow*);
 
 static void OnToolbarTimer(MainWindow* win, int timerId) {
+    if (timerId == kToolbarDragScrollTimerId) {
+        OnToolbarDragTimer(win);
+        return;
+    }
     if (timerId == kOpenHoverDropdownTimerId || timerId == kCloseHoverDropdownTimerId) {
         OnHoverDropdownTimer(win, timerId);
         return;
@@ -1820,7 +1885,7 @@ static void RefreshToolbarIcons(MainWindow* win) {
         if (!ib) {
             continue;
         }
-        const ToolbarButtonInfo& bi = gPdfAnnotationButtons[i];
+        const ToolbarButtonInfo& bi = gAnnotationButtons[i];
         if (!HasToolbarButtonContent(bi)) {
             continue;
         }
@@ -1996,7 +2061,7 @@ TempStr ToolbarButtonsResultTemp(int* exitCodeOut) {
     out.Append(fmt("annotationButtons=%d visible=%d\n", nAnnotations, annotationsVisible ? 1 : 0));
     for (int i = 0; i < nAnnotations; i++) {
         VirtCtrl* w = tb->annotationItems[i];
-        const ToolbarButtonInfo& bi = gPdfAnnotationButtons[i];
+        const ToolbarButtonInfo& bi = gAnnotationButtons[i];
         if (!w && bi.cmdId) w = ToolbarItemForCmd(win, bi.cmdId);
         Rect r = w ? w->BoundsInWindow() : Rect{};
         bool hidden = !annotationsVisible || !w || w->GetVisibility() != Visibility::Visible;
@@ -2083,10 +2148,9 @@ static void OnToolbarButtonClicked(MainWindow* win, VirtMouseEvent* ev) {
             ev->didHandle = true;
             return;
         }
-        if (ShowToolbarButtonDropdown(win, cmdId)) {
-            ev->didHandle = true;
-            return;
-        }
+        ShowToolbarButtonDropdown(win, cmdId);
+        ev->didHandle = true;
+        return;
     }
     if (!w->IsEnabled()) {
         return;
@@ -2611,6 +2675,18 @@ static int ToolbarPaletteWidth(PlatformFont* font, int availableDx) {
     return std::max(1, std::min(width, availableDx));
 }
 
+static Size ToolbarPaletteViewport(VirtHost* host, Size work) {
+    Rect window = host->ScreenRect();
+    Rect client = host->ClientRect();
+    int frameDx = window.dx - client.dx;
+    int frameDy = window.dy - client.dy;
+    int barDx = GetAppScrollbarWidth(DpiGetForHwnd(host->native));
+    int margin = UiScalePx(16);
+    // Reserve the caption and a possible scrollbar before measuring content.
+    // Shifting an oversized popup cannot keep its close button on the monitor.
+    return {std::max(1, work.dx - margin - frameDx - barDx), std::max(1, work.dy - margin - frameDy)};
+}
+
 // Preserve the natural height of every control when a palette exceeds the monitor.
 struct ToolbarPaletteScroll : ScrollBox {
     Size limit;
@@ -2633,6 +2709,12 @@ struct ToolbarPaletteScroll : ScrollBox {
 };
 
 static void PaletteNativeMsg(ScrollBox* scroll, VirtHostNativeMsg* ev) {
+    if (ev->msg == WM_CLOSE) {
+        auto* win = (MainWindow*)ev->host->userData;
+        if (win) uitask::Post(MkFunc0(PostedHideHoverDropdown, win), "Close tool settings");
+        ev->didHandle = true;
+        return;
+    }
     if (ev->msg == WM_MOUSEWHEEL) {
         VirtMouseEvent wheel;
         wheel.wheelDelta = GET_WHEEL_DELTA_WPARAM(ev->wp);
@@ -2703,6 +2785,13 @@ static void OpenHoverDropdown(MainWindow* win, int cmdId) {
     VirtHost::CreateArgs args;
     args.parent = win->hwndFrame;
     args.className = WStrL(L"SumatraToolbarHoverMenu");
+    if (IsAnnotColorCmd(cmdId) || cmdId == CmdToggleLaserPointer) {
+        auto* button = ToolbarItemForCmd(win, cmdId);
+        args.title = cmdId == CmdCreateAnnotInk       ? Tr("Pen types")
+                     : cmdId == CmdToggleLaserPointer ? Tr("Laser pointer")
+                     : button                         ? button->tooltip
+                                                      : Tr("Annotation");
+    }
     args.isPopup = true;
     args.visible = false;
     args.noActivate = true;
@@ -2715,13 +2804,14 @@ static void OpenHoverDropdown(MainWindow* win, int cmdId) {
         delete ev.layout;
         return;
     }
+    if (len(args.title)) WindowApplyScaledCaption(host->native);
     host->onPaintBackground = MkFunc1(PaintHoverDropdownBg, win);
     host->onPaint = MkFunc1(PaintHoverFocus, win);
     host->onMouseMove = MkFunc0(OnHoverDropdownMouseMove, win);
     host->onMouseLeave = MkFunc0(OnHoverDropdownMouseLeave, win);
     Rect work = PlatformWindowWorkArea(win->hwndFrame);
-    auto* paletteScroll = new ToolbarPaletteScroll(
-        ev.layout, {std::max(1, work.dx - UiScalePx(16)), std::max(1, work.dy - UiScalePx(16))}, tb->platformFont);
+    auto* paletteScroll =
+        new ToolbarPaletteScroll(ev.layout, ToolbarPaletteViewport(host, work.Size()), tb->platformFont);
     paletteScroll->lineDy = PlatformFontLineHeight(tb->platformFont) + UiScalePx(8);
     ev.layout = paletteScroll;
     host->onNativeMsg = MkFunc1(PaletteNativeMsg, (ScrollBox*)paletteScroll);
@@ -3056,6 +3146,51 @@ static void BuildLayoutHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     ev->centerOnButton = true;
 }
 
+static void LassoColorPicked(MainWindow* win, Color color) {
+    RecolorAnnotationLasso(win, color);
+}
+
+static void ShowLassoColorPicker(MainWindow* win) {
+    if (!IsMainWindowValidAndNotClosing(win) || len(win->annotationLasso.selected) == 0) return;
+    Rect anchor = GetToolbarButtonScreenRect(win, CmdAnnotationLasso);
+    HideToolbarHoverDropdown(win);
+    ShowAnnotColorPopup(win, anchor, InkPenColor(win), false, Tr("Selection color"), MkFunc1(LassoColorPicked, win));
+}
+
+static void OnLassoColorClicked(MainWindow* win, VirtMouseEvent* ev) {
+    if (ev->button != 0) return;
+    uitask::Post(MkFunc0(ShowLassoColorPicker, win), "Lasso selection color");
+    ev->didHandle = true;
+}
+
+static void BuildLassoHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
+    bool selected = len(win->annotationLasso.selected) > 0;
+    bool rectangular = win->annotationLasso.rectangular;
+    bool canRotate = selected && AnnotationLassoCanRotate(win);
+    Vec<ToolbarHoverMenuItem> items;
+    VecAppend(items, {Str(kLassoToolIcon), Tr("Freehand selection"), CmdLassoFreehand, true, !rectangular});
+    VecAppend(items, {Str(gIconAnnotSquare), Tr("Rectangle selection"), CmdLassoRectangle, true, rectangular});
+    VecAppend(items, {Str(gIconTrash), Tr("Delete selected annotations"), CmdLassoDelete, selected});
+    VecAppend(items, {Str(gIconRotateLeft), Tr("Rotate selection left"), CmdLassoRotateLeft, canRotate});
+    VecAppend(items, {Str(gIconRotateRight), Tr("Rotate selection right"), CmdLassoRotateRight, canRotate});
+    VecAppend(items, {Str(gIconCopy), Tr("Duplicate selection"), CmdLassoDuplicate, selected});
+    VecAppend(items, {Str(GetColorPickerIconSvg()), Tr("Selection color"), CmdLassoRecolor, selected});
+    VecAppend(items, {Str(kEnhancedIconInk), Tr("Thinner strokes"), CmdLassoThinner, selected});
+    VecAppend(items, {Str(kEnhancedIconInk), Tr("Thicker strokes"), CmdLassoThicker, selected});
+    ev->layout = NewToolbarHoverMenu(win, items);
+    Vec<VirtCtrl*> controls;
+    CollectPaletteControls(ev->layout, controls);
+    for (VirtCtrl* control : controls)
+        if (control->id == CmdLassoRecolor) control->onClick = MkFunc1(OnLassoColorClicked, win);
+}
+
+void ShowLassoToolbarActions(MainWindow* win) {
+    if (!win || !win->toolbarVirt || len(win->annotationLasso.selected) == 0) return;
+    RevealToolbarTool(win, CmdAnnotationLasso);
+    HideToolbarHoverDropdown(win);
+    ShowToolbarButtonDropdown(win, CmdAnnotationLasso);
+}
+
 static void BuildSaveHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     WindowTab* tab = win ? win->CurrentTab() : nullptr;
     auto* ctx = NewBuildMenuCtx(tab, Point{0, 0});
@@ -3146,24 +3281,82 @@ static ParsedColor* AnnotPresetColorSetting(int cmdId) {
     return nullptr;
 }
 
+static const int kShapeFillCommands[] = {CmdCreateAnnotLine, CmdCreateAnnotPolyLine, CmdCreateAnnotSquare,
+                                         CmdCreateAnnotCircle, CmdCreateAnnotPolygon};
+
+struct ShapeFillSettings {
+    ParsedColor* color = nullptr;
+    int* opacity = nullptr;
+};
+
+static ShapeFillSettings ShapeFillForCmd(int cmd) {
+    if (!gSettings) return {};
+    auto& a = gSettings->annotations;
+    switch (cmd) {
+        case CmdCreateAnnotLine:
+            return {&a.lineInteriorColor, &a.lineInteriorOpacity};
+        case CmdCreateAnnotPolyLine:
+            return {&a.polyLineInteriorColor, &a.polyLineInteriorOpacity};
+        case CmdCreateAnnotSquare:
+            return {&a.squareInteriorColor, &a.squareInteriorOpacity};
+        case CmdCreateAnnotCircle:
+            return {&a.circleInteriorColor, &a.circleInteriorOpacity};
+        case CmdCreateAnnotPolygon:
+            return {&a.polygonInteriorColor, &a.polygonInteriorOpacity};
+    }
+    return {};
+}
+
+static const int* ShapeFillCommandPtr(int cmd) {
+    for (const int& tool : kShapeFillCommands)
+        if (tool == cmd) return &tool;
+    return nullptr;
+}
+
+static void ShapeFillColorPicked(const int* cmd, Color color) {
+    auto setting = ShapeFillForCmd(*cmd);
+    if (!setting.color) return;
+    SetColorText(*setting.color, color == kColorUnset ? Str{} : SerializeColorTemp(color & 0xffffff));
+    ScheduleSaveSettings();
+}
+
+static void ShapeFillOpacityPicked(const int* cmd, int opacity) {
+    auto setting = ShapeFillForCmd(*cmd);
+    if (!setting.opacity) return;
+    *setting.opacity = std::clamp(opacity, 0, 100);
+    ScheduleSaveSettings();
+}
+
+static Color ParseAnnotColor(Str text) {
+    Vec<Color> colors;
+    ParseColorList(text, colors, 1);
+    return len(colors) ? colors[0] : kColorUnset;
+}
+
+static TempStr AnnotColorText(Color color) {
+    Vec<Color> colors;
+    VecAppend(colors, color);
+    return SerializeColorList(colors);
+}
+
 // What an annotation is made in when its setting is empty: MuPDF's defaults,
 // which are also what Acrobat, PDF-XChange and Foxit use
 static Color AnnotDefaultColor(int cmdId) {
     switch (cmdId) {
         case CmdCreateAnnotText:
         case CmdCreateAnnotFileAttachment:
-            return MkRgb(0xff, 0xff, 0);
+            return MkRgba(0xff, 0xff, 0, 255);
         case CmdCreateAnnotFreeText:
-            return MkRgb(0, 0, 0);
+            return MkRgba(0, 0, 0, 255);
         case CmdCreateAnnotCaret:
-            return MkRgb(0, 0, 0xff);
+            return MkRgba(0, 0, 0xff, 255);
         case CmdCreateAnnotLine:
         case CmdCreateAnnotPolyLine:
         case CmdCreateAnnotSquare:
         case CmdCreateAnnotCircle:
         case CmdCreateAnnotPolygon:
         case CmdCreateAnnotStamp:
-            return MkRgb(0xff, 0, 0);
+            return MkRgba(0xff, 0, 0, 255);
         case CmdCreateAnnotInk:
             // 40% yellow, Annotations.InkColor's default
             return 0x6600ffff;
@@ -3174,8 +3367,9 @@ static Color AnnotDefaultColor(int cmdId) {
 // the color the button's next annotation is made in
 static Color AnnotCurrentColor(MainWindow* win, int cmdId) {
     if (cmdId == CmdCreateAnnotInk) return InkPenColor(win);
+    if (cmdId == CmdToggleLaserPointer) return win->laserPointerColor;
     ParsedColor* setting = AnnotPresetColorSetting(cmdId);
-    Color col = setting ? GetParsedColor(*setting, kColorUnset) : kColorUnset;
+    Color col = setting ? ParseAnnotColor(setting->s) : kColorUnset;
     return col != kColorUnset ? col : AnnotDefaultColor(cmdId);
 }
 
@@ -3186,6 +3380,7 @@ static Str* AnnotPresetColorList(int cmdId) {
         return nullptr;
     }
     Annotations& a = gSettings->annotations;
+    if (cmdId == CmdToggleLaserPointer) return &gSettings->laserColors;
     return (cmdId == CmdCreateAnnotInk) ? &a.inkColors : &a.presetColors;
 }
 
@@ -3196,15 +3391,20 @@ static void AnnotPresetColors(int cmdId, Vec<Color>& out) {
 }
 
 static void SetAnnotPresetColor(MainWindow* win, int cmdId, Color col) {
+    if (cmdId == CmdToggleLaserPointer) {
+        SetLaserPointerColor(win, col);
+        return;
+    }
     if (cmdId == CmdCreateAnnotInk) {
         SetInkPenColor(win, col);
+        SetInkPenOpacity(win, ((int)GetAlpha(col) * 100 + 127) / 255);
         return;
     }
     ParsedColor* setting = AnnotPresetColorSetting(cmdId);
     if (!setting) {
         return;
     }
-    SetColorText(*setting, SerializeColorTemp(col));
+    SetColorText(*setting, AnnotColorText(col));
     ScheduleSaveSettings();
 }
 
@@ -3253,7 +3453,8 @@ struct ToolbarColorSwatch : VirtCtrl {
             return;
         }
         u8 a = GetAlpha(col);
-        ctx.gfx->FillEllipse(circle, col & 0xffffff, a == 0 ? 255 : a);
+        ctx.gfx->FillEllipse(circle, TbBgColor());
+        ctx.gfx->FillEllipse(circle, col & 0xffffff, a);
     }
 };
 
@@ -3281,6 +3482,10 @@ static void OnAnnotColorClicked(MainWindow* win, VirtMouseEvent* ev) {
     if (!sw) {
         return;
     }
+    if (ev->button != 0) {
+        ev->didHandle = true;
+        return;
+    }
     SetAnnotPresetColor(win, sw->id, sw->col);
     if (CanCreateAnnotFromSelection(win, sw->id)) {
         // with text selected, picking a color is also a request to mark it up
@@ -3296,23 +3501,33 @@ struct AnnotColorsTarget {
     InkPenStyle style = InkPenStyle::Ballpoint;
     int cmdId = 0;
     Func1<Color> onPick;
+    int shapeFillCmd = 0;
+    bool forAnnotEditor = false;
+    AnnotEditPickerContext editorContext;
 };
 
 static void AnnotColorsPicked(AnnotColorsTarget* target, ChangeColorsArgs* args) {
+    if (target->forAnnotEditor && !IsAnnotEditPickerContextValid(target->editorContext)) {
+        delete target;
+        return;
+    }
     Str* list = AnnotPresetColorList(target->cmdId);
     if (args->colorsChanged && list) {
         str::ReplaceWithCopy(list, SerializeColorList(args->colors));
         ScheduleSaveSettings();
     }
-    if (args->didSelect && args->color != kColorUnset) {
-        if (target->onPick.IsValid()) {
-            target->onPick.Call(args->color);
-        } else {
-            if (target->cmdId == CmdCreateAnnotInk)
-                SetInkPenColor(target->style, args->color);
-            else
-                SetAnnotPresetColor(target->win, target->cmdId, args->color);
-        }
+    const int* shapeCmd = ShapeFillCommandPtr(target->shapeFillCmd);
+    if (args->didSelect && shapeCmd) {
+        ShapeFillColorPicked(shapeCmd, args->color);
+        ShapeFillOpacityPicked(shapeCmd, args->opacityPercent);
+    } else if (args->didSelect && target->onPick.IsValid()) {
+        target->onPick.Call(args->color);
+    } else if (args->didSelect && args->color != kColorUnset) {
+        if (target->cmdId == CmdCreateAnnotInk) {
+            SetInkPenColor(target->style, args->color);
+            SetInkPenOpacity(target->style, args->opacityPercent);
+        } else
+            SetAnnotPresetColor(target->win, target->cmdId, args->color);
     }
     delete target;
 }
@@ -3335,42 +3550,207 @@ static void OnAnnotColorsEditClicked(MainWindow* win, VirtMouseEvent* ev) {
     args->title = Tr("Annotation Colors");
     args->color = AnnotCurrentColor(win, cmdId);
     args->withOpacity = true;
+    if (cmdId == CmdCreateAnnotInk) args->opacityPercent = InkPenOpacity(win);
     AnnotPresetColors(cmdId, args->colors);
     args->onClose = MkFunc1(AnnotColorsPicked, target);
     ShowChangeColorsDialog(args);
 }
 
-// alpha 0 and 0xff both mean opaque, so a palette color matches an
-// annotation's even when only one of the two spells the alpha out
-static bool SameColorAndAlpha(Color a, Color b) {
-    u8 aa = GetAlpha(a);
-    u8 ab = GetAlpha(b);
-    if (aa == 0) {
-        aa = 0xff;
-    }
-    if (ab == 0) {
-        ab = 0xff;
-    }
-    return ((a & 0xffffff) == (b & 0xffffff)) && (aa == ab);
+static void ShowShapeFillDialog(MainWindow* win, int cmd) {
+    auto setting = ShapeFillForCmd(cmd);
+    if (!setting.color || !setting.opacity) return;
+    auto* target = new AnnotColorsTarget();
+    target->shapeFillCmd = cmd;
+    auto* args = new ChangeColorsArgs();
+    args->win = win;
+    args->title = Tr("Default background color");
+    args->color = GetParsedColor(*setting.color, kColorUnset);
+    args->withOpacity = true;
+    args->opacityPercent = std::clamp(*setting.opacity, 0, 100);
+    AnnotPresetColors(0, args->colors);
+    args->onClose = MkFunc1(AnnotColorsPicked, target);
+    ShowChangeColorsDialog(args);
 }
 
-// the color a button makes annotations in is always one of the presets, so
-// its drop-down can show it; one set some other way joins the list
-static void EnsureAnnotPresetColor(int cmdId, Color col) {
+static bool SameColorAndAlpha(Color a, Color b) {
+    return a == b;
+}
+
+static bool AddAnnotPresetColor(int cmdId, Color col) {
     Str* list = AnnotPresetColorList(cmdId);
-    if (!list || col == kColorUnset) {
-        return;
-    }
+    if (!list || col == kColorUnset) return false;
     Vec<Color> colors;
     AnnotPresetColors(cmdId, colors);
-    for (Color c : colors) {
-        if (SameColorAndAlpha(c, col)) {
-            return;
-        }
-    }
+    for (Color c : colors)
+        if (SameColorAndAlpha(c, col)) return false;
     VecAppend(colors, col);
     str::ReplaceWithCopy(list, SerializeColorList(colors));
     ScheduleSaveSettings();
+    return true;
+}
+
+static bool RemoveAnnotPresetColor(int cmdId, Color col) {
+    Str* list = AnnotPresetColorList(cmdId);
+    if (!list) return false;
+    Vec<Color> colors;
+    AnnotPresetColors(cmdId, colors);
+    int count = len(colors);
+    for (int i = len(colors) - 1; i >= 0; i--)
+        if (SameColorAndAlpha(colors[i], col)) VecRemoveAt(colors, i);
+    if (len(colors) == count) return false;
+    str::ReplaceWithCopy(list, SerializeColorList(colors));
+    ScheduleSaveSettings();
+    return true;
+}
+
+static void RefreshAnnotColorPopup(MainWindow*);
+static HWND BeginAnnotColorPopupMenu(MainWindow*, HWND);
+static void EndAnnotColorPopupMenu(MainWindow*, HWND);
+
+static void ReopenColorPalette(MainWindow* win) {
+    if (!IsMainWindowValidAndNotClosing(win)) return;
+    RefreshAnnotColorPopup(win);
+    auto* tb = win->toolbarVirt;
+    if (!tb || !tb->hoverHost || !tb->hoverCmdId) return;
+    int cmd = tb->hoverCmdId;
+    HideToolbarHoverDropdown(win);
+    ShowToolbarButtonDropdown(win, cmd);
+}
+
+static Rect ColorActionAnchor(VirtCtrl* control) {
+    Rect bounds = control->BoundsInWindow();
+    return HwndMapRectToWindow(bounds, control->GetHwnd(), HWND_DESKTOP);
+}
+
+static void HoldColorPalette(MainWindow* win) {
+    auto* tb = win->toolbarVirt;
+    if (!tb || !tb->host) return;
+    tb->hoverSticky = true;
+    tb->host->KillTimer(kCloseHoverDropdownTimerId);
+}
+
+static void SetShapeFillPopupCmd(int);
+
+enum class ShapeFillAction {
+    Color,
+    Opacity
+};
+
+struct ShapeFillMenuRequest {
+    MainWindow* win = nullptr;
+    int cmd = 0;
+    Rect anchor;
+    ShapeFillAction action = ShapeFillAction::Color;
+};
+
+static void ShowShapeFillSettings(ShapeFillMenuRequest* request) {
+    defer {
+        delete request;
+    };
+    if (!IsMainWindowValidAndNotClosing(request->win)) return;
+    const int* cmd = ShapeFillCommandPtr(request->cmd);
+    auto setting = ShapeFillForCmd(request->cmd);
+    if (!cmd || !setting.color || !setting.opacity) return;
+    HideToolbarHoverDropdown(request->win);
+    if (request->action == ShapeFillAction::Color) {
+        ShowAnnotColorPopup(request->win, request->anchor, GetParsedColor(*setting.color, kColorUnset), true,
+                            Tr("Default background color"), MkFunc1(ShapeFillColorPicked, cmd));
+        SetShapeFillPopupCmd(request->cmd);
+    } else
+        ShowAnnotSliderPopup(request->win, request->anchor, Tr("Default background opacity (%)"),
+                             std::clamp(*setting.opacity, 0, 100), 0, 100, MkFunc1(ShapeFillOpacityPicked, cmd));
+}
+
+static void QueueShapeFillSettings(MainWindow* win, int cmd, Rect anchor, ShapeFillAction action) {
+    auto* request = new ShapeFillMenuRequest{win, cmd, anchor, action};
+    uitask::Post(MkFunc0(ShowShapeFillSettings, request), "Shape background settings");
+}
+
+static void OnPresetColorMenu(MainWindow* win, VirtMouseEvent* ev) {
+    auto* swatch = (ToolbarColorSwatch*)ev->target;
+    if (swatch->isNone) return;
+    ev->didHandle = true;
+    int cmd = swatch->id;
+    Color color = swatch->col;
+    Rect anchor = ColorActionAnchor(swatch);
+    HWND source = swatch->GetHwnd();
+    HWND owner = BeginAnnotColorPopupMenu(win, source);
+    HoldColorPalette(win);
+    enum {
+        PinColor = 1,
+        RemoveColor = 2,
+        BackgroundColor = 3,
+        BackgroundOpacity = 4
+    };
+    HMENU menu = CreatePopupMenu();
+    bool pinnable = IsAnnotColorCmd(cmd) || cmd == CmdToggleLaserPointer;
+    bool pinned = pinnable && PinnedToolIndex(win, cmd, color) >= 0;
+    if (pinnable)
+        AppendMenuW(menu, MF_STRING | (pinned ? MF_CHECKED : 0), PinColor,
+                    CWStrTemp(pinned ? Tr("Unpin this color") : Tr("Pin this color")));
+    AppendMenuW(menu, MF_STRING, RemoveColor, CWStrTemp(Tr("Remove color from palette")));
+    if (ShapeFillForCmd(cmd).color) {
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, BackgroundColor, CWStrTemp(Tr("Default background color...")));
+        AppendMenuW(menu, MF_STRING, BackgroundOpacity, CWStrTemp(Tr("Default background opacity...")));
+    }
+    MarkMenuOwnerDraw(menu);
+    if (pinnable) SetMenuPinIcon(menu, PinColor);
+    int picked = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, anchor.x, anchor.Bottom(), 0, owner, nullptr);
+    FreeMenuOwnerDrawInfoData(menu);
+    DestroyMenu(menu);
+    EndAnnotColorPopupMenu(win, source);
+    if (!IsMainWindowValidAndNotClosing(win)) return;
+    if (picked == PinColor) TogglePinnedTool(win, cmd, color);
+    if (picked == BackgroundColor || picked == BackgroundOpacity) {
+        SetAnnotPresetColor(win, cmd, color);
+        QueueShapeFillSettings(win, cmd, anchor,
+                               picked == BackgroundColor ? ShapeFillAction::Color : ShapeFillAction::Opacity);
+    }
+    if (picked == RemoveColor && RemoveAnnotPresetColor(cmd, color))
+        uitask::Post(MkFunc0(ReopenColorPalette, win), "Refresh color palette");
+}
+
+static void OnAddPresetColor(MainWindow* win, VirtMouseEvent* ev) {
+    ev->didHandle = true;
+    int cmd = ev->target->id;
+    Rect anchor = ColorActionAnchor(ev->target);
+    HWND source = ev->target->GetHwnd();
+    HWND owner = BeginAnnotColorPopupMenu(win, source);
+    Vec<Color> choices;
+    Settings* defaults = NewSettings({});
+    Str available = cmd == CmdCreateAnnotInk       ? defaults->annotations.inkColors
+                    : cmd == CmdToggleLaserPointer ? defaults->laserColors
+                                                   : defaults->annotations.presetColors;
+    ParseColorList(available, choices, 0);
+    DeleteSettings(defaults);
+    Vec<Color> custom;
+    ParseColorList(gSettings->customColors, custom, 0);
+    VecAppend(custom, AnnotCurrentColor(win, cmd));
+    for (Color color : custom) {
+        if (color == kColorUnset) continue;
+        bool duplicate = false;
+        for (Color existing : choices) duplicate |= SameColorAndAlpha(existing, color);
+        if (!duplicate) VecAppend(choices, color);
+    }
+    Vec<Color> present;
+    AnnotPresetColors(cmd, present);
+    HoldColorPalette(win);
+    HMENU menu = CreatePopupMenu();
+    for (int i = 0; i < len(choices); i++) {
+        bool added = false;
+        for (Color color : present) added |= SameColorAndAlpha(color, choices[i]);
+        AppendMenuW(menu, MF_STRING | (added ? MF_CHECKED | MF_GRAYED : 0), i + 1,
+                    CWStrTemp(AnnotColorText(choices[i])));
+    }
+    MarkMenuOwnerDraw(menu);
+    int picked = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, anchor.x, anchor.Bottom(), 0, owner, nullptr);
+    FreeMenuOwnerDrawInfoData(menu);
+    DestroyMenu(menu);
+    EndAnnotColorPopupMenu(win, source);
+    if (!IsMainWindowValidAndNotClosing(win)) return;
+    if (picked > 0 && picked <= len(choices) && AddAnnotPresetColor(cmd, choices[picked - 1]))
+        uitask::Post(MkFunc0(ReopenColorPalette, win), "Refresh color palette");
 }
 
 // The drop-down's content: the preset colors as swatches with the one in use
@@ -3381,7 +3761,7 @@ static void EnsureAnnotPresetColor(int cmdId, Color col) {
 static ILayout* MakeAnnotColorsPanel(MainWindow* win, Str label, Color current, int cmdId, bool withNone,
                                      Vec<ToolbarColorSwatch*>* swatchesOut, const Func1<VirtMouseEvent*>& onSwatch,
                                      const Func1<VirtMouseEvent*>& onEdit, ILayout* extra = nullptr, Str title = {},
-                                     VirtIconButton** editOut = nullptr) {
+                                     VirtIconButton** editOut = nullptr, ILayout* advanced = nullptr) {
     ToolbarVirt* tb = win->toolbarVirt;
     Vec<Color> colors;
     AnnotPresetColors(cmdId, colors);
@@ -3399,6 +3779,7 @@ static ILayout* MakeAnnotColorsPanel(MainWindow* win, Str label, Color current, 
         // the named-color menu calls it that, untranslated like the other color names
         sw->SetTooltip(StrL("Transparent"));
         sw->onClick = onSwatch;
+        sw->SetFlag(vwfFocusable, true);
         row->AddChild(sw);
         if (swatchesOut) {
             VecAppend(*swatchesOut, sw);
@@ -3409,8 +3790,11 @@ static ILayout* MakeAnnotColorsPanel(MainWindow* win, Str label, Color current, 
         sw->id = cmdId;
         sw->col = col;
         sw->isCurrent = SameColorAndAlpha(col, current);
-        str::ReplaceWithCopy(&sw->text, SerializeColorTemp(col));
+        str::ReplaceWithCopy(&sw->text, AnnotColorText(col));
         sw->onClick = onSwatch;
+        sw->onContextMenu = MkFunc1(OnPresetColorMenu, win);
+        sw->SetFlag(vwfFocusable, true);
+        sw->SetTooltip(fmt("%s. %s", sw->text, Tr("Right-click for pin and palette options")));
         row->AddChild(sw);
         if (swatchesOut) {
             VecAppend(*swatchesOut, sw);
@@ -3425,64 +3809,31 @@ static ILayout* MakeAnnotColorsPanel(MainWindow* win, Str label, Color current, 
     int pad = UiScalePx(kAnnotSwatchPad);
     edit->id = cmdId;
     edit->padding = {pad, pad, pad, pad};
-    edit->pixmap = GetCachedPixmapForSvg(Str(kEnhancedIconEdit), iconSize, iconSize, TbTextColor(), TbBgColor());
+    edit->pixmap = GetCachedPixmapForSvg(Str(GetColorPickerIconSvg()), iconSize, iconSize, TbTextColor(), TbBgColor());
     edit->SetTooltip(Tr("Edit colors"));
     edit->onClick = onEdit;
     if (editOut) *editOut = edit;
-    if (cmdId != CmdCreateAnnotInk) row->AddChild(edit);
-
-    auto* labelText = NewVirtText({
-        .s = label,
-        .font = tb->platformFont,
-        .textColor = TbTextColor(),
-        .isRtl = IsUIRtl(),
-    });
-    // indented by the swatch's padding so the text lines up with the first
-    // color, and 0.25rem above the swatches
+    auto* labelRow = (HBox*)NewPaletteHeader(win, label, cmdId, advanced);
+    auto* add = new VirtIconButton();
+    add->id = cmdId;
+    add->padding = {pad, pad, pad, pad};
+    static const char* plus =
+        R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>)";
+    add->pixmap = GetCachedPixmapForSvg(Str(plus), iconSize, iconSize, TbTextColor(), TbBgColor());
+    add->SetTooltip(Tr("Add a preset color"));
+    add->onClick = MkFunc1(OnAddPresetColor, win);
+    labelRow->AddChild(add);
+    labelRow->AddChild(edit);
     Insets labelInsets{.bottom = UiScalePx(4)};
-    if (IsUIRtl()) {
-        labelInsets.right = pad;
-    } else {
-        labelInsets.left = pad;
-    }
-
-    ILayout* labelRow = labelText;
-    if (cmdId == CmdCreateAnnotInk) {
-        auto* hbox = new HBox();
-        hbox->alignCross = CrossAxisAlign::CrossCenter;
-        hbox->AddChild(labelText, 1);
-        hbox->AddChild(edit);
-        labelRow = hbox;
-    }
-    if (len(title) > 0) {
-        // what the button is, as its tooltip says, since the drop-down takes
-        // the tooltip's place; on the far end of the label's row
-        auto* hbox = new HBox();
-        hbox->alignMain = MainAxisAlign::SpaceBetween;
-        hbox->alignCross = CrossAxisAlign::CrossCenter;
-        hbox->AddChild(labelText);
-        Insets gap{};
-        if (IsUIRtl()) {
-            gap.right = UiScalePx(16);
-        } else {
-            gap.left = UiScalePx(16);
-        }
-        hbox->AddChild(new Padding(NewVirtText({
-                                       .s = title,
-                                       .font = tb->platformFont,
-                                       .textColor = TbTextColor(),
-                                       .isRtl = IsUIRtl(),
-                                   }),
-                                   gap));
-        labelRow = hbox;
-    }
 
     auto* vbox = new VBox();
     vbox->alignCross = CrossAxisAlign::Stretch;
     vbox->AddChild(new Padding(labelRow, labelInsets));
     vbox->AddChild(row);
-    if (extra) {
-        vbox->AddChild(extra);
+    if (extra) vbox->AddChild(extra);
+    if (advanced) {
+        advanced->SetVisibility(Visibility::Collapse);
+        vbox->AddChild(advanced);
     }
     int b = UiScalePx(kHoverMenuBorder);
     int p = UiScalePx(kAnnotColorsPad);
@@ -3507,7 +3858,7 @@ static float InkThickness(MainWindow* win) {
 // What the ink button will lay down: the color in use, drawn as thick as the
 // slider is set to. It follows the slider while it's being dragged.
 struct InkStrokePreview : VirtCtrl {
-    Color col = kColRed;
+    Color col = kColRed | 0xff000000;
     float thickness = kInkThicknessMin;
 
     Size GetIdealSize() override { return {UiScalePx(kInkSliderDx), UiScalePx(kInkPreviewDy)}; }
@@ -3533,7 +3884,7 @@ struct InkStrokePreview : VirtCtrl {
         // would be notched without them
         constexpr int kSegs = 48;
         int d = (int)w;
-        u8 alpha = (a == 0) ? 255 : a;
+        u8 alpha = a;
         Point prev{};
         for (int i = 0; i <= kSegs; i++) {
             float u = (float)i / (float)kSegs;
@@ -3748,26 +4099,49 @@ struct InkPenTile : VirtButton {
     }
 };
 
-static void OnHidePenSettings(MainWindow* win, VirtMouseEvent* ev) {
-    uitask::Post(MkFunc0(PostedHideHoverDropdown, win), "Hide pen settings");
+static void PinToolClick(MainWindow*, VirtMouseEvent*);
+
+static void OnPaletteSettings(MainWindow* win, VirtMouseEvent* ev) {
+    auto* extra = (ILayout*)ev->target->userData;
+    extra->SetVisibility(IsCollapsed(extra) ? Visibility::Visible : Visibility::Collapse);
     ev->didHandle = true;
+    auto* host = win->toolbarVirt->hoverHost;
+    if (!host) return;
+    Size size = host->SetLayoutSizedToContent(host->layout);
+    Rect bounds = host->ScreenRect();
+    bounds.dx = size.dx;
+    bounds.dy = size.dy;
+    host->SetPos(ShiftRectToWorkArea(bounds, win->hwndFrame, true), true);
 }
 
-static ILayout* NewPaletteHeader(MainWindow* win, Str title) {
-    auto* header = new HBox();
-    header->gap = UiScalePx(8);
-    header->alignCross = CrossAxisAlign::CrossCenter;
-    header->rtl = IsUIRtl();
-    header->AddChild(NewVirtText({.s = title,
-                                  .font = win->toolbarVirt->platformFont,
-                                  .textColor = TbTextColor(),
-                                  .isRtl = IsUIRtl(),
-                                  .ellipsis = true}),
-                     1);
-    auto* close = NewPaletteButton(win, Str(gIconClose), Tr("Hide settings"));
-    close->onClick = MkFunc1(OnHidePenSettings, win);
-    header->AddChild(close);
-    return header;
+static ILayout* NewPaletteHeader(MainWindow* win, Str title, int cmd, ILayout* advanced) {
+    auto* row = new HBox();
+    row->gap = UiScalePx(4);
+    row->alignCross = CrossAxisAlign::CrossCenter;
+    row->rtl = IsUIRtl();
+    row->AddChild(NewVirtText({.s = title,
+                               .font = win->toolbarVirt->platformFont,
+                               .textColor = TbTextColor(),
+                               .isRtl = IsUIRtl(),
+                               .ellipsis = true}),
+                  1);
+    if (cmd != 0) {
+        bool pinned = PinnedToolIndex(win, cmd) >= 0;
+        auto* pin = NewPaletteButton(win, Str(GetPinIconSvg()), pinned ? Tr("Unpin this tool") : Tr("Pin this tool"));
+        pin->isCurrent = pinned;
+        pin->id = cmd;
+        pin->onClick = MkFunc1(PinToolClick, win);
+        row->AddChild(pin);
+    }
+    if (advanced) {
+        static const char* sliders =
+            R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M3 6h4m4 0h10M7 3v6M3 12h10m4 0h4M17 9v6M3 18h5m4 0h9M8 15v6"/></svg>)";
+        auto* settings = NewPaletteButton(win, Str(sliders), Tr("Additional tool settings"));
+        settings->userData = (intptr_t)advanced;
+        settings->onClick = MkFunc1(OnPaletteSettings, win);
+        row->AddChild(settings);
+    }
+    return row;
 }
 
 // Original upright instruments: color barrels, metal nibs and distinct tips.
@@ -3852,32 +4226,6 @@ static ILayout* BuildInkPenTypes(MainWindow* win) {
     return new Padding(row, Insets{UiScalePx(8), UiScalePx(8), UiScalePx(8), UiScalePx(8)});
 }
 
-static void OnLaserColorClicked(MainWindow* win, VirtMouseEvent* ev) {
-    auto* sw = ev ? (ToolbarColorSwatch*)ev->target : nullptr;
-    if (sw) {
-        SetLaserPointerColor(win, sw->col);
-        uitask::Post(MkFunc0(PostedHideHoverDropdown, win), "Hide laser settings");
-        ev->didHandle = true;
-    }
-}
-
-static void OnLaserCustomColorPicked(MainWindow* win, ChangeColorsArgs* args) {
-    if (IsMainWindowValidAndNotClosing(win) && args->didSelect && args->color != kColorUnset) {
-        SetLaserPointerColor(win, args->color);
-    }
-}
-
-static void OnLaserCustomColor(MainWindow* win, VirtMouseEvent* ev) {
-    uitask::Post(MkFunc0(PostedHideHoverDropdown, win), "Hide laser settings");
-    auto* args = new ChangeColorsArgs();
-    args->win = win;
-    args->title = Tr("Laser pointer color");
-    args->color = win->laserPointerColor;
-    args->onClose = MkFunc1(OnLaserCustomColorPicked, win);
-    ShowChangeColorsDialog(args);
-    ev->didHandle = true;
-}
-
 static void OnLaserLifetime(float seconds) {
     gSettings->laserLifetimeSeconds = limitValue(seconds, 0.1f, 120.f);
     ScheduleSaveSettings();
@@ -3921,7 +4269,7 @@ static void BuildLaserHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     ToolbarVirt* tb = win->toolbarVirt;
     auto* panel = new VBox();
     panel->alignCross = CrossAxisAlign::Stretch;
-    panel->AddChild(NewPaletteHeader(win, Tr("Laser pointer")));
+
     Vec<ToolbarHoverMenuItem> modes;
     VecAppend(modes, {Str(gIconLaserSolid), Tr("Solid line"), CmdLaserSolid, true,
                       win->laserPointerMode == LaserPointerMode::Solid});
@@ -3991,120 +4339,177 @@ static void BuildLaserHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     str::ReplaceWithCopy(&lifetime->text, Str("laser-lifetime-seconds"));
     lifetime->valueText =
         NewVirtText({.s = fmt("%.2f", lifetime->Width()), .font = tb->platformFont, .textColor = TbTextColor()});
+    auto* advanced = new VBox();
+    advanced->alignCross = CrossAxisAlign::Stretch;
     auto* timeRow = new Wrap();
     timeRow->colGap = UiScalePx(8);
     timeRow->alignCross = CrossAxisAlign::CrossCenter;
     timeRow->AddChild(
         NewVirtText({.s = Tr("Disappear after (s)"), .font = tb->platformFont, .textColor = TbTextColor()}));
     timeRow->AddChild(lifetime->valueText);
-    panel->AddChild(timeRow);
-    panel->AddChild(lifetime);
-    panel->AddChild(NewVirtText({.s = Tr("Color"), .font = tb->platformFont, .textColor = TbTextColor()}));
-    auto* colors = new Wrap();
-    colors->alignCross = CrossAxisAlign::CrossCenter;
-    Color palette[] = {MkRgb(244, 67, 54),  MkRgb(255, 193, 7),  MkRgb(76, 175, 80),
-                       MkRgb(33, 150, 243), MkRgb(156, 39, 176), MkRgb(255, 255, 255)};
-    bool custom = true;
-    for (Color col : palette) {
-        auto* sw = new ToolbarColorSwatch();
-        sw->id = CmdToggleLaserPointer;
-        sw->col = col;
-        sw->isCurrent = SameColorAndAlpha(col, win->laserPointerColor);
-        custom = custom && !sw->isCurrent;
-        str::ReplaceWithCopy(&sw->text, SerializeColorTemp(col));
-        sw->SetTooltip(sw->text);
-        sw->onClick = MkFunc1(OnLaserColorClicked, win);
-        colors->AddChild(sw);
-        RecordHoverItem(tb, sw, sw->text, {{}, sw->text, CmdToggleLaserPointer, true, sw->isCurrent});
-    }
-    if (custom) {
-        auto* sw = new ToolbarColorSwatch();
-        sw->id = CmdToggleLaserPointer;
-        sw->col = win->laserPointerColor;
-        sw->isCurrent = true;
-        str::ReplaceWithCopy(&sw->text, SerializeColorTemp(sw->col));
-        sw->SetTooltip(sw->text);
-        sw->onClick = MkFunc1(OnLaserColorClicked, win);
-        colors->AddChild(sw);
-        RecordHoverItem(tb, sw, sw->text, {{}, sw->text, CmdToggleLaserPointer, true, true});
-    }
-    panel->AddChild(colors);
-    auto* customButton = new VirtButton(Tr("Custom color..."), tb->platformFont);
-    customButton->padding = {UiScalePx(6), UiScalePx(10), UiScalePx(6), UiScalePx(10)};
-    customButton->cornerRadius = UiScalePx(6);
-    customButton->onClick = MkFunc1(OnLaserCustomColor, win);
-    colors->AddChild(customButton);
-    panel->AddChild(new PaletteNote(Tr("Timed from pen lift. Esc stops drawing."), tb->platformFont));
+    advanced->AddChild(timeRow);
+    advanced->AddChild(lifetime);
+    advanced->AddChild(new PaletteNote(Tr("Timed from pen lift. Esc stops drawing."), tb->platformFont));
+    panel->AddChild(MakeAnnotColorsPanel(win, Tr("Color"), win->laserPointerColor, CmdToggleLaserPointer, false,
+                                         nullptr, MkFunc1(OnAnnotColorClicked, win),
+                                         MkFunc1(OnAnnotColorsEditClicked, win), nullptr, {}, nullptr, advanced));
     ev->layout = new Padding(panel, Insets{UiScalePx(10), UiScalePx(10), UiScalePx(10), UiScalePx(10)});
     ev->centerOnButton = true;
 }
 
 static void PinToolClick(MainWindow*, VirtMouseEvent*);
 
+static void OnShapeFillSwatch(MainWindow* win, VirtMouseEvent* ev) {
+    if (ev->button != 0) {
+        ev->didHandle = true;
+        return;
+    }
+    auto* swatch = (ToolbarColorSwatch*)ev->target;
+    int cmd = (int)swatch->userData;
+    const int* tool = ShapeFillCommandPtr(cmd);
+    if (!tool) return;
+    ShapeFillColorPicked(tool, swatch->col);
+    auto* host = win->toolbarVirt->hoverHost;
+    if (host) {
+        Vec<VirtCtrl*> controls;
+        CollectPaletteControls(host->layout, controls);
+        for (auto* control : controls) {
+            if (!str::Eq(control->name, StrL("shape-background-color")) || control->userData != cmd) continue;
+            auto* color = (ToolbarColorSwatch*)control;
+            color->isCurrent =
+                color->isNone ? swatch->isNone : !swatch->isNone && (color->col & 0xffffff) == (swatch->col & 0xffffff);
+            color->Invalidate();
+        }
+    }
+    ev->didHandle = true;
+}
+
+static void OnShapeFillEdit(MainWindow* win, VirtMouseEvent* ev) {
+    if (ev->button != 0) return;
+    const int* cmd = ShapeFillCommandPtr((int)ev->target->userData);
+    if (!cmd) return;
+    ShowShapeFillDialog(win, *cmd);
+    ev->didHandle = true;
+}
+
+struct ShapeFillSlider : VirtSlider {
+    int cmd = 0;
+    VirtText* label = nullptr;
+
+    void OnChanged() {
+        if (label) label->SetText(fmt(Tr("Background opacity: %d%%").s, value));
+    }
+    void OnCommitted() {
+        if (const int* tool = ShapeFillCommandPtr(cmd)) ShapeFillOpacityPicked(tool, value);
+        OnChanged();
+    }
+};
+
+static ILayout* MakeShapeFillPanel(MainWindow* win, int cmd) {
+    auto setting = ShapeFillForCmd(cmd);
+    if (!setting.color || !setting.opacity) return nullptr;
+    Vec<ToolbarColorSwatch*> swatches;
+    VirtIconButton* edit = nullptr;
+    Color current = GetParsedColor(*setting.color, kColorUnset);
+    auto* panel = new VBox();
+    panel->alignCross = CrossAxisAlign::Stretch;
+    auto* colors =
+        MakeAnnotColorsPanel(win, Tr("Background color"), current, 0, true, &swatches, MkFunc1(OnShapeFillSwatch, win),
+                             MkFunc1(OnShapeFillEdit, win), nullptr, {}, &edit);
+    for (auto* swatch : swatches) {
+        swatch->name = StrL("shape-background-color");
+        swatch->userData = cmd;
+        swatch->isCurrent = swatch->isNone ? current == kColorUnset
+                                           : current != kColorUnset && (swatch->col & 0xffffff) == (current & 0xffffff);
+    }
+    edit->userData = cmd;
+    panel->AddChild(colors);
+    bool offered = current == kColorUnset;
+    for (auto* swatch : swatches) offered |= !swatch->isNone && (swatch->col & 0xffffff) == (current & 0xffffff);
+    if (!offered) {
+        auto* saved = new ToolbarColorSwatch();
+        saved->col = current;
+        saved->isCurrent = true;
+        saved->name = StrL("shape-background-color");
+        saved->userData = cmd;
+        str::ReplaceWithCopy(&saved->text, SerializeColorTemp(current));
+        saved->SetTooltip(Tr("Saved background color"));
+        saved->SetFlag(vwfFocusable, true);
+        saved->onClick = MkFunc1(OnShapeFillSwatch, win);
+        saved->onKeyDown = MkFunc1(OnPaletteKey, win);
+        panel->AddChild(saved);
+    }
+    auto* label = NewVirtText({.s = fmt(Tr("Background opacity: %d%%").s, std::clamp(*setting.opacity, 0, 100)),
+                               .font = win->toolbarVirt->platformFont,
+                               .textColor = TbTextColor(),
+                               .isRtl = IsUIRtl()});
+    panel->AddChild(label);
+    auto* slider = new ShapeFillSlider();
+    slider->cmd = cmd;
+    slider->name = StrL("shape-background-opacity");
+    slider->SetTooltip(Tr("Background opacity (%)"));
+    slider->label = label;
+    slider->minVal = 0;
+    slider->maxVal = 100;
+    slider->value = std::clamp(*setting.opacity, 0, 100);
+    slider->idealDx = UiScalePx(kInkSliderDx);
+    slider->onValueChanged = MkMethod0<ShapeFillSlider, &ShapeFillSlider::OnChanged>(slider);
+    slider->onValueCommitted = MkMethod0<ShapeFillSlider, &ShapeFillSlider::OnCommitted>(slider);
+    slider->SetFlag(vwfFocusable, true);
+    slider->onKeyDown = MkFunc1(OnPaletteKey, win);
+    panel->AddChild(slider);
+    Vec<VirtCtrl*> controls;
+    CollectPaletteControls(colors, controls);
+    for (auto* control : controls)
+        if (control->onClick.IsValid()) control->onKeyDown = MkFunc1(OnPaletteKey, win);
+    return panel;
+}
+
 static void BuildAnnotColorsHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     ToolbarVirt* tb = win ? win->toolbarVirt : nullptr;
     ParsedColor* setting = AnnotPresetColorSetting(ev->cmdId);
-    if (!tb || (!setting && ev->cmdId != CmdCreateAnnotInk)) {
-        return;
-    }
+    if (!tb || (!setting && ev->cmdId != CmdCreateAnnotInk)) return;
     Color current = AnnotCurrentColor(win, ev->cmdId);
-    EnsureAnnotPresetColor(ev->cmdId, current);
-    // ink is the one annotation whose width is a choice too
     InkThicknessSlider* slider = nullptr;
-    ILayout* extra = (ev->cmdId == CmdCreateAnnotInk)
+    ILayout* extra = ev->cmdId == CmdCreateAnnotInk
                          ? MakeInkThicknessPanel(win, current, -1, {}, Tr("Thickness"), kInkThicknessMin, &slider)
                          : nullptr;
-    // a note's color fills its icon, behind the note
-    Str label = (ev->cmdId == CmdCreateAnnotText) ? Tr("Background Color") : Tr("Color");
-    // the button still has its tooltip; it's taken once the drop-down is up
-    VirtCtrl* btn = ToolbarItemForCmd(win, ev->cmdId);
-    Str title = ev->cmdId != CmdCreateAnnotInk && btn ? btn->tooltip : Str{};
-    ev->layout = MakeAnnotColorsPanel(win, label, current, ev->cmdId, false, nullptr, MkFunc1(OnAnnotColorClicked, win),
-                                      MkFunc1(OnAnnotColorsEditClicked, win), extra, title);
-    if (slider) {
-        RecordHoverItem(tb, slider, slider->text, {{}, slider->text, ev->cmdId, true, false});
+    auto* tools = new Wrap();
+    tools->colGap = UiScalePx(4);
+    tools->rtl = IsUIRtl();
+    if (ev->cmdId == CmdCreateAnnotInk) {
+        ToolbarHoverMenuItem items[] = {
+            {Str(kEnhancedIconEraser), Tr("Stroke eraser"), CmdInkEraser, true, win->inkEraseMode == 1},
+            {Str(kEnhancedIconEraser), Tr("Erase highlights only"), CmdHighlightEraser, true, win->inkEraseMode == 2},
+            {{}, Tr("Ignore touch while writing"), CmdTogglePenOnly, true, win->penOnly}};
+        for (const auto& item : items) {
+            auto* button = new VirtButton(item.text, tb->platformFont);
+            button->id = item.cmdId;
+            button->cornerRadius = UiScalePx(6);
+            button->padding = {UiScalePx(4), UiScalePx(6), UiScalePx(4), UiScalePx(6)};
+            button->SetTooltip(item.text);
+            button->onClick = MkFunc1(OnHoverRowClicked, win);
+            if (item.isCurrent) button->SetColor(kColBtnBg, TbHoverColor());
+            tools->AddChild(button);
+            RecordHoverItem(tb, button, button->tooltip, item);
+        }
     }
+    ILayout* advanced = tools->LayoutChildCount() ? (ILayout*)tools : nullptr;
+    if (!advanced) delete tools;
+    if (ILayout* shape = MakeShapeFillPanel(win, ev->cmdId)) advanced = shape;
+    Str label = ev->cmdId == CmdCreateAnnotText    ? Tr("Background Color")
+                : ShapeFillForCmd(ev->cmdId).color ? Tr("Outline color")
+                                                   : Tr("Color");
+    ev->layout = MakeAnnotColorsPanel(win, label, current, ev->cmdId, false, nullptr, MkFunc1(OnAnnotColorClicked, win),
+                                      MkFunc1(OnAnnotColorsEditClicked, win), extra, {}, nullptr, advanced);
+    if (slider) RecordHoverItem(tb, slider, slider->text, {{}, slider->text, ev->cmdId, true, false});
     if (ev->cmdId == CmdCreateAnnotInk) {
         auto* panel = new VBox();
         panel->alignCross = CrossAxisAlign::Stretch;
-        panel->AddChild(
-            new Padding(NewPaletteHeader(win, Tr("Pen types")), Insets{UiScalePx(8), UiScalePx(8), 0, UiScalePx(8)}));
         panel->AddChild(BuildInkPenTypes(win));
         panel->AddChild(ev->layout);
-        Vec<ToolbarHoverMenuItem> tools;
-        VecAppend(tools, {Str(kEnhancedIconEraser), Tr("Stroke eraser"), CmdInkEraser, true, win->inkEraseMode == 1});
-        VecAppend(tools, {Str(kEnhancedIconEraser), Tr("Erase highlights only"), CmdHighlightEraser, true,
-                          win->inkEraseMode == 2});
-        VecAppend(tools, {{}, Tr("Ignore touch while writing"), CmdTogglePenOnly, true, win->penOnly});
-        auto* toolRow = new Wrap();
-        toolRow->colGap = UiScalePx(4);
-        toolRow->rtl = IsUIRtl();
-        for (const auto& tool : tools) {
-            auto* button = new VirtButton(tool.text, tb->platformFont);
-            button->id = tool.cmdId;
-            button->cornerRadius = UiScalePx(6);
-            button->padding = {UiScalePx(4), UiScalePx(6), UiScalePx(4), UiScalePx(6)};
-            button->SetTooltip(tool.text);
-            button->onClick = MkFunc1(OnHoverRowClicked, win);
-            if (tool.isCurrent) button->SetColor(kColBtnBg, TbHoverColor());
-            toolRow->AddChild(button);
-            RecordHoverItem(tb, button, button->tooltip, tool);
-        }
-        panel->AddChild(toolRow);
         ev->layout = panel;
     }
-    auto* withPin = new VBox();
-    withPin->alignCross = CrossAxisAlign::Stretch;
-    withPin->AddChild(ev->layout);
-    bool isPinned = PinnedToolIndex(win, ev->cmdId) >= 0;
-    auto* pin = NewPaletteButton(win, Str(gIconPin), isPinned ? Tr("Unpin this tool") : Tr("Pin this tool"));
-    pin->isCurrent = isPinned;
-    pin->id = ev->cmdId;
-    pin->onClick = MkFunc1(PinToolClick, win);
-    auto* pinAlign = new Align(pin);
-    pinAlign->HAlign = IsUIRtl() ? AlignStart : AlignEnd;
-    withPin->AddChild(pinAlign);
-    ev->layout = withPin;
     ev->centerOnButton = true;
 }
 
@@ -4113,6 +4518,21 @@ static void BuildAnnotColorsHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* e
 // There is no toolbar button to hover here, so the popup keeps the mouse and
 // the first click outside it dismisses it, the way a menu does.
 struct AnnotColorPopup {
+    Str label;
+    Str thicknessLabel;
+    bool withNone = false;
+    float minThickness = 0;
+    bool menuActive = false;
+    bool closing = false;
+    int shapeFillCmd = 0;
+    bool forAnnotEditor = false;
+    AnnotEditPickerContext editorContext;
+    Func1<float> onThickness;
+    Func1<int> onInteger;
+    ~AnnotColorPopup() {
+        str::Free(label);
+        str::Free(thicknessLabel);
+    }
     VirtHost* host = nullptr;
     MainWindow* win = nullptr;
     Color current = kColorUnset;
@@ -4128,44 +4548,59 @@ struct AnnotColorPopup {
 
 static AnnotColorPopup* gAnnotColorPopup = nullptr;
 
-static void ShowAnnotColorsDialog(MainWindow* win, Color current, const Func1<Color>& onPick);
+static void SetShapeFillPopupCmd(int cmd) {
+    if (gAnnotColorPopup) gAnnotColorPopup->shapeFillCmd = cmd;
+}
+
+static void ShowAnnotColorsDialog(MainWindow* win, Color current, const Func1<Color>& onPick,
+                                  const AnnotEditPickerContext* editorContext = nullptr);
 static void ShowAnnotPopupHost(AnnotColorPopup* p, ILayout* layout, Rect anchor);
 
-static void PostedCloseAnnotColorPopup(MainWindow* win) {
-    AnnotColorPopup* p = gAnnotColorPopup;
-    if (!p) {
+static void PostedCloseAnnotColorPopup(AnnotColorPopup* p) {
+    if (p != gAnnotColorPopup) {
         return;
     }
     gAnnotColorPopup = nullptr;
+    MainWindow* win = p->win;
     Func1<Color> onPick = p->onPick;
     bool hasPick = p->hasPick;
     bool openDialog = p->openDialog;
     Color col = p->picked;
     Color current = p->current;
+    int shapeFillCmd = p->shapeFillCmd;
+    bool forAnnotEditor = p->forAnnotEditor;
+    AnnotEditPickerContext editorContext = p->editorContext;
     delete p->host;
     delete p;
+    if (!IsMainWindowValidAndNotClosing(win)) return;
+    if (forAnnotEditor && !IsAnnotEditPickerContextValid(editorContext)) return;
     if (hasPick) {
         onPick.Call(col);
     }
     if (openDialog) {
         // only now: destroying the popup activates its owner, which would put
         // the dialog behind the main window if it were already up
-        ShowAnnotColorsDialog(win, current, onPick);
+        if (shapeFillCmd)
+            ShowShapeFillDialog(win, shapeFillCmd);
+        else
+            ShowAnnotColorsDialog(win, current, onPick, forAnnotEditor ? &editorContext : nullptr);
     }
 }
 
 // the click is handled by the popup's own window, so the window can only be
 // torn down once that returns
 static void CloseAnnotColorPopup(AnnotColorPopup* p) {
-    if (::GetCapture() == p->host->native) {
+    if (p != gAnnotColorPopup || p->closing) return;
+    p->closing = true;
+    if (p->host->native && ::GetCapture() == p->host->native) {
         ::ReleaseCapture();
     }
-    uitask::Post(MkFunc0(PostedCloseAnnotColorPopup, p->win), "CloseAnnotColorPopup");
+    uitask::Post(MkFunc0(PostedCloseAnnotColorPopup, p), "CloseAnnotColorPopup");
 }
 
 static void OnAnnotColorPopupSwatch(AnnotColorPopup* p, VirtMouseEvent* ev) {
     auto* sw = ev ? (ToolbarColorSwatch*)ev->target : nullptr;
-    if (!sw || p != gAnnotColorPopup) {
+    if (!sw || p != gAnnotColorPopup || p->closing || ev->button != 0) {
         return;
     }
     p->picked = sw->col;
@@ -4173,22 +4608,27 @@ static void OnAnnotColorPopupSwatch(AnnotColorPopup* p, VirtMouseEvent* ev) {
     CloseAnnotColorPopup(p);
 }
 
-static void ShowAnnotColorsDialog(MainWindow* win, Color current, const Func1<Color>& onPick) {
+static void ShowAnnotColorsDialog(MainWindow* win, Color current, const Func1<Color>& onPick,
+                                  const AnnotEditPickerContext* editorContext) {
     auto* target = new AnnotColorsTarget();
+    target->win = win;
     target->onPick = onPick;
+    target->forAnnotEditor = editorContext != nullptr;
+    if (editorContext) target->editorContext = *editorContext;
 
     auto* args = new ChangeColorsArgs();
     args->win = win;
     args->title = Tr("Annotation Colors");
     args->color = current;
     args->withOpacity = true;
+    if (current != kColorUnset) args->opacityPercent = (GetAlpha(current) * 100 + 127) / 255;
     AnnotPresetColors(0, args->colors);
     args->onClose = MkFunc1(AnnotColorsPicked, target);
     ShowChangeColorsDialog(args);
 }
 
 static void OnAnnotColorPopupEdit(AnnotColorPopup* p, VirtMouseEvent*) {
-    if (p != gAnnotColorPopup) {
+    if (p != gAnnotColorPopup || p->closing) {
         return;
     }
     p->openDialog = true;
@@ -4200,15 +4640,14 @@ static void PaintAnnotColorPopupBg(MainWindow*, VirtHostPaintEvent* ev) {
     ev->gfx->DrawRect(ev->clientRect, ThemeEdgeColor(), UiScalePx(kHoverMenuBorder));
 }
 
-static void PostedReclaimAnnotColorPopupCapture(MainWindow*) {
-    AnnotColorPopup* p = gAnnotColorPopup;
-    if (p && p->host) {
+static void PostedReclaimAnnotColorPopupCapture(AnnotColorPopup* p) {
+    if (p == gAnnotColorPopup && !p->closing && IsMainWindowValidAndNotClosing(p->win) && p->host && p->host->native) {
         ::SetCapture(p->host->native);
     }
 }
 
 static void AnnotColorPopupNativeMsg(AnnotColorPopup* p, VirtHostNativeMsg* ev) {
-    if (p != gAnnotColorPopup) {
+    if (p != gAnnotColorPopup || p->closing) {
         return;
     }
     switch (ev->msg) {
@@ -4226,7 +4665,11 @@ static void AnnotColorPopupNativeMsg(AnnotColorPopup* p, VirtHostNativeMsg* ev) 
             ev->res = 0;
             break;
         }
+        case WM_NCDESTROY:
+            CloseAnnotColorPopup(p);
+            break;
         case WM_CAPTURECHANGED:
+            if (p->menuActive) break;
             if ((HWND)ev->lp == p->host->native) {
                 break;
             }
@@ -4234,7 +4677,7 @@ static void AnnotColorPopupNativeMsg(AnnotColorPopup* p, VirtHostNativeMsg* ev) 
             // takes it back instead of treating that as a click elsewhere
             if (!ev->lp && p->slider && p->slider->releasingMouse) {
                 p->slider->releasingMouse = false;
-                uitask::Post(MkFunc0(PostedReclaimAnnotColorPopupCapture, p->win), "ReclaimAnnotColorPopupCapture");
+                uitask::Post(MkFunc0(PostedReclaimAnnotColorPopupCapture, p), "ReclaimAnnotColorPopupCapture");
                 break;
             }
             CloseAnnotColorPopup(p);
@@ -4242,23 +4685,43 @@ static void AnnotColorPopupNativeMsg(AnnotColorPopup* p, VirtHostNativeMsg* ev) 
     }
 }
 
+static bool AnnotPopupTargetValid(AnnotColorPopup* p) {
+    return p == gAnnotColorPopup && !p->closing && IsMainWindowValidAndNotClosing(p->win) &&
+           (!p->forAnnotEditor || IsAnnotEditPickerContextValid(p->editorContext));
+}
+
+static void AnnotPopupThicknessPicked(AnnotColorPopup* p, float value) {
+    if (AnnotPopupTargetValid(p)) p->onThickness.Call(value);
+}
+
+static void AnnotPopupIntegerPicked(AnnotColorPopup* p, int value) {
+    if (AnnotPopupTargetValid(p)) p->onInteger.Call(value);
+}
+
 void ShowAnnotColorPopup(MainWindow* win, Rect anchor, Color current, bool withNone, Str label,
                          const Func1<Color>& onPick, float thickness, const Func1<float>& onThickness,
-                         Str thicknessLabel, float minThickness) {
+                         Str thicknessLabel, float minThickness, bool forAnnotEditor) {
     ToolbarVirt* tb = win ? win->toolbarVirt : nullptr;
     if (!tb || gAnnotColorPopup) {
         return;
     }
     auto* p = new AnnotColorPopup();
     p->win = win;
+    p->forAnnotEditor = forAnnotEditor;
+    if (forAnnotEditor) p->editorContext = CaptureAnnotEditPickerContext(win);
+    p->onThickness = onThickness;
     p->current = current;
     p->onPick = onPick;
+    p->label = str::Dup(label);
+    p->thicknessLabel = str::Dup(len(thicknessLabel) ? thicknessLabel : Tr("Thickness"));
+    p->minThickness = minThickness;
+    p->withNone = withNone;
     // an ink annotation's stroke is as much a choice as its color, so its
     // popup has the same Thickness slider the ink button's drop-down has
     InkThicknessSlider* slider = nullptr;
     ILayout* extra =
         (thickness >= 0)
-            ? MakeInkThicknessPanel(win, current, thickness, onThickness,
+            ? MakeInkThicknessPanel(win, current, thickness, MkFunc1(AnnotPopupThicknessPicked, p),
                                     len(thicknessLabel) > 0 ? thicknessLabel : Tr("Thickness"), minThickness, &slider)
             : nullptr;
     ILayout* layout =
@@ -4268,16 +4731,58 @@ void ShowAnnotColorPopup(MainWindow* win, Rect anchor, Color current, bool withN
     ShowAnnotPopupHost(p, layout, anchor);
 }
 
+static HWND BeginAnnotColorPopupMenu(MainWindow* win, HWND source) {
+    auto* p = gAnnotColorPopup;
+    if (p && p->win == win && p->host->native == source) {
+        p->menuActive = true;
+        // The document frame handles owner-drawn menu measurement and paint.
+        return win->hwndFrame;
+    }
+    return win->hwndFrame;
+}
+
+static void EndAnnotColorPopupMenu(MainWindow* win, HWND source) {
+    auto* p = gAnnotColorPopup;
+    if (p && p->win == win && p->host->native == source) {
+        p->menuActive = false;
+        ::SetCapture(source);
+    }
+}
+
+static void RefreshAnnotColorPopup(MainWindow* win) {
+    auto* p = gAnnotColorPopup;
+    if (!p || p->win != win || !len(p->label)) return;
+    InkThicknessSlider* slider = nullptr;
+    ILayout* extra = p->slider ? MakeInkThicknessPanel(win, p->current, p->slider->Width(), p->slider->onThickness,
+                                                       p->thicknessLabel, p->minThickness, &slider)
+                               : nullptr;
+    VecReset(p->swatches);
+    auto* layout = MakeAnnotColorsPanel(win, p->label, p->current, 0, p->withNone, &p->swatches,
+                                        MkFunc1(OnAnnotColorPopupSwatch, p), MkFunc1(OnAnnotColorPopupEdit, p), extra,
+                                        {}, &p->edit);
+    p->slider = slider;
+    auto* host = p->host;
+    Rect bounds = host->ScreenRect();
+    Size size = host->SetLayoutSizedToContent(layout);
+    bounds.dx = size.dx;
+    bounds.dy = size.dy;
+    host->SetPos(ShiftRectToWorkArea(bounds, win->hwndFrame, true), true);
+    ::SetCapture(host->native);
+}
+
 // A number picked with a slider: a label, the slider, and the value under it.
 // onValue gets the value when the slider is let go.
 void ShowAnnotSliderPopup(MainWindow* win, Rect anchor, Str label, int value, int minVal, int maxVal,
-                          const Func1<int>& onValue) {
+                          const Func1<int>& onValue, bool forAnnotEditor) {
     ToolbarVirt* tb = win ? win->toolbarVirt : nullptr;
     if (!tb || gAnnotColorPopup) {
         return;
     }
     auto* p = new AnnotColorPopup();
     p->win = win;
+    p->forAnnotEditor = forAnnotEditor;
+    if (forAnnotEditor) p->editorContext = CaptureAnnotEditPickerContext(win);
+    p->onInteger = onValue;
     value = limitValue(value, minVal, maxVal);
 
     auto* slider = new InkThicknessSlider();
@@ -4285,7 +4790,7 @@ void ShowAnnotSliderPopup(MainWindow* win, Rect anchor, Str label, int value, in
     slider->maxVal = maxVal;
     slider->value = value;
     slider->idealDx = UiScalePx(kInkSliderDx);
-    slider->onInteger = onValue;
+    slider->onInteger = MkFunc1(AnnotPopupIntegerPicked, p);
     slider->onValueChanged = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnChanged>(slider);
     slider->onValueCommitted = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnCommitted>(slider);
     str::ReplaceWithCopy(&slider->text, fmt("thickness=%d", value));
@@ -4402,11 +4907,13 @@ TempStr AnnotColorPopupStateTemp() {
 }
 
 static void OnToolbarMouseMove(MainWindow* win, Point pt) {
+    if (win->toolbarVirt && win->toolbarVirt->dragItem) return;
     UpdateOverlayToolbarForMouse(win);
     ToolbarHoverDropdownOnMouseMove(win, &pt);
 }
 
 static void OnToolbarMouseLeave(MainWindow* win) {
+    if (win->toolbarVirt && win->toolbarVirt->dragItem) return;
     UpdateOverlayToolbarForMouse(win);
     ToolbarHoverDropdownOnMouseMove(win, nullptr);
 }
@@ -4531,9 +5038,9 @@ static bool IsPenPresetCommand(int cmd) {
 }
 
 static bool IsPinnableTool(int cmd) {
-    for (const auto& button : gPdfAnnotationButtons)
+    for (const auto& button : gAnnotationButtons)
         if (button.cmdId == cmd && cmd != 0) return true;
-    return cmd == CmdInkEraser;
+    return cmd == CmdInkEraser || cmd == CmdToggleLaserPointer;
 }
 
 static void RefreshPinnedBars() {
@@ -4556,42 +5063,42 @@ static void RemovePinnedTool(int index) {
     uitask::Post(MkFunc0Void(RefreshPinnedBars), "Refresh pinned tools");
 }
 
-static int PinnedToolIndex(MainWindow* win, int cmd) {
+static int PinnedToolIndex(MainWindow* win, int cmd, Color selected) {
     auto* presets = gSettings->pinnedAnnotationTools;
     if (!presets) return -1;
     Str tool = PinnedToolName(win, cmd);
-    bool presetColor = cmd == CmdCreateAnnotInk || cmd == CmdAnnotationHighlightBrush ||
-                       cmd == CmdCreateAnnotUnderline || cmd == CmdCreateAnnotStrikeOut;
-    Color color = presetColor ? AnnotCurrentColor(win, cmd) : kColorUnset;
-    Str colorName = presetColor ? SerializeColorTemp(color) : StrL("");
-    float width = cmd == CmdCreateAnnotInk ? InkPenWidth(win) : 0;
+    bool presetColor = IsAnnotColorCmd(cmd) || cmd == CmdToggleLaserPointer;
+    Color color = presetColor ? (selected != kColorUnset ? selected : AnnotCurrentColor(win, cmd)) : kColorUnset;
+    float width = cmd == CmdCreateAnnotInk       ? InkPenWidth(win)
+                  : cmd == CmdToggleLaserPointer ? gSettings->laserWidth
+                                                 : 0;
     for (int i = 0; i < len(*presets); i++) {
         auto* preset = (*presets)[i];
-        if (str::Eq(preset->tool, tool) && str::Eq(preset->color, colorName) &&
-            (cmd != CmdCreateAnnotInk || fabsf(preset->width - width) < 0.001f)) {
+        Color saved = ParseAnnotColor(preset->color);
+        if (str::Eq(preset->tool, tool) && (!presetColor || SameColorAndAlpha(saved, color)) &&
+            ((cmd != CmdCreateAnnotInk && cmd != CmdToggleLaserPointer) || fabsf(preset->width - width) < 0.001f)) {
             return i;
         }
     }
     return -1;
 }
 
-static void PinToolClick(MainWindow* win, VirtMouseEvent* ev) {
-    int cmd = ev->target->id;
-    int index = PinnedToolIndex(win, cmd);
+static void TogglePinnedTool(MainWindow* win, int cmd, Color selected) {
+    int index = PinnedToolIndex(win, cmd, selected);
     if (index >= 0) {
         RemovePinnedTool(index);
-        ev->didHandle = true;
         return;
     }
     auto*& presets = gSettings->pinnedAnnotationTools;
     if (!presets) presets = new Vec<PinnedAnnotationTool*>();
     if (len(*presets) >= 32) return;
     Str tool = PinnedToolName(win, cmd);
-    bool presetColor = cmd == CmdCreateAnnotInk || cmd == CmdAnnotationHighlightBrush ||
-                       cmd == CmdCreateAnnotUnderline || cmd == CmdCreateAnnotStrikeOut;
-    Color color = presetColor ? AnnotCurrentColor(win, cmd) : kColorUnset;
-    Str colorName = presetColor ? SerializeColorTemp(color) : StrL("");
-    float width = cmd == CmdCreateAnnotInk ? InkPenWidth(win) : 0;
+    bool presetColor = IsAnnotColorCmd(cmd) || cmd == CmdToggleLaserPointer;
+    Color color = presetColor ? (selected != kColorUnset ? selected : AnnotCurrentColor(win, cmd)) : kColorUnset;
+    Str colorName = presetColor ? AnnotColorText(color) : StrL("");
+    float width = cmd == CmdCreateAnnotInk       ? InkPenWidth(win)
+                  : cmd == CmdToggleLaserPointer ? gSettings->laserWidth
+                                                 : 0;
     auto* preset = AllocStruct<PinnedAnnotationTool>();
     str::ReplaceWithCopy(&preset->tool, tool);
     str::ReplaceWithCopy(&preset->color, colorName);
@@ -4599,6 +5106,10 @@ static void PinToolClick(MainWindow* win, VirtMouseEvent* ev) {
     VecAppend(*presets, preset);
     ScheduleSaveSettings();
     uitask::Post(MkFunc0Void(RefreshPinnedBars), "Refresh pinned tools");
+}
+
+static void PinToolClick(MainWindow* win, VirtMouseEvent* ev) {
+    TogglePinnedTool(win, ev->target->id);
     ev->didHandle = true;
 }
 
@@ -4613,7 +5124,8 @@ struct PinnedToolButton : VirtIconButton {
         Rect dot{ctx.bounds.Right() - sz - UiScalePx(2), ctx.bounds.Bottom() - sz - UiScalePx(2), sz, sz};
         ctx.gfx->FillEllipse(dot, TbTextColor());
         dot.Inflate(-UiScalePx(1), -UiScalePx(1));
-        ctx.gfx->FillEllipse(dot, inkColor);
+        ctx.gfx->FillEllipse(dot, TbBgColor());
+        ctx.gfx->FillEllipse(dot, inkColor & 0xffffff, GetAlpha(inkColor));
     }
 };
 
@@ -4628,15 +5140,21 @@ static void PinnedToolClick(MainWindow* win, VirtMouseEvent* ev) {
     }
     auto* preset = (*presets)[index];
     int cmd = PinnedToolCommand(preset->tool);
-    Color color = ParseColor(preset->color);
-    if (cmd == CmdAnnotationHighlightBrush || cmd == CmdCreateAnnotUnderline || cmd == CmdCreateAnnotStrikeOut) {
+    Color color = ParseAnnotColor(preset->color);
+    if (IsAnnotColorCmd(cmd) && cmd != CmdCreateAnnotInk) {
         SetAnnotPresetColor(win, cmd, color);
         HwndSendCommand(win->hwndFrame, cmd);
     } else if (IsPenPresetCommand(cmd)) {
         HandlePenToolCommand(win, cmd);
         SetInkPenColor(win, color);
+        SetInkPenOpacity(win, ((int)GetAlpha(color) * 100 + 127) / 255);
         SetInkPenWidth(win, preset->width);
         StartAnnotationPlacement(win, CmdCreateAnnotInk);
+    } else if (cmd == CmdToggleLaserPointer) {
+        SetLaserPointerColor(win, color);
+        gSettings->laserWidth = NormalizeLaserWidth(preset->width);
+        ScheduleSaveSettings();
+        if (!win->laserPointerActive) ToggleLaserPointer(win);
     } else if (cmd > CmdNone) {
         HwndSendCommand(win->hwndFrame, cmd);
     }
@@ -4659,15 +5177,16 @@ static ILayout* BuildPinnedTools(MainWindow* win) {
         auto* button = new PinnedToolButton();
         button->index = i;
         button->id = CmdLast + 2000 + i;
-        button->inkColor = ParseColor(preset->color);
+        button->inkColor = ParseAnnotColor(preset->color);
         button->hasColor = len(preset->color) > 0;
         button->padding = {UiScalePx(4), UiScalePx(6), UiScalePx(4), UiScalePx(6)};
         button->cornerRadius = UiScalePx(6);
         int cmd = PinnedToolCommand(preset->tool);
         const char* svg = kEnhancedIconInk;
-        for (const auto& info : gPdfAnnotationButtons)
+        for (const auto& info : gAnnotationButtons)
             if (info.cmdId == cmd && info.icon) svg = info.icon;
         if (cmd == CmdInkEraser) svg = kEnhancedIconEraser;
+        if (cmd == CmdToggleLaserPointer) svg = gIconLaserPointer;
         Str penSvg = Str(svg);
         int penCommands[] = {CmdInkPen, CmdInkFountain, CmdInkBrush, CmdInkPencil, CmdInkHighlighter};
         for (int pen = 0; pen < dimof(penCommands); pen++) {
@@ -4681,6 +5200,7 @@ static ILayout* BuildPinnedTools(MainWindow* win) {
                                ? fmt("%s - %s - %.2f pt. Right-click to unpin.", name, preset->color, preset->width)
                                : fmt("%s. Right-click to unpin.", name));
         button->onClick = MkFunc1(PinnedToolClick, win);
+        button->onContextMenu = MkFunc1(PinnedToolClick, win);
         button->onKeyDown = MkFunc1(OnToolbarKey, win);
         button->SetFlag(vwfFocusable, true);
         row->AddChild(button);
@@ -4697,12 +5217,15 @@ static bool ShowPinToolMenu(MainWindow* win, int cmd) {
     bool isPinned = PinnedToolIndex(win, cmd) >= 0;
     AppendMenuW(menu, MF_STRING | (isPinned ? MF_CHECKED : 0), 1,
                 CWStrTemp(ToWStrTemp(isPinned ? Tr("Unpin this tool") : Tr("Pin this tool"))));
-    if (IsAnnotColorCmd(cmd)) AppendMenuW(menu, MF_STRING, 2, ToWStrTemp(Tr("Tools, colors and settings")).s);
+    if (IsAnnotColorCmd(cmd) || cmd == CmdToggleLaserPointer || cmd == CmdAnnotationLasso)
+        AppendMenuW(menu, MF_STRING, 2, ToWStrTemp(Tr("Tools, colors and settings")).s);
     MarkMenuOwnerDraw(menu);
+    SetMenuPinIcon(menu, 1);
     int picked =
         TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, anchor.x, anchor.Bottom(), 0, win->hwndFrame, nullptr);
     FreeMenuOwnerDrawInfoData(menu);
     DestroyMenu(menu);
+    if (!IsMainWindowValidAndNotClosing(win)) return true;
     if (picked == 1) {
         VirtCtrl target;
         target.id = cmd;
@@ -4928,7 +5451,7 @@ static void ShowToolbarOverflow(MainWindow* win, int anchorId) {
         AppendToolbarMenu(visibility, localId, label, true, !ToolbarItemHidden(cmd));
     };
     for (int i = 0; i < TotalButtonsCount(); i++) addVisibility(GetToolbarButtonInfoByIdx(i));
-    for (const auto& item : gPdfAnnotationButtons) addVisibility(item);
+    for (const auto& item : gAnnotationButtons) addVisibility(item);
     AppendMenuW(visibility, MF_SEPARATOR, 0, nullptr);
     int restoreId = kActionFirst + len(actions);
     VecAppend(actions, ToolbarMenuAction{ToolbarMenuActionKind::Restore, 0});
@@ -4965,6 +5488,7 @@ static void ShowToolbarOverflow(MainWindow* win, int anchorId) {
 
 static void BuildToolbarLayout(MainWindow* win) {
     PopulateToolbarLayout();
+    PopulateAnnotationOrder();
     PopulateCustomToolbarButtons();
 
     ToolbarVirt* tb = win->toolbarVirt;
@@ -5106,11 +5630,12 @@ static void BuildToolbarLayout(MainWindow* win) {
         }
         if (bi.cmdId != 0 && bi.cmdId != PageInfoId) {
             w->onClick = MkFunc1(OnToolbarButtonClicked, win);
+            w->onContextMenu = MkFunc1(OnToolbarButtonClicked, win);
             w->onKeyDown = MkFunc1(OnToolbarKey, win);
             w->SetFlag(vwfFocusable, true);
         }
         VecAppend(tb->items, w);
-        if (prettyLayout && IsAppearanceCmd(bi.cmdId)) {
+        if (prettyLayout && !len(gSettings->toolbarOrder) && IsAppearanceCmd(bi.cmdId)) {
             appearance->AddChild(w);
         } else {
             group->AddChild(w);
@@ -5164,7 +5689,7 @@ static void BuildToolbarLayout(MainWindow* win) {
         if (mainRow->findGroupIdx >= annotationInsertAt) mainRow->findGroupIdx++;
         VecInsertAt(mainRow->children, annotationInsertAt++, boxElementInfo{annotationGroup});
     };
-    for (const ToolbarButtonInfo& bi : gPdfAnnotationButtons) {
+    for (const ToolbarButtonInfo& bi : gAnnotationButtons) {
         bool duplicate = false;
         for (VirtCtrl* existing : tb->items) {
             if (bi.cmdId && existing && existing->id == bi.cmdId) {
@@ -5193,6 +5718,7 @@ static void BuildToolbarLayout(MainWindow* win) {
         }
         if (bi.cmdId != 0) {
             w->onClick = MkFunc1(OnToolbarButtonClicked, win);
+            w->onContextMenu = MkFunc1(OnToolbarButtonClicked, win);
             w->onKeyDown = MkFunc1(OnToolbarKey, win);
             w->SetFlag(vwfFocusable, true);
         }
@@ -5245,6 +5771,7 @@ static void BuildToolbarLayout(MainWindow* win) {
 
     SetToolbarHoverDropdown(win, CmdToggleLaserPointer, MkFunc1(BuildLaserHoverMenu, win));
     SetToolbarHoverDropdown(win, CmdSinglePageView, MkFunc1(BuildLayoutHoverMenu, win));
+    SetToolbarHoverDropdown(win, CmdAnnotationLasso, MkFunc1(BuildLassoHoverMenu, win));
     SetToolbarHoverDropdown(win, CmdSaveAnnotations, MkFunc1(BuildSaveHoverMenu, win));
     // one strip for the two of them, so it doesn't jump when the mouse crosses
     // from one to the other
@@ -5292,7 +5819,9 @@ static void PaintToolbarBackground(MainWindow* win, VirtHostPaintEvent* ev) {
 // the default theme separates the toolbar from the canvas with a hairline.
 // Use the document background, not ThemeEdgeColor: on Light that is #c0c0c0
 // and reads as a dark strip against the page.
-static void PaintToolbarEdge(MainWindow*, VirtHostPaintEvent* ev) {
+static void PaintToolbarEdge(MainWindow* win, VirtHostPaintEvent* ev) {
+    auto* tb = win->toolbarVirt;
+    if (tb && tb->dragActive && !tb->dragMarker.IsEmpty()) ev->gfx->FillRect(tb->dragMarker, ThemeBrandColor());
     if (!IsCurrentThemeDefault() || ThemeColorizeControls()) {
         return;
     }
@@ -5385,6 +5914,7 @@ void DestroyToolbar(MainWindow* win) {
         win->hwndToolbar = nullptr;
         return;
     }
+    CancelToolbarDrag(win);
     HideToolbarHoverDropdown(win);
     DeleteAnnotFilterToolbar(win);
     win->pageEdit = nullptr;
@@ -5605,7 +6135,191 @@ static bool OnCaptionDrag(MainWindow* win, VirtHostNativeMsg* ev) {
     return true;
 }
 
+enum class ToolbarDragKind {
+    None,
+    Main,
+    Annotation,
+    Pinned
+};
+
+static ToolbarDragKind ToolbarDragFamily(ToolbarVirt* tb, VirtCtrl* item) {
+    if (!item || !AsVirtIconButton(item)) return ToolbarDragKind::None;
+    int index = VecFind(tb->items, item);
+    if (index >= 0 && index < gLayoutButtonsCount) return ToolbarDragKind::Main;
+    if (VecFind(tb->annotationItems, item) >= 0) return ToolbarDragKind::Annotation;
+    if (VecFind(tb->pinnedItems, item) >= 0) return ToolbarDragKind::Pinned;
+    return ToolbarDragKind::None;
+}
+
+static Vec<VirtCtrl*>& ToolbarDragItems(ToolbarVirt* tb) {
+    switch (ToolbarDragFamily(tb, tb->dragItem)) {
+        case ToolbarDragKind::Annotation:
+            return tb->annotationItems;
+        case ToolbarDragKind::Pinned:
+            return tb->pinnedItems;
+        default:
+            return tb->items;
+    }
+}
+
+static void UpdateToolbarDrag(MainWindow* win) {
+    auto* tb = win->toolbarVirt;
+    Point pt = tb->dragPoint;
+    tb->dragTarget = nullptr;
+    tb->dragMarker = {};
+    tb->dragScroll = 0;
+    tb->host->Invalidate();
+    ToolbarLine* line =
+        tb->annotationLine && tb->annotationLine->lastBounds.Contains(pt) ? tb->annotationLine : tb->mainRow;
+    if (!line || !line->lastBounds.Contains(pt)) return;
+    for (auto* arrow : {line->previousButton, line->nextButton}) {
+        if (!arrow || !arrow->IsVisible() || !arrow->IsEnabled() || !arrow->BoundsInWindow().Contains(pt)) continue;
+        tb->dragScroll = arrow == line->previousButton ? -1 : 1;
+        return;
+    }
+    int distance = INT_MAX;
+    bool rtl = line->rtl;
+    ToolbarDragKind kind = ToolbarDragFamily(tb, tb->dragItem);
+    for (VirtCtrl* item : ToolbarDragItems(tb)) {
+        if (item == tb->dragItem || !item || !item->IsVisible() || ToolbarDragFamily(tb, item) != kind) continue;
+        Rect rect = item->BoundsInWindow();
+        if (pt.y < rect.y || pt.y >= rect.Bottom()) continue;
+        bool after = (pt.x >= rect.x + rect.dx / 2) != rtl;
+        int x = after != rtl ? rect.Right() : rect.x;
+        int delta = std::abs(pt.x - x);
+        if (delta >= distance) continue;
+        distance = delta;
+        tb->dragTarget = item;
+        tb->dragAfter = after;
+        tb->dragMarker = {x - UiScalePx(1), rect.y, UiScalePx(2), rect.dy};
+    }
+    tb->host->Invalidate();
+}
+
+static void OnToolbarDragTimer(MainWindow* win) {
+    auto* tb = win->toolbarVirt;
+    if (!tb || !tb->dragActive || !tb->dragScroll) return;
+    ToolbarLine* line =
+        tb->annotationLine && tb->annotationLine->lastBounds.Contains(tb->dragPoint) ? tb->annotationLine : tb->mainRow;
+    if (line && line->Scroll(tb->dragScroll)) UpdateToolbarDrag(win);
+}
+
+static void CancelToolbarDrag(MainWindow* win) {
+    auto* tb = win->toolbarVirt;
+    if (!tb) return;
+    bool active = tb->dragActive;
+    tb->dragItem = tb->dragTarget = nullptr;
+    tb->dragActive = false;
+    tb->dragMarker = {};
+    tb->dragScroll = 0;
+    tb->host->KillTimer(kToolbarDragScrollTimerId);
+    if (active && tb->host->vroot) tb->host->vroot->ClearPressed();
+    if (active && GetCapture() == tb->host->native) ReleaseCapture();
+    if (active) tb->host->Invalidate();
+}
+
+static bool SaveToolbarOrder(MainWindow* win) {
+    auto* tb = win->toolbarVirt;
+    if (!tb->dragTarget) return false;
+    auto& items = ToolbarDragItems(tb);
+    Vec<int> slots;
+    for (int i = 0; i < len(items); i++)
+        if (ToolbarDragFamily(tb, items[i]) == ToolbarDragFamily(tb, tb->dragItem)) VecAppend(slots, i);
+    int source = VecFind(slots, VecFind(items, tb->dragItem));
+    int target = VecFind(slots, VecFind(items, tb->dragTarget)) + (tb->dragAfter ? 1 : 0);
+    if (source < 0 || target < 0) return false;
+    if (target > source) target--;
+    if (source == target) return false;
+    int moved = slots[source];
+    VecRemoveAt(slots, source);
+    VecInsertAt(slots, target, moved);
+    if (ToolbarDragFamily(tb, tb->dragItem) == ToolbarDragKind::Pinned) {
+        auto* presets = gSettings->pinnedAnnotationTools;
+        if (!presets || len(*presets) != len(items)) return false;
+        auto* preset = (*presets)[source];
+        VecRemoveAt(*presets, source);
+        VecInsertAt(*presets, target, preset);
+    } else {
+        str::Builder order;
+        for (int index : slots) {
+            Str name = GetCommandName(items[index]->id);
+            if (!len(name)) continue;
+            if (len(order)) order.Append(StrL(" "));
+            order.Append(name);
+        }
+        Str* setting = ToolbarDragFamily(tb, tb->dragItem) == ToolbarDragKind::Annotation
+                           ? &gSettings->toolbarAnnotationOrder
+                           : &gSettings->toolbarOrder;
+        str::ReplaceWithCopy(setting, ToStrTemp(order));
+    }
+    ScheduleSaveSettings();
+    uitask::Post(MkFunc0Void(RefreshPinnedBars), "Refresh toolbar order");
+    return true;
+}
+
+static bool OnToolbarDrag(MainWindow* win, VirtHostNativeMsg* ev) {
+    auto* tb = win->toolbarVirt;
+    if (!tb) return false;
+    Point pt{GET_X_LPARAM(ev->lp), GET_Y_LPARAM(ev->lp)};
+    UnmirrorRtl(ev->host->native, pt);
+    switch (ev->msg) {
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONDBLCLK: {
+            CancelToolbarDrag(win);
+            VirtCtrl* item = ToolbarItemFromPoint(win, pt);
+            if (ToolbarDragFamily(tb, item) == ToolbarDragKind::None) return false;
+            tb->dragItem = item;
+            tb->dragStart = tb->dragPoint = pt;
+            tb->host->KillTimer(kOpenHoverDropdownTimerId);
+            return false;
+        }
+        case WM_MOUSEMOVE:
+            if (!tb->dragItem || !(ev->wp & MK_LBUTTON)) return tb->dragActive;
+            tb->dragPoint = pt;
+            if (!tb->dragActive) {
+                if (std::abs(pt.x - tb->dragStart.x) < GetSystemMetrics(SM_CXDRAG) &&
+                    std::abs(pt.y - tb->dragStart.y) < GetSystemMetrics(SM_CYDRAG))
+                    return false;
+                HideToolbarHoverDropdown(win);
+                tb->dragActive = true;
+                if (tb->host->vroot) {
+                    tb->host->vroot->ClearPressed();
+                    tb->host->vroot->HideTooltip();
+                }
+                SetCapture(tb->host->native);
+                tb->host->SetTimer(kToolbarDragScrollTimerId, 250);
+            }
+            UpdateToolbarDrag(win);
+            return true;
+        case WM_LBUTTONUP: {
+            bool active = tb->dragActive;
+            if (active) {
+                tb->dragPoint = pt;
+                UpdateToolbarDrag(win);
+                if (tb->host->ClientRect().Contains(pt)) SaveToolbarOrder(win);
+            }
+            CancelToolbarDrag(win);
+            return active;
+        }
+        case WM_KEYDOWN:
+            if (ev->wp != VK_ESCAPE || !tb->dragItem) return false;
+            CancelToolbarDrag(win);
+            if (tb->host->vroot) tb->host->vroot->ClearPressed();
+            return true;
+        case WM_CAPTURECHANGED:
+        case WM_CANCELMODE:
+            CancelToolbarDrag(win);
+            return false;
+    }
+    return false;
+}
+
 static void OnToolbarNativeMsg(MainWindow* win, VirtHostNativeMsg* ev) {
+    if (OnToolbarDrag(win, ev)) {
+        ev->didHandle = true;
+        ev->res = 0;
+        return;
+    }
     switch (ev->msg) {
         case WM_MOUSEWHEEL:
         case WM_MOUSEHWHEEL: {
@@ -5771,10 +6485,15 @@ static void CaptureToolbarPalette(VirtHost* host, Str name) {
     TempStr directory = GetEnvVariableTemp(StrL("SUMATRA_PALETTE_CAPTURES"));
     if (!len(directory)) return;
     Rect rect = host->ClientRect();
-    Pixmap* image = AllocPixmapDIB(rect.dx, rect.dy);
+    Rect window = host->ScreenRect();
+    Pixmap* image = AllocPixmapDIB(window.dx, window.dy);
     if (!image) return;
     HDC dc = CreateCompatibleDC(nullptr);
     HGDIOBJ old = SelectObject(dc, image->hbmp);
+    HdcFillRect(dc, {0, 0, window.dx, window.dy}, TbBgColor());
+    SendMessageW(host->native, WM_PRINT, (WPARAM)dc, PRF_NONCLIENT);
+    Point origin = HwndClientToScreen(host->native, {0, 0});
+    SetViewportOrgEx(dc, origin.x - window.x, origin.y - window.y, nullptr);
     auto* gfx = GfxCreate(dc);
     gfx->FillRect(rect, TbBgColor());
     host->vroot->Paint(gfx, rect);
@@ -5794,6 +6513,547 @@ static void PaletteTestClick(int* count, VirtMouseEvent* ev) {
     ev->didHandle = true;
 }
 
+static void ToolbarReorderTests() {
+    Settings* saved = gSettings;
+    gSettings = NewSettings({});
+    defer {
+        DeleteSettings(gSettings);
+        gSettings = saved;
+    };
+    str::ReplaceWithCopy(&gSettings->toolbarCustomLayout,
+                         StrL("CmdHandTool CmdZoomOut | CmdZoomIn CmdAnnotationLasso"));
+    MainWindow win(nullptr);
+    win.tabsCtrl = new TabsCtrl();
+    ToolbarVirt tb;
+    win.toolbarVirt = &tb;
+    tb.platformFont = GetAppFont();
+    tb.iconSize = ToolbarIconSize();
+    VirtHost::CreateArgs args;
+    args.className = WStrL(L"SumatraToolbarReorderTest");
+    args.isPopup = true;
+    args.visible = false;
+    args.initialSize = {1600, 100};
+    tb.host = VirtHost::Create(args);
+    utassert(tb.host != nullptr);
+    if (!tb.host) {
+        win.toolbarVirt = nullptr;
+        return;
+    }
+    win.hwndToolbar = tb.host->native;
+    ToolbarSetNativeHooks(&win, tb.host);
+    tb.host->onTimer = MkFunc1(OnToolbarTimer, &win);
+    BuildToolbarLayout(&win);
+    auto center = [](VirtCtrl* ctrl) {
+        Rect bounds = ctrl->BoundsInWindow();
+        return Point{bounds.x + bounds.dx / 2, bounds.y + bounds.dy / 2};
+    };
+    auto send = [&](UINT msg, WPARAM keys, Point point) {
+        SendMessageW(tb.host->native, msg, keys, MAKELPARAM(point.x, point.y));
+    };
+    auto expand = [&]() {
+        tb.annotationExpanded = true;
+        for (auto* group : tb.annotationGroups) group->SetVisibility(Visibility::Visible);
+        tb.host->Relayout();
+    };
+    int clicks = 0;
+    VirtCtrl* hand = ToolbarItemForCmd(&win, CmdHandTool);
+    hand->onClick = MkFunc1(PaletteTestClick, &clicks);
+    Point start = center(hand);
+    send(WM_LBUTTONDOWN, MK_LBUTTON, start);
+    send(WM_MOUSEMOVE, MK_LBUTTON, {start.x + 1, start.y});
+    send(WM_LBUTTONUP, 0, start);
+    utassert(clicks == 1);
+    utassert(tb.items[0]->id == CmdHandTool);
+
+    VirtCtrl* zoom = ToolbarItemForCmd(&win, CmdZoomIn);
+    Point end = center(zoom);
+    end.x += zoom->BoundsInWindow().dx / 2 - 1;
+    send(WM_LBUTTONDOWN, MK_LBUTTON, start);
+    send(WM_MOUSEMOVE, MK_LBUTTON, end);
+    send(WM_LBUTTONUP, 0, end);
+    utassert(clicks == 1);
+    BuildToolbarLayout(&win);
+    utassert(tb.items[0]->id == CmdZoomOut);
+    utassert(tb.items[1]->id == CmdZoomIn);
+    utassert(tb.items[2]->id == 0);
+    utassert(tb.items[3]->id == CmdHandTool);
+
+    expand();
+    VirtCtrl* text = ToolbarItemForCmd(&win, CmdCreateAnnotText);
+    VirtCtrl* freeText = ToolbarItemForCmd(&win, CmdCreateAnnotFreeText);
+    utassert(text && freeText && text->IsVisible() && freeText->IsVisible());
+    if (text && freeText) {
+        text->onClick = MkFunc1(PaletteTestClick, &clicks);
+        start = center(text);
+        end = center(freeText);
+        end.x += freeText->BoundsInWindow().dx / 2 - 1;
+        send(WM_LBUTTONDOWN, MK_LBUTTON, start);
+        send(WM_MOUSEMOVE, MK_LBUTTON, end);
+        send(WM_LBUTTONUP, 0, end);
+        utassert(clicks == 1);
+        BuildToolbarLayout(&win);
+        expand();
+        text = ToolbarItemForCmd(&win, CmdCreateAnnotText);
+        freeText = ToolbarItemForCmd(&win, CmdCreateAnnotFreeText);
+        utassert(text->BoundsInWindow().x > freeText->BoundsInWindow().x);
+    }
+    Str encoded = SerializeSettings(gSettings, {});
+    Settings* reopened = NewSettings(encoded);
+    str::Free(encoded);
+    DeleteSettings(gSettings);
+    gSettings = reopened;
+    BuildToolbarLayout(&win);
+    utassert(tb.items[0]->id == CmdZoomOut && tb.items[3]->id == CmdHandTool);
+    expand();
+    text = ToolbarItemForCmd(&win, CmdCreateAnnotText);
+    freeText = ToolbarItemForCmd(&win, CmdCreateAnnotFreeText);
+    utassert(text->BoundsInWindow().x > freeText->BoundsInWindow().x);
+
+    // Dragging across the native scroll arrows reveals hidden groups.
+    str::ReplaceWithCopy(&gSettings->toolbarCustomLayout, Str{});
+    BuildToolbarLayout(&win);
+    expand();
+    tb.mainRow->firstGroup = 0;
+    int narrowWidth = tb.mainRow->children[tb.mainRow->brandIdx + 1].layout->MinIntrinsicWidth(0) +
+                      tb.mainRow->OverflowButton()->MinIntrinsicWidth(0) +
+                      tb.mainRow->previousButton->MinIntrinsicWidth(0) + tb.mainRow->nextButton->MinIntrinsicWidth(0) +
+                      4 * tb.mainRow->gap + UiScalePx(16);
+    tb.host->SetBounds({0, 0, narrowWidth, 100});
+    tb.host->Relayout();
+    VirtCtrl* first = nullptr;
+    for (auto* items : {&tb.items, &tb.annotationItems}) {
+        for (auto* item : *items) {
+            if (item && item->id && AsVirtIconButton(item) && item->IsVisible()) {
+                first = item;
+                break;
+            }
+        }
+        if (first) break;
+    }
+    utassert(first && tb.mainRow->canScrollAfter);
+    if (first && tb.mainRow->canScrollAfter) {
+        start = center(first);
+        end = center(tb.mainRow->nextButton);
+        int previous = tb.mainRow->firstGroup;
+        send(WM_LBUTTONDOWN, MK_LBUTTON, start);
+        send(WM_MOUSEMOVE, MK_LBUTTON, end);
+        SendMessageW(tb.host->native, WM_TIMER, 0x104, 0);
+        utassert(tb.mainRow->firstGroup > previous);
+        SendMessageW(tb.host->native, WM_KEYDOWN, VK_ESCAPE, 0);
+        utassert(GetCapture() != tb.host->native);
+        utassert(!tb.host->vroot->pressed);
+    }
+    win.toolbarVirt = nullptr;
+    win.hwndToolbar = nullptr;
+    win.pageEdit = nullptr;
+    win.chapterEdit = nullptr;
+    delete tb.host;
+}
+
+struct ShapeMenuTestState {
+    int opened = 0;
+    bool backgroundColor = false;
+    bool backgroundOpacity = false;
+};
+
+static void ShapeMenuTestNative(ShapeMenuTestState* state, VirtHostNativeMsg* ev) {
+    if (ev->msg != WM_INITMENUPOPUP) return;
+    HMENU menu = (HMENU)ev->wp;
+    state->opened++;
+    state->backgroundColor = GetMenuState(menu, 3, MF_BYCOMMAND) != (UINT)-1;
+    state->backgroundOpacity = GetMenuState(menu, 4, MF_BYCOMMAND) != (UINT)-1;
+    EndMenu();
+}
+
+static void ShapePaletteTests() {
+    MainWindow win(nullptr);
+    win.tabsCtrl = new TabsCtrl();
+    ToolbarVirt tb;
+    win.toolbarVirt = &tb;
+    tb.platformFont = GetAppFont();
+    tb.iconSize = ToolbarIconSize();
+    VirtHost::CreateArgs args;
+    args.className = WStrL(L"SumatraShapePaletteTest");
+    args.isPopup = true;
+    args.visible = false;
+    args.initialSize = {500, 400};
+    auto* host = VirtHost::Create(args);
+    utassert(host != nullptr);
+    if (!host) {
+        win.toolbarVirt = nullptr;
+        return;
+    }
+    tb.host = tb.hoverHost = host;
+    args.className = WStrL(L"SumatraShapeMenuOwnerTest");
+    auto* owner = VirtHost::Create(args);
+    utassert(owner != nullptr);
+    if (!owner) {
+        win.toolbarVirt = nullptr;
+        delete host;
+        return;
+    }
+    win.hwndFrame = owner->native;
+    ShapeMenuTestState menuState;
+    owner->onNativeMsg = MkFunc1(ShapeMenuTestNative, &menuState);
+    const int commands[] = {CmdCreateAnnotLine, CmdCreateAnnotPolyLine, CmdCreateAnnotSquare, CmdCreateAnnotCircle,
+                            CmdCreateAnnotPolygon};
+    const Str prefixes[] = {StrL("Line"), StrL("PolyLine"), StrL("Square"), StrL("Circle"), StrL("Polygon")};
+    auto click = [&](VirtCtrl* control) {
+        Rect rect = control->BoundsInWindow();
+        LPARAM point = MAKELPARAM(rect.x + rect.dx / 2, rect.y + rect.dy / 2);
+        SendMessageW(host->native, WM_LBUTTONDOWN, MK_LBUTTON, point);
+        SendMessageW(host->native, WM_LBUTTONUP, 0, point);
+    };
+    for (int i = 0; i < dimof(commands); i++) {
+        ToolbarHoverBuildEvent ev;
+        ev.cmdId = commands[i];
+        BuildAnnotColorsHoverMenu(&win, &ev);
+        host->SetLayoutSizedToContent(ev.layout);
+        Vec<VirtCtrl*> controls;
+        CollectPaletteControls(ev.layout, controls);
+        VirtCtrl* advanced = nullptr;
+        VirtCtrl* fill = nullptr;
+        VirtCtrl* none = nullptr;
+        VirtSlider* opacity = nullptr;
+        VirtCtrl* outlinePreset = nullptr;
+        for (auto* control : controls) {
+            if (str::Eq(control->tooltip, Tr("Additional tool settings"))) advanced = control;
+            if (!outlinePreset && control->id == commands[i] && control->onContextMenu.IsValid())
+                outlinePreset = control;
+            if (str::Eq(control->name, StrL("shape-background-color"))) {
+                auto* swatch = (ToolbarColorSwatch*)control;
+                if (swatch->isNone)
+                    none = control;
+                else if (!fill)
+                    fill = control;
+            }
+            if (str::Eq(control->name, StrL("shape-background-opacity"))) opacity = AsVirtSlider(control);
+        }
+        utassert(outlinePreset != nullptr);
+        if (outlinePreset) {
+            Rect rect = outlinePreset->BoundsInWindow();
+            LPARAM point = MAKELPARAM(rect.x + rect.dx / 2, rect.y + rect.dy / 2);
+            menuState = {};
+            SendMessageW(host->native, WM_RBUTTONDOWN, MK_RBUTTON, point);
+            SendMessageW(host->native, WM_RBUTTONUP, 0, point);
+            utassert(menuState.opened == 1 && menuState.backgroundColor && menuState.backgroundOpacity);
+        }
+        utassert(advanced != nullptr);
+        if (!advanced) continue;
+        click(advanced);
+        VecReset(controls);
+        CollectPaletteControls(ev.layout, controls);
+        for (auto* control : controls) {
+            if (str::Eq(control->name, StrL("shape-background-color"))) {
+                auto* swatch = (ToolbarColorSwatch*)control;
+                if (swatch->isNone)
+                    none = control;
+                else if (!fill)
+                    fill = control;
+            }
+            if (str::Eq(control->name, StrL("shape-background-opacity"))) opacity = AsVirtSlider(control);
+        }
+        utassert(fill && none && opacity);
+        if (!fill || !none || !opacity) continue;
+        utassert(fill->IsVisible() && opacity->IsVisible());
+        Color chosen = ((ToolbarColorSwatch*)fill)->col & 0xffffff;
+        click(fill);
+        opacity->onKeyDown = MkFunc1(OnPaletteKey, &win);
+        host->vroot->SetFocus(opacity);
+        SendMessageW(host->native, WM_KEYDOWN, VK_HOME, 0);
+        for (int percent = 0; percent < 37; percent++) SendMessageW(host->native, WM_KEYDOWN, VK_RIGHT, 0);
+        utassert(opacity->minVal == 0 && opacity->maxVal == 100 && opacity->value == 37);
+        Color outline = MkRgb(17, 33, 55);
+        SetAnnotPresetColor(&win, commands[i], outline);
+        Str saved = SerializeSettings(gSettings, {});
+        utassert(str::Contains(saved, fmt("%sInteriorColor = %s", prefixes[i], SerializeColorTemp(chosen))));
+        utassert(str::Contains(saved, fmt("%sInteriorOpacity = 37", prefixes[i])));
+        Settings* reopened = NewSettings(saved);
+        str::Free(saved);
+        DeleteSettings(gSettings);
+        gSettings = reopened;
+        BuildAnnotColorsHoverMenu(&win, &ev);
+        host->SetLayoutSizedToContent(ev.layout);
+        VecReset(controls);
+        CollectPaletteControls(ev.layout, controls);
+        for (auto* control : controls)
+            if (str::Eq(control->tooltip, Tr("Additional tool settings"))) click(control);
+        VecReset(controls);
+        CollectPaletteControls(ev.layout, controls);
+        bool restoredFill = false, restoredOpacity = false;
+        for (auto* control : controls) {
+            if (str::Eq(control->name, StrL("shape-background-color"))) {
+                auto* swatch = (ToolbarColorSwatch*)control;
+                restoredFill |= swatch->col != kColorUnset && swatch->isCurrent && (swatch->col & 0xffffff) == chosen;
+            }
+            if (str::Eq(control->name, StrL("shape-background-opacity")))
+                restoredOpacity = AsVirtSlider(control)->value == 37;
+        }
+        utassert(restoredFill && restoredOpacity && SameColorAndAlpha(AnnotCurrentColor(&win, commands[i]), outline));
+        CaptureToolbarPalette(host, fmt("shape-settings-%s.bmp", prefixes[i]));
+        auto setting = ShapeFillForCmd(commands[i]);
+        Color beforeCancel = GetParsedColor(*setting.color, kColorUnset);
+        ChangeColorsArgs colorArgs;
+        colorArgs.color = kColorUnset;
+        colorArgs.opacityPercent = 0;
+        for (bool selected : {false, true}) {
+            auto* target = new AnnotColorsTarget();
+            target->shapeFillCmd = commands[i];
+            colorArgs.didSelect = selected;
+            AnnotColorsPicked(target, &colorArgs);
+            utassert(GetParsedColor(*setting.color, kColorUnset) == (selected ? kColorUnset : beforeCancel));
+            utassert(*setting.opacity == (selected ? 0 : 37));
+        }
+        VecReset(tb.hoverItems);
+    }
+    delete owner;
+    win.hwndFrame = nullptr;
+    tb.hoverHost = nullptr;
+    win.toolbarVirt = nullptr;
+    delete host;
+}
+
+struct PopupCloseTestState {
+    MainWindow* win = nullptr;
+    AnnotColorPopup* replacement = nullptr;
+    int picked = 0;
+};
+
+static void PopupCloseTestPick(PopupCloseTestState* state, Color) {
+    state->picked++;
+    state->replacement = new AnnotColorPopup();
+    state->replacement->win = state->win;
+    VirtHost::CreateArgs args;
+    args.className = WStrL(L"SumatraPopupCloseTest");
+    args.isPopup = true;
+    args.visible = false;
+    args.initialSize = {160, 80};
+    state->replacement->host = VirtHost::Create(args);
+    gAnnotColorPopup = state->replacement;
+}
+
+static void PopupCloseTests() {
+    uitask::DrainQueue();
+    MainWindow win(nullptr);
+    win.tabsCtrl = new TabsCtrl();
+    VecAppend(gWindows, &win);
+    defer {
+        VecRemove(gWindows, &win);
+    };
+    PopupCloseTestState state;
+    state.win = &win;
+    for (bool closingOwner : {false, true}) {
+        auto* popup = new AnnotColorPopup();
+        popup->win = &win;
+        popup->hasPick = true;
+        popup->picked = MkRgb(10, 20, 30);
+        popup->onPick = MkFunc1(PopupCloseTestPick, &state);
+        VirtHost::CreateArgs args;
+        args.className = WStrL(L"SumatraPopupCloseTest");
+        args.isPopup = true;
+        args.visible = false;
+        args.initialSize = {160, 80};
+        popup->host = VirtHost::Create(args);
+        utassert(popup->host != nullptr);
+        if (!popup->host) {
+            delete popup;
+            continue;
+        }
+        popup->host->onNativeMsg = MkFunc1(AnnotColorPopupNativeMsg, popup);
+        gAnnotColorPopup = popup;
+        SetCapture(popup->host->native);
+        // ReleaseCapture also sends WM_CAPTURECHANGED; both close requests
+        // must stay attached to this popup, never to the one opened by its callback.
+        CloseAnnotColorPopup(popup);
+        CloseAnnotColorPopup(popup);
+        win.isBeingClosed = closingOwner;
+        uitask::DrainQueue();
+        if (closingOwner) {
+            utassert(state.picked == 1 && gAnnotColorPopup == nullptr);
+        } else {
+            utassert(state.picked == 1 && gAnnotColorPopup == state.replacement);
+        }
+        auto* current = gAnnotColorPopup;
+        gAnnotColorPopup = nullptr;
+        if (current) {
+            delete current->host;
+            delete current;
+        }
+        state.replacement = nullptr;
+        win.isBeingClosed = false;
+    }
+    auto* popup = new AnnotColorPopup();
+    popup->win = &win;
+    popup->menuActive = true;
+    VirtHost::CreateArgs args;
+    args.className = WStrL(L"SumatraPopupCloseTest");
+    args.isPopup = true;
+    args.visible = false;
+    args.initialSize = {160, 80};
+    popup->host = VirtHost::Create(args);
+    utassert(popup->host != nullptr);
+    if (!popup->host) {
+        delete popup;
+        return;
+    }
+    popup->host->onNativeMsg = MkFunc1(AnnotColorPopupNativeMsg, popup);
+    gAnnotColorPopup = popup;
+    SetCapture(popup->host->native);
+    win.isBeingClosed = true;
+    DestroyWindow(popup->host->native);
+    uitask::DrainQueue();
+    utassert(gAnnotColorPopup == nullptr);
+    if (gAnnotColorPopup) {
+        popup = gAnnotColorPopup;
+        gAnnotColorPopup = nullptr;
+        delete popup->host;
+        delete popup;
+    }
+    win.isBeingClosed = false;
+}
+
+static void RecordPaletteAlpha(Color* picked, Color color) {
+    *picked = color;
+}
+
+static void ToolbarAlphaTests() {
+    MainWindow win(nullptr);
+    win.tabsCtrl = new TabsCtrl();
+    ToolbarVirt toolbar;
+    win.toolbarVirt = &toolbar;
+    VecAppend(gWindows, &win);
+    Color savedInk = InkPenColor(&win);
+    int savedOpacity = InkPenOpacity(&win);
+    defer {
+        VecRemove(gWindows, &win);
+        win.toolbarVirt = nullptr;
+        SetInkPenColor(&win, savedInk);
+        SetInkPenOpacity(&win, savedOpacity);
+        uitask::DrainQueue();
+    };
+    Color transparent = MkRgba(31, 117, 201, 0);
+    Color opaque = MkRgba(31, 117, 201, 255);
+    utassert(!SameColorAndAlpha(transparent, opaque));
+    Str* palette = AnnotPresetColorList(CmdCreateAnnotInk);
+    Str saved = str::Dup(*palette);
+    str::ReplaceWithCopy(palette, StrL(""));
+    utassert(AddAnnotPresetColor(CmdCreateAnnotInk, transparent));
+    utassert(AddAnnotPresetColor(CmdCreateAnnotInk, opaque));
+    Vec<Color> colors;
+    AnnotPresetColors(CmdCreateAnnotInk, colors);
+    utassert(len(colors) == 2);
+    if (len(colors) == 2) utassert(colors[0] == transparent && colors[1] == opaque);
+    utassert(RemoveAnnotPresetColor(CmdCreateAnnotInk, transparent));
+    VecReset(colors);
+    AnnotPresetColors(CmdCreateAnnotInk, colors);
+    utassert(len(colors) == 1 && colors[0] == opaque);
+    str::ReplaceWithCopy(palette, saved);
+    str::Free(saved);
+
+    SetAnnotPresetColor(&win, CmdCreateAnnotInk, opaque);
+    utassert(InkPenOpacity(&win) == 100);
+    SetAnnotPresetColor(&win, CmdCreateAnnotInk, transparent);
+    utassert(InkPenOpacity(&win) == 0 && GetAlpha(InkPenColor(&win)) == 0);
+
+    auto* popup = new AnnotColorPopup();
+    popup->win = &win;
+    Color picked = kColorUnset;
+    popup->onPick = MkFunc1(RecordPaletteAlpha, &picked);
+    VirtHost::CreateArgs args;
+    args.className = WStrL(L"SumatraPaletteAlphaTest");
+    args.isPopup = true;
+    args.visible = false;
+    args.initialSize = {160, 80};
+    popup->host = VirtHost::Create(args);
+    utassert(popup->host != nullptr);
+    if (popup->host) {
+        popup->host->onNativeMsg = MkFunc1(AnnotColorPopupNativeMsg, popup);
+        gAnnotColorPopup = popup;
+        SetCapture(popup->host->native);
+        ToolbarColorSwatch swatch;
+        swatch.col = transparent;
+        VirtMouseEvent click;
+        click.target = &swatch;
+        OnAnnotColorPopupSwatch(popup, &click);
+        uitask::DrainQueue();
+        utassert(picked == transparent && !gAnnotColorPopup);
+    } else {
+        delete popup;
+    }
+
+    VecRemove(gWindows, &win);
+    VecAppend(gWindows, &win);
+    Color editorPick = kColorUnset;
+    auto* editorTarget = new AnnotColorsTarget();
+    editorTarget->win = &win;
+    editorTarget->forAnnotEditor = true;
+    editorTarget->editorContext = CaptureAnnotEditPickerContext(&win);
+    editorTarget->onPick = MkFunc1(RecordPaletteAlpha, &editorPick);
+    ChangeColorsArgs editorArgs;
+    editorArgs.didSelect = true;
+    editorArgs.color = opaque;
+    AnnotColorsPicked(editorTarget, &editorArgs);
+    utassert(editorPick == kColorUnset);
+    VecRemove(gWindows, &win);
+
+    Color fill = opaque;
+    ChangeColorsArgs fillArgs;
+    fillArgs.color = kColorUnset;
+    auto* fillTarget = new AnnotColorsTarget();
+    fillTarget->onPick = MkFunc1(RecordPaletteAlpha, &fill);
+    AnnotColorsPicked(fillTarget, &fillArgs);
+    utassert(fill == opaque);
+    fillArgs.didSelect = true;
+    fillTarget = new AnnotColorsTarget();
+    fillTarget->onPick = MkFunc1(RecordPaletteAlpha, &fill);
+    AnnotColorsPicked(fillTarget, &fillArgs);
+    utassert(fill == kColorUnset);
+
+    TogglePinnedTool(&win, CmdCreateAnnotSquare, transparent);
+    int first = PinnedToolIndex(&win, CmdCreateAnnotSquare, transparent);
+    TogglePinnedTool(&win, CmdCreateAnnotSquare, opaque);
+    int second = PinnedToolIndex(&win, CmdCreateAnnotSquare, opaque);
+    utassert(first >= 0 && second >= 0 && first != second);
+    auto* pins = gSettings->pinnedAnnotationTools;
+    if (pins && first >= 0 && first < len(*pins)) {
+        VecReset(colors);
+        ParseColorList((*pins)[first]->color, colors, 1);
+        utassert(len(colors) == 1 && colors[0] == transparent);
+    }
+    while (pins && len(*pins)) RemovePinnedTool(len(*pins) - 1);
+
+    Pixmap* bitmap = AllocPixmapDIB(64, 64);
+    HDC dc = CreateCompatibleDC(nullptr);
+    HGDIOBJ previous = SelectObject(dc, bitmap->hbmp);
+    {
+        GfxHdc gfx(dc);
+        ToolbarColorSwatch swatch;
+        swatch.col = transparent;
+        VirtPaintCtx context;
+        context.gfx = &gfx;
+        context.bounds = {0, 0, 32, 32};
+        gfx.FillRect({0, 0, 64, 64}, kColWhite);
+        swatch.Paint(context);
+        GdiFlush();
+        utassert(GetPixel(dc, 16, 16) != (transparent & 0xffffff));
+        gfx.FillRect({0, 0, 64, 64}, kColWhite);
+        InkStrokePreview stroke;
+        stroke.col = transparent;
+        stroke.thickness = 2.f;
+        context.bounds = {0, 0, 64, 64};
+        stroke.Paint(context);
+    }
+    GdiFlush();
+    bool unchanged = true;
+    for (int y = 0; y < 64; y++)
+        for (int x = 0; x < 64; x++)
+            if (GetPixel(dc, x, y) != kColWhite) unchanged = false;
+    utassert(unchanged);
+    SelectObject(dc, previous);
+    DeleteDC(dc);
+    FreePixmap(bitmap);
+}
+
 static void ToolbarPaletteTests() {
     auto savedCornerRadius = gUiCornerRadius;
     gUiCornerRadius = GetAppCornerRadius;
@@ -5811,6 +7071,10 @@ static void ToolbarPaletteTests() {
     Settings* saved = gSettings;
     gSettings = NewSettings({});
     if (!ThemeGetCount()) CreateThemeCommands();
+    PopupCloseTests();
+    ToolbarAlphaTests();
+    ToolbarReorderTests();
+    ShapePaletteTests();
     defer {
         DeleteSettings(gSettings);
         gSettings = saved;
@@ -5898,6 +7162,57 @@ static void ToolbarPaletteTests() {
         gSettings->interfaceScale = 100;
         gSettings->uIFontSize = 0;
         RefreshUiFonts();
+    }
+    {
+        MainWindow win(nullptr);
+        win.tabsCtrl = new TabsCtrl();
+        ToolbarVirt tb;
+        win.toolbarVirt = &tb;
+        tb.platformFont = GetAppFont();
+        tb.iconSize = UiScalePx(28);
+        Color chosen = MkRgba(31, 117, 201, 255);
+        for (int cmd : kAnnotColorCmds) {
+            TogglePinnedTool(&win, cmd, chosen);
+            utassert(PinnedToolIndex(&win, cmd, chosen) >= 0);
+            Str encoded = SerializeSettings(gSettings, {});
+            Settings* reopened = NewSettings(encoded);
+            str::Free(encoded);
+            utassert(reopened->pinnedAnnotationTools && len(*reopened->pinnedAnnotationTools) == 1);
+            utassert(SameColorAndAlpha(ParseColor((*reopened->pinnedAnnotationTools)[0]->color), chosen));
+            DeleteSettings(reopened);
+            TogglePinnedTool(&win, cmd, chosen);
+            utassert(PinnedToolIndex(&win, cmd, chosen) == -1);
+            Str* list = AnnotPresetColorList(cmd);
+            Str original = str::Dup(*list);
+            utassert(AddAnnotPresetColor(cmd, chosen));
+            utassert(!AddAnnotPresetColor(cmd, chosen | 0xff000000));
+            utassert(RemoveAnnotPresetColor(cmd, chosen));
+            utassert(!RemoveAnnotPresetColor(cmd, chosen));
+            str::ReplaceWithCopy(list, original);
+            str::Free(original);
+        }
+        utassert(IsPinnableTool(CmdToggleLaserPointer));
+        win.laserPointerColor = chosen;
+        TogglePinnedTool(&win, CmdToggleLaserPointer);
+        utassert(PinnedToolIndex(&win, CmdToggleLaserPointer) >= 0);
+        ILayout* pins = BuildPinnedTools(&win);
+        utassert(len(tb.pinnedItems) == 1 && AsVirtIconButton(tb.pinnedItems[0])->pixmap);
+        delete pins;
+        VecReset(tb.pinnedItems);
+        TogglePinnedTool(&win, CmdToggleLaserPointer);
+        utassert(PinnedToolIndex(&win, CmdToggleLaserPointer) == -1);
+        Color current = AnnotCurrentColor(&win, CmdCreateAnnotInk);
+        utassert(RemoveAnnotPresetColor(CmdCreateAnnotInk, current));
+        ToolbarHoverBuildEvent ev;
+        ev.cmdId = CmdCreateAnnotInk;
+        BuildAnnotColorsHoverMenu(&win, &ev);
+        Vec<Color> colors;
+        AnnotPresetColors(CmdCreateAnnotInk, colors);
+        for (Color c : colors) utassert(!SameColorAndAlpha(c, current));
+        delete ev.layout;
+        VecReset(tb.hoverItems);
+        utassert(AddAnnotPresetColor(CmdCreateAnnotInk, current));
+        win.toolbarVirt = nullptr;
     }
     auto*& presets = gSettings->pinnedAnnotationTools;
     if (!presets) presets = new Vec<PinnedAnnotationTool*>();
@@ -6036,21 +7351,41 @@ static void ToolbarPaletteTests() {
                 BuildAnnotColorsHoverMenu(&win, &ev);
                 Vec<VirtCtrl*> buttons;
                 CollectPaletteControls(ev.layout, buttons);
-                auto* pin = (PaletteIconButton*)buttons[len(buttons) - 1];
+                PaletteIconButton* pin = nullptr;
+                for (auto* button : buttons) {
+                    auto* text = AsVirtButton(button);
+                    if (text && (str::Eq(text->s, Tr("Pin this tool")) || str::Eq(text->s, Tr("Unpin this tool"))))
+                        pin = (PaletteIconButton*)button;
+                }
+                utassert(pin != nullptr);
                 utassert(pin->isCurrent == pinned);
                 utassert(str::Eq(pin->s, pinned ? Tr("Unpin this tool") : Tr("Pin this tool")));
                 utassert(str::Eq(pin->name, pin->s) && str::Eq(pin->tooltip, pin->s));
                 utassert(pin->pixmap && pin->HasFlag(vwfFocusable));
+                Size fit = ev.layout->Layout(ExpandHeight(UiScalePx(400)));
+                ev.layout->SetBounds({0, 0, fit.dx, fit.dy});
+                Rect pinBounds = pin->BoundsInWindow();
+                bool inlineLabel = false;
+                for (auto* button : buttons) {
+                    auto* text = AsVirtText(button);
+                    if (!text || !str::Eq(text->s, Tr("Color"))) continue;
+                    Rect label = text->BoundsInWindow();
+                    inlineLabel =
+                        label.y <= pinBounds.y + pinBounds.dy / 2 && label.Bottom() >= pinBounds.y + pinBounds.dy / 2;
+                }
+                utassert(inlineLabel);
                 if (command == CmdCreateAnnotInk) {
-                    bool foundHide = false;
-                    for (VirtCtrl* button : buttons) {
+                    bool foundSettings = false;
+                    for (auto* button : buttons) {
                         auto* text = AsVirtButton(button);
-                        if (!text || !str::Eq(text->s, Tr("Hide settings"))) continue;
-                        foundHide = true;
-                        auto* close = (PaletteIconButton*)button;
-                        utassert(close->pixmap && str::Eq(close->name, close->tooltip));
+                        if (!text || !str::Eq(text->s, Tr("Additional tool settings"))) continue;
+                        foundSettings = true;
+                        auto* extra = (ILayout*)button->userData;
+                        utassert(extra && IsCollapsed(extra));
+                        extra->SetVisibility(Visibility::Visible);
+                        utassert(extra->Layout(ExpandHeight(UiScalePx(400))).dy > 0);
                     }
-                    utassert(foundHide);
+                    utassert(foundSettings);
                 }
                 delete ev.layout;
                 VecReset(tb.hoverItems);
@@ -6170,17 +7505,28 @@ static void ToolbarPaletteTests() {
             auto* scroll = new ToolbarPaletteScroll(ev.layout, {availableWidth, 240}, tb.platformFont);
             scroll->lineDy = PlatformFontLineHeight(tb.platformFont);
             VirtHost::CreateArgs args;
-            args.className = WStrL(L"SumatraToolbarPaletteTest");
+            args.className = WStrL(L"SumatraToolbarHoverMenu");
+            args.title = command == CmdCreateAnnotInk ? Tr("Pen types") : Tr("Laser pointer");
             args.isPopup = true;
             args.visible = false;
             args.initialSize = {100, 100};
             auto* host = VirtHost::Create(args);
             utassert(host != nullptr);
             tb.hoverHost = host;
+            WindowApplyScaledCaption(host->native);
+            Size work{availableWidth, 240};
+            Size viewport = ToolbarPaletteViewport(host, work);
+            scroll->limit = {ToolbarPaletteWidth(tb.platformFont, viewport.dx), viewport.dy};
             host->onNativeMsg = MkFunc1(PaletteNativeMsg, (ScrollBox*)scroll);
             Size size = host->SetLayoutSizedToContent(scroll);
-            utassert(size.dx <= UiScalePx(560) && size.dy <= 240);
-            utassert(size.dx <= std::max(UiScalePx(320), 8 * PlatformFontLineHeight(tb.platformFont)));
+            utassert(size.dx <= work.dx && size.dy <= work.dy);
+            // The first layout installs the native scrollbar, so measure the
+            // frame after its visibility has settled.
+            Rect window = host->ScreenRect();
+            Rect client = host->ClientRect();
+            Size frame{window.dx - client.dx, window.dy - client.dy};
+            utassert(size.dx - frame.dx <= UiScalePx(560) && size.dy - frame.dy <= 240);
+            utassert(size.dx - frame.dx <= std::max(UiScalePx(320), 8 * PlatformFontLineHeight(tb.platformFont)));
             host->SetBounds({0, 0, size.dx, size.dy});
             host->Relayout();
             Vec<VirtCtrl*> controls;
@@ -6201,8 +7547,19 @@ static void ToolbarPaletteTests() {
             SendMessageW(host->native, WM_VSCROLL, SB_BOTTOM, 0);
             utassert(scroll->scrollY == scroll->MaxScrollY());
             if (command == CmdCreateAnnotInk) {
-                Rect pin = last->BoundsInWindow();
-                utassert(pin.y >= 0 && pin.Bottom() <= host->ClientRect().Bottom());
+                // The pin is inline above the colors; the bottom of the panel
+                // is now the thickness footer. Focus below still verifies the
+                // slider can be brought fully into view on a short monitor.
+                VirtText* footer = nullptr;
+                for (VirtCtrl* ctrl : controls) {
+                    auto* text = AsVirtText(ctrl);
+                    if (text && str::Eq(text->s, Tr("Thick"))) footer = text;
+                }
+                utassert(footer != nullptr);
+                if (footer) {
+                    Rect bounds = footer->BoundsInWindow();
+                    utassert(bounds.y >= 0 && bounds.Bottom() <= host->ClientRect().Bottom());
+                }
             }
             CaptureToolbarPalette(
                 host, fmt("%s-%d-bottom.bmp", command == CmdCreateAnnotInk ? StrL("pen") : StrL("laser"), variant));
@@ -6215,8 +7572,17 @@ static void ToolbarPaletteTests() {
             SendMessageW(host->native, WM_MOUSEWHEEL, MAKEWPARAM(0, -WHEEL_DELTA), 0);
             utassert(scroll->scrollY > 0);
             scroll->ScrollTo(0);
-            for (int i = 0; i < len(controls) + 1 && host->vroot->focused != last; i++)
-                SendMessageW(host->native, WM_KEYDOWN, VK_TAB, 0);
+            {
+                // These messages represent plain Tab. Keep real modifier keys
+                // out of this hidden fixture, and restore only this thread's
+                // key state afterward; no physical key or cursor is injected.
+                BYTE savedKeys[256]{};
+                bool haveKeys = GetKeyboardState(savedKeys) != FALSE;
+                ReleaseThreadKeyState();
+                for (int i = 0; i < len(controls) + 1 && host->vroot->focused != last; i++)
+                    SendMessageW(host->native, WM_KEYDOWN, VK_TAB, 0);
+                if (haveKeys) SetKeyboardState(savedKeys);
+            }
             utassert(host->vroot->focused == last);
             Rect focused = last->BoundsInWindow();
             utassert(focused.y >= 0 && focused.Bottom() <= host->ClientRect().Bottom());
@@ -6246,6 +7612,41 @@ static void ToolbarPaletteTests() {
             delete host;
             tb.hoverHost = nullptr;
             VecReset(tb.hoverItems);
+        }
+        {
+            // A right click opens palette actions without selecting a color
+            // or dismissing an annotation-properties popup on capture change.
+            auto* popup = new AnnotColorPopup();
+            popup->win = &win;
+            VirtHost::CreateArgs args;
+            args.className = WStrL(L"SumatraAnnotColorPopup");
+            args.visible = false;
+            args.isPopup = true;
+            args.initialSize = {400, 200};
+            popup->host = VirtHost::Create(args);
+            utassert(popup->host != nullptr);
+            if (popup->host) {
+                gAnnotColorPopup = popup;
+                utassert(BeginAnnotColorPopupMenu(&win, popup->host->native) == win.hwndFrame);
+                utassert(popup->menuActive);
+                VirtHostNativeMsg changed;
+                changed.host = popup->host;
+                changed.msg = WM_CAPTURECHANGED;
+                changed.lp = 1;
+                AnnotColorPopupNativeMsg(popup, &changed);
+                utassert(gAnnotColorPopup == popup);
+                ToolbarColorSwatch swatch;
+                swatch.col = MkRgb(20, 40, 60);
+                VirtMouseEvent click;
+                click.target = &swatch;
+                click.button = 1;
+                OnAnnotColorPopupSwatch(popup, &click);
+                utassert(!popup->hasPick && gAnnotColorPopup == popup);
+                popup->menuActive = false;
+                gAnnotColorPopup = nullptr;
+                delete popup->host;
+            }
+            delete popup;
         }
         win.toolbarVirt = nullptr;
     }

@@ -20,6 +20,11 @@
 #include "Accelerators.h"
 #include "Translations.h"
 
+#include "DarkMode.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
+
 #include "Commands.h"
 #include "KeyboardHelp.h"
 
@@ -169,21 +174,14 @@ static Rect PositionHelpWindow(NativeWnd parent, bool fullscreen, Size size) {
     return {x, y, size.dx, size.dy};
 }
 
-// The window's whole content is a layout tree: VirtText for the title, section
-// headers and descriptions, VirtRichText key-caps for the shortcuts, a
-// VirtCloseButton for the ✕ and a VirtLine under the title. There is no
-// painting or positioning code here: WindowBase paints the tree and the
-// containers (VBox / HBox / Table) place everything
+// WindowBase paints the shortcut layout; the shared app caption owns the title and close button.
 struct KeyboardHelpWnd : WindowBase {
     HWND parentFrame = nullptr;
     KeyboardHelpDataSource* dataSource = nullptr;
     ScrollBox* scroll = nullptr;
-    VirtCloseButton* closeBtn = nullptr;
-
     ~KeyboardHelpWnd() override = default;
     bool Create(const KeyboardHelpArgs&);
     void OnDpiChanged(WindowBase::DpiChangedEvent* ev);
-    void OnNcHitTest(WindowBase::NcHitTestEvent* ev);
 };
 
 static KeyboardHelpWnd* gKeyboardHelpWnd = nullptr;
@@ -206,28 +204,6 @@ static void OnHelpClose(WindowBase::CloseEvent*) {
 // the frame owns this window, so closing the frame destroys it behind our back
 static void OnHelpDestroy(WindowBase::DestroyEvent*) {
     ScheduleCloseKeyboardHelp();
-}
-
-static void OnHelpCloseClicked(VirtMouseEvent*) {
-    ScheduleCloseKeyboardHelp();
-}
-
-// the window has no caption, so HTCAPTION on the client (except the close
-// button) is what lets the user drag it. A caption double-click would
-// otherwise maximize a popup that has no maximize box.
-void KeyboardHelpWnd::OnNcHitTest(WindowBase::NcHitTestEvent* ev) {
-    Point pt = HwndScreenToClient(hwnd, ev->screenPos);
-    Rect client = HwndClientRect(hwnd);
-    if (!client.Contains(pt)) {
-        return;
-    }
-    if (closeBtn && closeBtn->lastBounds.Contains(pt)) {
-        ev->result = HTCLIENT;
-        ev->didHandle = true;
-        return;
-    }
-    ev->result = HTCAPTION;
-    ev->didHandle = true;
 }
 
 // '?' toggles the help, so it also closes it while it has the focus
@@ -296,22 +272,10 @@ static void OnHelpKeyDown(KeyEvent* ev) {
     }
 }
 
-static void ApplyKeyboardHelpCloseDpi(VirtCloseButton* closeBtn, int dpi) {
-    if (!closeBtn || dpi <= 0) {
-        return;
-    }
-    int btnDx = DpiScaleByDpi(dpi, 16);
-    int btnPad = DpiScaleByDpi(dpi, 4);
-    closeBtn->padding = Insets{btnPad, btnPad, btnPad, btnPad};
-    closeBtn->idealSize = {btnDx + (2 * btnPad), btnDx + (2 * btnPad)};
-}
-
-static ILayout* BuildKeyboardHelpLayout(KeyboardHelpDataSource* ds, Str title, ScrollBox** scrollOut,
-                                        VirtCloseButton** closeOut) {
+static ILayout* BuildKeyboardHelpLayout(KeyboardHelpDataSource* ds, ScrollBox** scrollOut) {
     PlatformFont* fontRow = GetAppFont();
     PlatformFont* fontHeader = GetBoldPlatformFont(fontRow);
-    PlatformFont* fontTitle = GetScaledPlatformFont(fontHeader, 125);
-    if (!fontRow || !fontHeader || !fontTitle) {
+    if (!fontRow || !fontHeader) {
         return nullptr;
     }
 
@@ -422,17 +386,6 @@ static ILayout* BuildKeyboardHelpLayout(KeyboardHelpDataSource* ds, Str title, S
         }
     }
 
-    auto* header = new HBox();
-    header->alignCross = CrossAxisAlign::CrossCenter;
-    header->AddChild(new VirtText(title, fontTitle), 1);
-    auto* closeBtn = new VirtCloseButton();
-    ApplyKeyboardHelpCloseDpi(closeBtn, DpiGet());
-    closeBtn->onClick = MkFunc1Void<VirtMouseEvent*>(OnHelpCloseClicked);
-    header->AddChild(closeBtn);
-    if (closeOut) {
-        *closeOut = closeBtn;
-    }
-
     auto* content = new HBox();
     content->gap = columnGap;
     content->AddChild(columns[0]);
@@ -443,15 +396,8 @@ static ILayout* BuildKeyboardHelpLayout(KeyboardHelpDataSource* ds, Str title, S
         *scrollOut = scroll;
     }
 
-    auto* separator = new VirtLine();
-    separator->thickness = DpiScale(1);
-
     auto* root = new VBox();
     root->alignCross = CrossAxisAlign::Stretch;
-    root->AddChild(header);
-    root->AddChild(new Spacer(0, DpiScale(6)));
-    root->AddChild(separator);
-    root->AddChild(new Spacer(0, DpiScale(10)));
     // flex so the columns shrink to the window and ScrollBox scrolls them
     root->AddChild(scroll, 1);
 
@@ -467,18 +413,16 @@ bool KeyboardHelpWnd::Create(const KeyboardHelpArgs& helpArgs) {
     DpiScope dpiScope(parentFrame);
     Str title = ds->Translate(StrL("Keyboard Shortcuts"));
 
-    layout = BuildKeyboardHelpLayout(ds, title, &scroll, &closeBtn);
+    layout = BuildKeyboardHelpLayout(ds, &scroll);
     if (!layout) {
         return false;
     }
     Size size = layout->Layout(ExpandInf());
     Rect work = PlatformWindowWorkArea(parentFrame);
-    DWORD style = WS_POPUP;
-    if (!work.IsEmpty() && size.dy > work.dy) {
-        size.dy = work.dy;
-        size.dx += DpiGetSystemMetrics(SM_CXVSCROLL);
-        style |= WS_VSCROLL;
-    }
+    DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+    int captionHeight =
+        std::max(DpiGetSystemMetrics(SM_CYCAPTION), PlatformFontLineHeight(GetAppFont()) + UiScalePx(12));
+    if (!work.IsEmpty() && size.dy + captionHeight > work.dy) style |= WS_VSCROLL;
 
     CreateCustomArgs args;
     args.title = title;
@@ -495,11 +439,14 @@ bool KeyboardHelpWnd::Create(const KeyboardHelpArgs& helpArgs) {
     if (parentFrame) {
         SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, (LONG_PTR)parentFrame);
     }
-    int dpi = DpiGetForHwnd(hwnd);
-    if (dpi <= 0) {
-        dpi = DpiGet();
+    WindowApplyScaledCaption(hwnd);
+    Rect frame = HwndWindowRect(hwnd), client = HwndClientRect(hwnd);
+    size.dx += frame.dx - client.dx;
+    size.dy += frame.dy - client.dy;
+    if (!work.IsEmpty()) {
+        size.dx = std::min(size.dx, work.dx);
+        size.dy = std::min(size.dy, work.dy);
     }
-    ApplyKeyboardHelpCloseDpi(closeBtn, dpi);
 
     Rect wr = PositionHelpWindow(parentFrame, helpArgs.parentFullscreen, size);
     SetWindowPos(hwnd, nullptr, wr.x, wr.y, wr.dx, wr.dy, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -511,8 +458,7 @@ bool KeyboardHelpWnd::Create(const KeyboardHelpArgs& helpArgs) {
 }
 
 void KeyboardHelpWnd::OnDpiChanged(WindowBase::DpiChangedEvent* ev) {
-    int dpi = (int)ev->dpiX;
-    ApplyKeyboardHelpCloseDpi(closeBtn, dpi);
+    WindowApplyScaledCaption(hwnd);
     DoLayout();
     ev->didHandle = true;
 }
@@ -522,18 +468,15 @@ void RefreshKeyboardHelpFont() {
     if (!w || !w->hwnd || !w->dataSource) return;
     DpiScope dpiScope(w->hwnd);
     int scrollY = w->scroll ? w->scroll->scrollY : 0;
-    bool closeFocused = w->vroot && w->vroot->focused == w->closeBtn;
     ScrollBox* scroll = nullptr;
-    VirtCloseButton* closeBtn = nullptr;
-    ILayout* layout = BuildKeyboardHelpLayout(w->dataSource, w->dataSource->Translate(StrL("Keyboard Shortcuts")),
-                                              &scroll, &closeBtn);
+    ILayout* layout = BuildKeyboardHelpLayout(w->dataSource, &scroll);
     if (!layout) return;
     delete w->vroot;
     w->vroot = nullptr;
     delete w->layout;
     w->layout = layout;
     w->scroll = scroll;
-    w->closeBtn = closeBtn;
+    WindowApplyScaledCaption(w->hwnd);
     Rect rect = HwndWindowRect(w->hwnd);
     Rect work = PlatformWindowWorkArea(w->hwnd);
     Size ideal = layout->Layout(ExpandInf());
@@ -543,9 +486,51 @@ void RefreshKeyboardHelpFont() {
     SetWindowPos(w->hwnd, nullptr, rect.x, rect.y, wantDx, rect.dy, SWP_NOZORDER | SWP_NOACTIVATE);
     w->DoLayout();
     scroll->ScrollTo(scrollY);
-    if (closeFocused && w->vroot) w->vroot->SetFocus(closeBtn);
     HwndInvalidate(w->hwnd, true);
 }
+
+#if IS_DEBUG
+void KeyboardHelpLayout_UnitTests() {
+    Settings* saved = gSettings;
+    gSettings = NewSettings({});
+    defer {
+        DeleteSettings(gSettings);
+        gSettings = saved;
+        RefreshUiFonts();
+    };
+    for (int scale : {100, 200}) {
+        gSettings->interfaceScale = scale;
+        gSettings->uIFontSize = 22;
+        RefreshUiFonts();
+        WindowBase window;
+        window.CreateCustom({.title = StrL("Keyboard Shortcuts"),
+                             .style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VSCROLL,
+                             .pos = {-10000, -10000, 600, 400},
+                             .visible = false});
+        utassert(window.hwnd != nullptr);
+        if (!window.hwnd) continue;
+        ScrollBox* scroll = nullptr;
+        window.layout = BuildKeyboardHelpLayout(GetDefaultKeyboardHelpDataSource(), &scroll);
+        utassert(window.layout && scroll);
+        WindowApplyScaledCaption(window.hwnd);
+        window.DoLayout();
+        utassert(str::Eq(HwndGetTextTemp(window.hwnd), StrL("Keyboard Shortcuts")));
+        Rect frame = HwndWindowRect(window.hwnd);
+        Point origin = HwndClientToScreen(window.hwnd, {0, 0});
+        int dpi = DpiGetForHwnd(window.hwnd);
+        int height = std::max(DpiGetSystemMetrics(SM_CYCAPTION, dpi),
+                              PlatformFontLineHeight(GetAppFont()) + UiScalePxForDpi(dpi, 12));
+        int lane = GetAppScrollbarWidth(dpi);
+        Point close = {frame.Right() - (origin.x - frame.x) - lane + lane / 2, origin.y - height / 2};
+        utassert(SendMessageW(window.hwnd, WM_NCHITTEST, 0, MAKELPARAM(close.x, close.y)) == HTCLOSE);
+        utassert(scroll->lastBounds.y >= 0 && scroll->lastBounds.Bottom() <= HwndClientRect(window.hwnd).dy);
+        Rect before = scroll->lastBounds;
+        for (int i = 0; i < 20; i++) scroll->ScrollTo((i & 1) ? 0 : scroll->MaxScrollY());
+        utassert(scroll->lastBounds == before);
+        window.Destroy();
+    }
+}
+#endif
 
 void ToggleKeyboardHelp(const KeyboardHelpArgs& args) {
     if (gKeyboardHelpWnd) {
@@ -558,7 +543,6 @@ void ToggleKeyboardHelp(const KeyboardHelpArgs& args) {
     w->onClose = MkFunc1Void<WindowBase::CloseEvent*>(OnHelpClose);
     w->onDestroy = MkFunc1Void<WindowBase::DestroyEvent*>(OnHelpDestroy);
     w->onWndProc = MkFunc1Void<WindowBase::WndProcEvent*>(OnHelpWndProc);
-    w->onNcHitTest = MkMethod1<KeyboardHelpWnd, WindowBase::NcHitTestEvent*, &KeyboardHelpWnd::OnNcHitTest>(w);
     w->onKeyDown = MkFunc1Void<KeyEvent*>(OnHelpKeyDown);
     if (!w->Create(args)) {
         delete w;

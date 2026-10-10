@@ -18,6 +18,7 @@
 #include "gui/Gfx.h"
 #include "gui/GuiColors.h"
 #include "gui/VirtCtrl.h"
+#include "gui/VirtHost.h"
 #include "gui/win/TabsCtrl.h"
 
 #include "Settings.h"
@@ -407,6 +408,14 @@ bool FindWindowWnd::Create(MainWindow* mainWin) {
     return true;
 }
 
+static void AlignFindTitleClose(LabelWithClose& title, int dpi, PlatformFont* font) {
+    int lane = UiScrollbarWidth(dpi);
+    int size = std::max(lane, PlatformFontLineHeight(font));
+    int extra = size - lane;
+    title.closeBtn->idealSize = {size, size};
+    title.closeBtn->padding = Insets{extra / 2, 0, extra - extra / 2, extra};
+}
+
 void FindWindowWnd::BuildLayout() {
     int dpi = GetDpi();
     int pad = UiScalePxForDpi(dpi, kFindWinPadding);
@@ -454,8 +463,7 @@ void FindWindowWnd::BuildLayout() {
     titleRow.label->SetText(Tr("Find"));
     titleRow.closeBtn->SetTooltip(Tr("Close"));
     titleRow.closeBtn->SetFlag(vwfFocusable, true);
-    int titleSize = PlatformFontLineHeight(edit->GetFont());
-    titleRow.closeBtn->idealSize = {titleSize, titleSize};
+    AlignFindTitleClose(titleRow, dpi, edit->GetFont());
     vbox->AddChild(titleRow.box);
     titleGap = new Spacer(0, gap);
     vbox->AddChild(titleGap);
@@ -491,9 +499,8 @@ void FindWindowWnd::UpdateDpi(int dpi) {
     results->font = appFont;
     results->dpi = dpi;
     titleRow.label->font = appFont;
-    int titleSize = PlatformFontLineHeight(appFont);
-    titleRow.closeBtn->idealSize = {titleSize, titleSize};
     ApplyLabelWithCloseDpi(titleRow.label, titleRow.closeBtn, dpi);
+    AlignFindTitleClose(titleRow, dpi, appFont);
 
     int pad = UiScalePxForDpi(dpi, kFindWinPadding);
     int gap = UiScalePxForDpi(dpi, kFindWinGap);
@@ -1108,6 +1115,10 @@ void FindWindowLayout_UnitTests() {
             continue;
         }
         w->edit->SetText(StrL("persistent search"));
+        auto* rows = new ListBoxModelStrings();
+        for (int i = 0; i < 40; i++) rows->strings.Append(StrL("Scrollbar alignment result"));
+        w->results->onDrawItem = {};
+        w->results->SetModel(rows);
         for (int width : {900, 520, 1200}) {
             SetWindowPos(w->hwnd, nullptr, -10000, -10000, UiScalePx(width), UiScalePx(360),
                          SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1124,6 +1135,15 @@ void FindWindowLayout_UnitTests() {
             Rect close = w->titleRow.closeBtn->BoundsInWindow();
             utassert(title.Bottom() <= editRect.top && close.Bottom() <= editRect.top);
             utassert(close.dx >= line && close.dy >= line);
+            Rect closeContent = close;
+            const Insets& inset = w->titleRow.closeBtn->padding;
+            closeContent.SubLR(inset.left, inset.right);
+            Rect resultsBar = w->results->BoundsInWindow();
+            resultsBar.SubLR(w->results->padding.left, w->results->padding.right);
+            int lane = UiScrollbarWidth(w->GetDpi());
+            resultsBar.x = resultsBar.Right() - lane;
+            resultsBar.dx = lane;
+            utassert(closeContent.x + closeContent.dx / 2 == resultsBar.x + resultsBar.dx / 2);
             POINT titlePoint{title.x + title.dx / 2, title.y + title.dy / 2};
             MapWindowPoints(w->hwnd, nullptr, &titlePoint, 1);
             utassert(SendMessageW(w->hwnd, WM_NCHITTEST, 0, MAKELPARAM(titlePoint.x, titlePoint.y)) == HTCAPTION);

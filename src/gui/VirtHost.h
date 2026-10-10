@@ -46,6 +46,7 @@ struct VirtHost {
         // unique per kind of host; the window class is registered on demand.
         // Must stay alive for the whole run (a string literal via WStrL)
         WStr className;
+        Str title;
         Size initialSize;
         Color bgColor = kColorUnset;
         bool isRtl = false;

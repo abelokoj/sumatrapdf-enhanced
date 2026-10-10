@@ -421,10 +421,20 @@ static const FieldInfo gAnnotationsFields[] = {
      (intptr_t)"#ffff00 #8bf05d #99defa #f199d2 #e24745 #ff0000 #0000ff #000000"},
     {offsetof(Annotations, textIconColor), SettingType::Color, (intptr_t)""},
     {offsetof(Annotations, lineColor), SettingType::Color, (intptr_t)""},
+    {offsetof(Annotations, lineInteriorColor), SettingType::Color, (intptr_t)""},
+    {offsetof(Annotations, lineInteriorOpacity), SettingType::Int, 100},
     {offsetof(Annotations, polyLineColor), SettingType::Color, (intptr_t)""},
+    {offsetof(Annotations, polyLineInteriorColor), SettingType::Color, (intptr_t)""},
+    {offsetof(Annotations, polyLineInteriorOpacity), SettingType::Int, 100},
     {offsetof(Annotations, squareColor), SettingType::Color, (intptr_t)""},
+    {offsetof(Annotations, squareInteriorColor), SettingType::Color, (intptr_t)""},
+    {offsetof(Annotations, squareInteriorOpacity), SettingType::Int, 100},
     {offsetof(Annotations, circleColor), SettingType::Color, (intptr_t)""},
+    {offsetof(Annotations, circleInteriorColor), SettingType::Color, (intptr_t)""},
+    {offsetof(Annotations, circleInteriorOpacity), SettingType::Int, 100},
     {offsetof(Annotations, polygonColor), SettingType::Color, (intptr_t)""},
+    {offsetof(Annotations, polygonInteriorColor), SettingType::Color, (intptr_t)""},
+    {offsetof(Annotations, polygonInteriorOpacity), SettingType::Int, 100},
     {offsetof(Annotations, inkColor), SettingType::Color, (intptr_t)"#000000"},
     {offsetof(Annotations, inkColors), SettingType::String,
      (intptr_t)"#000000 #2563eb #dc2626 #facc15 #22c55e #a855f7 #ec4899 #ffffff"},
@@ -438,13 +448,15 @@ static const FieldInfo gAnnotationsFields[] = {
 };
 static const StructInfo gAnnotationsInfo = {
     sizeof(Annotations),
-    33,
+    43,
     gAnnotationsFields,
     "InkBallpoint\0InkFountain\0InkBrush\0InkPencil\0InkHighlighter\0HighlightColor\0UnderlineColor\0SquigglyColor\0Str"
     "ikeOutColor\0FreeTextColor\0FreeTextBackgroundColor\0FreeTextOpacity\0FreeTextFontFamily\0FreeTextFontStyle\0FreeT"
-    "extSize\0FreeTextBorderWidth\0FreeTextAlignment\0PresetColors\0TextIconColor\0LineColor\0PolyLineColor\0SquareColo"
-    "r\0CircleColor\0PolygonColor\0InkColor\0InkColors\0InkBorderWidth\0StampColor\0CaretColor\0FileAttachmentColor\0Te"
-    "xtIconType\0DefaultAuthor\0SignatureImage",
+    "extSize\0FreeTextBorderWidth\0FreeTextAlignment\0PresetColors\0TextIconColor\0LineColor\0LineInteriorColor\0LineIn"
+    "teriorOpacity\0PolyLineColor\0PolyLineInteriorColor\0PolyLineInteriorOpacity\0SquareColor\0SquareInteriorColor\0Sq"
+    "uareInteriorOpacity\0CircleColor\0CircleInteriorColor\0CircleInteriorOpacity\0PolygonColor\0PolygonInteriorColor\0"
+    "PolygonInteriorOpacity\0InkColor\0InkColors\0InkBorderWidth\0StampColor\0CaretColor\0FileAttachmentColor\0TextIcon"
+    "Type\0DefaultAuthor\0SignatureImage",
     "saved settings for this pen type\0saved settings for this pen type\0saved settings for this pen type\0saved "
     "settings for this pen type\0saved settings for this pen type\0color of newly created highlight annotations. Use "
     "an #aarrggbb value to set default opacity (00 = transparent, FF = opaque); #rrggbb is fully opaque\0color of "
@@ -458,23 +470,29 @@ static const StructInfo gAnnotationsInfo = {
     "points\0how text is aligned in newly created free text annotations (Text Alignment in the compact property row): "
     "left, center or right. Right-to-left scripts (Arabic, Hebrew, Persian) want right\0colors offered by the "
     "drop-down on the annotation toolbar's buttons, separated by space. Picking one sets the color of new annotations "
-    "of that type. The color a button currently makes annotations in is added when it is missing\0color of newly "
-    "created text (sticky note) annotations\0color of newly created line annotations. If not set, the PDF engine's "
-    "default (red) is used\0color of newly created polyline annotations. If not set, the PDF engine's default (red) is "
-    "used\0color of newly created square annotations. If not set, the PDF engine's default (red) is used\0color of "
-    "newly created circle annotations. If not set, the PDF engine's default (red) is used\0color of newly created "
-    "polygon annotations. If not set, the PDF engine's default (red) is used\0color of newly created ink annotations, "
-    "as #aarrggbb: the alpha is how translucent the stroke is (00 = transparent, FF = opaque), so the color is exactly "
-    "what ends up on the page\0colors offered by the ink button's drop-down, separated by space. Use #aarrggbb values: "
-    "the alpha is the stroke's opacity. The color ink currently draws in is added when it is missing\0width of the "
-    "stroke of new ink annotations, in points\0color of newly created stamp annotations. If not set, the PDF engine's "
-    "default (red) is used\0color of newly created caret annotations. If not set, the PDF engine's default (red) is "
-    "used\0color of newly created file attachment annotations. If not set, the PDF engine's default (red) is "
-    "used\0icon shown for text (sticky note) annotations: comment, help, insert, key, new paragraph, note or "
-    "paragraph. If not set, note is used\0author recorded on newly created annotations. If not set, the Windows user "
-    "name is used; set it to (none) to leave the author out entirely\0image (e.g. a transparent .png of your "
-    "signature) that Sign With Image stamps on the page. If not set, or the file is missing, Sign With Image asks for "
-    "an image",
+    "of that type. Use the palette add button or right-click a swatch to remove or pin a color\0color of newly created "
+    "text (sticky note) annotations\0color of newly created line annotations. If not set, the PDF engine's default "
+    "(red) is used\0fill color of newly created line annotations; unset means no fill\0fill opacity of newly created "
+    "line annotations, from 0 to 100 percent\0color of newly created polyline annotations. If not set, the PDF "
+    "engine's default (red) is used\0fill color of newly created polyline annotations; unset means no fill\0fill "
+    "opacity of newly created polyline annotations, from 0 to 100 percent\0color of newly created square annotations. "
+    "If not set, the PDF engine's default (red) is used\0fill color of newly created square annotations; unset means "
+    "no fill\0fill opacity of newly created square annotations, from 0 to 100 percent\0color of newly created circle "
+    "annotations. If not set, the PDF engine's default (red) is used\0fill color of newly created circle annotations; "
+    "unset means no fill\0fill opacity of newly created circle annotations, from 0 to 100 percent\0color of newly "
+    "created polygon annotations. If not set, the PDF engine's default (red) is used\0fill color of newly created "
+    "polygon annotations; unset means no fill\0fill opacity of newly created polygon annotations, from 0 to 100 "
+    "percent\0color of newly created ink annotations, as #aarrggbb: the alpha is how translucent the stroke is (00 = "
+    "transparent, FF = opaque), so the color is exactly what ends up on the page\0colors offered by the ink button's "
+    "drop-down, separated by space. Use #aarrggbb values: the alpha is the stroke's opacity. Use the palette add "
+    "button or right-click a swatch to remove or pin a color\0width of the stroke of new ink annotations, in "
+    "points\0color of newly created stamp annotations. If not set, the PDF engine's default (red) is used\0color of "
+    "newly created caret annotations. If not set, the PDF engine's default (red) is used\0color of newly created file "
+    "attachment annotations. If not set, the PDF engine's default (red) is used\0icon shown for text (sticky note) "
+    "annotations: comment, help, insert, key, new paragraph, note or paragraph. If not set, note is used\0author "
+    "recorded on newly created annotations. If not set, the Windows user name is used; set it to (none) to leave the "
+    "author out entirely\0image (e.g. a transparent .png of your signature) that Sign With Image stamps on the page. "
+    "If not set, or the file is missing, Sign With Image asks for an image",
     false};
 
 static const FieldInfo gExternalViewerFields[] = {
@@ -1055,11 +1073,15 @@ static const FieldInfo gSettingsFields[] = {
     {offsetof(Settings, documentColorsFollowTheme), SettingType::String, (intptr_t)"off"},
     {offsetof(Settings, tocDy), SettingType::Int, 0, true},
     {offsetof(Settings, toolbarCustomLayout), SettingType::String, (intptr_t)""},
+    {offsetof(Settings, toolbarOrder), SettingType::String, (intptr_t)"", true},
+    {offsetof(Settings, toolbarAnnotationOrder), SettingType::String, (intptr_t)"", true},
     {offsetof(Settings, toolbarHiddenItems), SettingType::String, (intptr_t)""},
     {offsetof(Settings, toolbarShowReadAloud), SettingType::Bool, false},
     {offsetof(Settings, toolbarSize), SettingType::Int, 18},
     {offsetof(Settings, treeFontName), SettingType::String, (intptr_t)"automatic"},
     {offsetof(Settings, treeFontSize), SettingType::Int, 0},
+    {offsetof(Settings, pinIconStyle), SettingType::Int, 10},
+    {offsetof(Settings, colorPickerIconStyle), SettingType::Int, 8},
     {offsetof(Settings, interfaceScale), SettingType::Int, 100},
     {offsetof(Settings, uIFontFamily), SettingType::String, (intptr_t)"system"},
     {offsetof(Settings, uIFontSize), SettingType::Int, 0},
@@ -1123,6 +1145,7 @@ static const FieldInfo gSettingsFields[] = {
     {offsetof(Settings, penMaxWidth), SettingType::Float, (intptr_t)"16"},
     {offsetof(Settings, penWidthStep), SettingType::Float, (intptr_t)"0.1"},
     {offsetof(Settings, laserLifetimeSeconds), SettingType::Float, (intptr_t)"2"},
+    {offsetof(Settings, laserColors), SettingType::String, (intptr_t)"#f44336 #ffc107 #4caf50 #2196f3 #9c27b0 #ffffff"},
     {offsetof(Settings, laserWidth), SettingType::Float, (intptr_t)"8"},
     {offsetof(Settings, pinnedAnnotationTools), SettingType::Array, (intptr_t)&gPinnedAnnotationToolInfo},
     {(size_t)-1, SettingType::Comment, 0},
@@ -1152,7 +1175,7 @@ static const FieldInfo gSettingsFields[] = {
 };
 const StructInfo gSettingsInfo = {
     sizeof(Settings),
-    179,
+    184,
     gSettingsFields,
     "\0\0DefaultDisplayMode\0DefaultZoom\0DisableJavaScript\0AllowExternalImages\0EnableTeXEnhancements\0EscToExit\0Ful"
     "lPathInTitle\0InverseSearchCmdLine\0LazyLoading\0MainWindowBackground\0NoHomeTab\0HomePageSortByFrequentlyRead\0Ho"
@@ -1167,16 +1190,17 @@ const StructInfo gSettingsInfo = {
     "glePage\0SmoothScroll\0ScrollLineAmount\0SaveMemory\0PaddingAfterLastPage\0IgnoreDestinationZoom\0HighlightLinkDes"
     "tination\0CitationHoverDelay\0ReadAloudVoiceId\0ReadAloudSpeed\0ReadingAutoScrollSpeed\0ReadingBar\0FastScrollOver"
     "Scrollbar\0PreventSleepInFullscreen\0MinTabWidth\0TabWidth\0Theme\0HelpTheme\0LastLightTheme\0LastDarkTheme\0Docum"
-    "entColorsFollowTheme\0TocDy\0ToolbarCustomLayout\0ToolbarHiddenItems\0ToolbarShowReadAloud\0ToolbarSize\0TreeFontN"
-    "ame\0TreeFontSize\0InterfaceScale\0UIFontFamily\0UIFontSize\0DisableAntiAlias\0EngineeringDrawingEnhance\0DisableA"
-    "utoLinks\0UseSysColors\0UseTabs\0SelectionToolbar\0SelectionToolbarLayout\0TabsMru\0CtrlTabSimple\0ZoomLevels\0Zoo"
-    "mIncrement\0\0FixedPageUI\0\0EBookUI\0\0ComicBookUI\0\0ImageUI\0\0ChmUI\0\0MarkdownUI\0\0HtmlUI\0\0ClaudeCode\0\0G"
-    "rokBuild\0\0CodexBuild\0\0AntiGravity\0\0AIChatSidebarDx\0\0TranslateToLang\0TranslateFromLang\0TranslateEngine\0"
-    "\0Annotations\0\0ExternalViewers\0\0ForwardSearch\0\0PrinterDefaults\0\0Fullscreen\0\0SelectionHandlers\0\0TextSni"
-    "ppets\0\0Shortcuts\0\0PenMinWidth\0PenMaxWidth\0PenWidthStep\0LaserLifetimeSeconds\0LaserWidth\0PinnedAnnotationTo"
-    "ols\0\0Themes\0\0TabGroups\0\0CustomScreenDPI\0\0\0DefaultPasswords\0UiLanguage\0VersionToSkip\0WindowState\0Windo"
-    "wPos\0SearchUIWindowPos\0HelpWindowPos\0FileStates\0SessionData\0ReopenOnce\0TimeOfLastUpdateCheck\0OpenCountWeek"
-    "\0PropWinPos\0CheckForUpdates\0\0",
+    "entColorsFollowTheme\0TocDy\0ToolbarCustomLayout\0ToolbarOrder\0ToolbarAnnotationOrder\0ToolbarHiddenItems\0Toolba"
+    "rShowReadAloud\0ToolbarSize\0TreeFontName\0TreeFontSize\0PinIconStyle\0ColorPickerIconStyle\0InterfaceScale\0UIFon"
+    "tFamily\0UIFontSize\0DisableAntiAlias\0EngineeringDrawingEnhance\0DisableAutoLinks\0UseSysColors\0UseTabs\0Selecti"
+    "onToolbar\0SelectionToolbarLayout\0TabsMru\0CtrlTabSimple\0ZoomLevels\0ZoomIncrement\0\0FixedPageUI\0\0EBookUI\0\0"
+    "ComicBookUI\0\0ImageUI\0\0ChmUI\0\0MarkdownUI\0\0HtmlUI\0\0ClaudeCode\0\0GrokBuild\0\0CodexBuild\0\0AntiGravity\0"
+    "\0AIChatSidebarDx\0\0TranslateToLang\0TranslateFromLang\0TranslateEngine\0\0Annotations\0\0ExternalViewers\0\0Forw"
+    "ardSearch\0\0PrinterDefaults\0\0Fullscreen\0\0SelectionHandlers\0\0TextSnippets\0\0Shortcuts\0\0PenMinWidth\0PenMa"
+    "xWidth\0PenWidthStep\0LaserLifetimeSeconds\0LaserColors\0LaserWidth\0PinnedAnnotationTools\0\0Themes\0\0TabGroups"
+    "\0\0CustomScreenDPI\0\0\0DefaultPasswords\0UiLanguage\0VersionToSkip\0WindowState\0WindowPos\0SearchUIWindowPos\0H"
+    "elpWindowPos\0FileStates\0SessionData\0ReopenOnce\0TimeOfLastUpdateCheck\0OpenCountWeek\0PropWinPos\0CheckForUpdat"
+    "es\0\0",
     "\0\0default layout of pages. valid values: automatic, single page, facing, book view, continuous, continuous "
     "facing, continuous book view, page aspect. page aspect (3.7+): first open of a PDF, XPS, DjVu or PostScript file "
     "uses page 1 — taller than wide is continuous + fit width, wider than tall is single page + fit page; a remembered "
@@ -1275,26 +1299,29 @@ const StructInfo gSettingsInfo = {
     "the sidebar are visible, this is the height of the bookmarks (table of contents) part, in screen pixels\0the "
     "toolbar's built-in buttons, in the order you want them, e.g. CmdOpenFile CmdPrint PageInfo | CmdFindFirst. Leave "
     "a button out to hide it. | is a separator and PageInfo is the page number box. Empty (the default) means the "
-    "standard layout. Buttons you added yourself (see Shortcuts) still come last\0hidden toolbar command names "
-    "separated by spaces; PageInfo hides the page number group. Pinned annotation presets are independent. Use the "
-    "toolbar dropdown to show or hide items\0if true, the toolbar has a Read Aloud button (with a drop-down for voice, "
-    "speed and what to read). Read Aloud is still reachable from the Read Aloud menu when this is false\0size of the "
-    "toolbar icons in pixels at 100% display scaling (8-64); the toolbar itself is a few pixels taller\0font name for "
-    "bookmarks and favorites tree views. automatic means Windows default\0font size for bookmarks and favorites tree "
-    "views, in pixels; 0 means the Windows default. Not scaled by the display scaling\0overall interface scale, from "
-    "50 to 250 percent; document zoom is independent\0interface font: system, Manrope, Pretendard Std or Public "
-    "Sans\0overrides the font size used for menus, toolbar and dialogs, in pixels; 0 means the Windows default. Not "
-    "scaled by the display scaling\0if true, render MuPDF-based documents (PDF, XPS, DjVu, EPUB etc.) without "
-    "anti-aliasing, giving sharper but jagged edges\0CAD/engineering PDF line rendering: off, auto (enhance if a CAD "
-    "drawing is detected) or on\0if true, disables auto-linking of URLs and email addresses found in PDF text\0if "
-    "true, use the Windows system colors for the document background and text. Overrides other color settings\0if "
-    "true, documents are opened in tabs instead of new windows\0if true, a small floating toolbar with selection "
-    "actions (copy, read aloud, highlight etc.) pops up after selecting text. Set to false to disable it\0which "
-    "built-in buttons the selection toolbar has and in what order, e.g. CmdCopySelection | CmdCreateAnnotHighlight. | "
-    "or Separator inserts a separator. Leave a button out to hide it. Empty (the default) is the standard set. "
-    "SelectionHandlers with SelectToolbarNameOrSvg still come last\0if true, Ctrl+Tab and Ctrl+Shift+Tab show the tab "
-    "switcher in most recently used order instead of tab-strip order\0if true, Ctrl+Tab and Ctrl+Shift+Tab immediately "
-    "switch to the next / previous tab in tab-strip order (the behavior before version 3.6) instead of showing the tab "
+    "standard layout. Buttons you added yourself (see Shortcuts) still come last\0saved order of toolbar command "
+    "icons\0saved order of annotation toolbar command icons\0hidden toolbar command names separated by spaces; "
+    "PageInfo hides the page number group. Pinned annotation presets are independent. Use the toolbar dropdown to show "
+    "or hide items\0if true, the toolbar has a Read Aloud button (with a drop-down for voice, speed and what to read). "
+    "Read Aloud is still reachable from the Read Aloud menu when this is false\0size of the toolbar icons in pixels at "
+    "100% display scaling (8-64); the toolbar itself is a few pixels taller\0font name for bookmarks and favorites "
+    "tree views. automatic means Windows default\0font size for bookmarks and favorites tree views, in pixels; 0 means "
+    "the Windows default. Not scaled by the display scaling\0pin icon design: 10 = soft outline (default), 3 = solid, "
+    "4 = round head; all use the same diagonal angle\0color picker icon design: 8 = color tiles (default), 1 = classic "
+    "palette, 2 = soft palette, 6 = palette and dropper, 5 = color wheel\0overall interface scale, from 50 to 250 "
+    "percent; document zoom is independent\0interface font: system, Manrope, Pretendard Std or Public Sans\0overrides "
+    "the font size used for menus, toolbar and dialogs, in pixels; 0 means the Windows default. Not scaled by the "
+    "display scaling\0if true, render MuPDF-based documents (PDF, XPS, DjVu, EPUB etc.) without anti-aliasing, giving "
+    "sharper but jagged edges\0CAD/engineering PDF line rendering: off, auto (enhance if a CAD drawing is detected) or "
+    "on\0if true, disables auto-linking of URLs and email addresses found in PDF text\0if true, use the Windows system "
+    "colors for the document background and text. Overrides other color settings\0if true, documents are opened in "
+    "tabs instead of new windows\0if true, a small floating toolbar with selection actions (copy, read aloud, "
+    "highlight etc.) pops up after selecting text. Set to false to disable it\0which built-in buttons the selection "
+    "toolbar has and in what order, e.g. CmdCopySelection | CmdCreateAnnotHighlight. | or Separator inserts a "
+    "separator. Leave a button out to hide it. Empty (the default) is the standard set. SelectionHandlers with "
+    "SelectToolbarNameOrSvg still come last\0if true, Ctrl+Tab and Ctrl+Shift+Tab show the tab switcher in most "
+    "recently used order instead of tab-strip order\0if true, Ctrl+Tab and Ctrl+Shift+Tab immediately switch to the "
+    "next / previous tab in tab-strip order (the behavior before version 3.6) instead of showing the tab "
     "switcher\0sequence of zoom levels when zooming in/out; values must lie between 8.33 and 1000000 (the largest one "
     "becomes the maximum zoom, which is 6400 by default)\0how much a single zoom in / zoom out step changes the zoom, "
     "as a percentage of the current zoom level. If 0 or negative, zooming steps through ZoomLevels "
@@ -1317,21 +1344,21 @@ const StructInfo gSettingsInfo = {
     "information](https://www.sumatrapdfreader.org/docs/Customize-search-translation-services)\0\0predefined text "
     "inserted as a free text annotation from the context menu or the command palette\0\0custom keyboard "
     "shortcuts\0\0minimum pen width in PDF points\0maximum pen width in PDF points\0pen width increment in PDF "
-    "points\0temporary laser stroke lifetime in seconds (0.1 to 120)\0laser width in screen pixels at 100% DPI (0.1 to "
-    "32), independent of pen width\0favorite annotation tool, color and width combinations\0\0color themes\0\0saved "
-    "groups of tabs\0\0actual resolution of the main screen in DPI, used to show documents at their physical size; if "
-    "0 or negative, the resolution reported by Windows is used\0\0You're not expected to change those manually\0a "
-    "whitespace separated list of passwords to try when opening a password protected document (passwords containing "
-    "spaces must be quoted)\0[ISO code](langs.html) of the current UI language\0SumatraPDF won't offer to update to "
-    "this version again\0default state of the window. 1 is normal, 2 is maximized, 3 is fullscreen, 4 is "
-    "minimized\0default position (x, y) and size (width, height) of the window\0position/size of the floating find "
-    "window (see SearchUIFloating)\0position/size of the in-app Help: Manual window\0history of opened files, most "
-    "recently used first. A closed file stays here until it drops off the list or the history is cleared\0windows and "
-    "tabs still open when SumatraPDF was last closed; reopened at startup if RestoreSession is true\0data required for "
-    "reloading documents after an auto-update\0data required to determine when SumatraPDF last checked for "
-    "updates\0value required to determine recency for the OpenCount value in FileStates\0position of the document "
-    "properties window\0if true, check once a day whether an update is available\0\0Settings below are not recognized "
-    "by the current version",
+    "points\0temporary laser stroke lifetime in seconds (0.1 to 120)\0colors offered in the laser pointer palette, "
+    "separated by spaces\0laser width in screen pixels at 100% DPI (0.1 to 32), independent of pen width\0favorite "
+    "annotation tool, color and width combinations\0\0color themes\0\0saved groups of tabs\0\0actual resolution of the "
+    "main screen in DPI, used to show documents at their physical size; if 0 or negative, the resolution reported by "
+    "Windows is used\0\0You're not expected to change those manually\0a whitespace separated list of passwords to try "
+    "when opening a password protected document (passwords containing spaces must be quoted)\0[ISO code](langs.html) "
+    "of the current UI language\0SumatraPDF won't offer to update to this version again\0default state of the window. "
+    "1 is normal, 2 is maximized, 3 is fullscreen, 4 is minimized\0default position (x, y) and size (width, height) of "
+    "the window\0position/size of the floating find window (see SearchUIFloating)\0position/size of the in-app Help: "
+    "Manual window\0history of opened files, most recently used first. A closed file stays here until it drops off the "
+    "list or the history is cleared\0windows and tabs still open when SumatraPDF was last closed; reopened at startup "
+    "if RestoreSession is true\0data required for reloading documents after an auto-update\0data required to determine "
+    "when SumatraPDF last checked for updates\0value required to determine recency for the OpenCount value in "
+    "FileStates\0position of the document properties window\0if true, check once a day whether an update is "
+    "available\0\0Settings below are not recognized by the current version",
     false};
 static const FieldInfo gTheme_1_Fields[] = {
     {offsetof(Theme, name), SettingType::String, (intptr_t)""},

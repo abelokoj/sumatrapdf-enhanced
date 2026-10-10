@@ -57,7 +57,14 @@ void LitDoc_UnitTests();
 void MobiDoc_UnitTests();
 void PagePosition_UnitTests();
 void DisplayModelZoom_UnitTests();
+void DisplayModelScroll_UnitTests();
+void ToolbarReorder_UnitTests();
+void AppSettings_UnitTestsShapeDefaults();
+bool ChangeColor_UnitTestsOpacity();
+bool AnnotEditToolbar_UnitTestsOpacity();
+extern void KeyboardHelpLayout_UnitTests();
 void Vocabulary_UnitTests();
+void Vocabulary_UnitTestsDeckIndex();
 void PlatformFont_UnitTestsMeasure();
 bool OfflineDictionary_UnitTests();
 void DictionarySpeech_UnitTests();
@@ -71,6 +78,8 @@ void SimpleLogTest();
 
 void CommandPaletteModel_UnitTests();
 void TextSelection_UnitTests();
+void Canvas_UnitTestsTextSelect();
+void Canvas_UnitTestsLasso();
 void EngineDjvuDec_UnitTests();
 void Layout_UnitTests();
 void VirtCtrl_UnitTests();
@@ -131,6 +140,7 @@ bool EngineMupdf_UnitTestMergeEBookUI();
 bool EngineMupdf_UnitTestPageLabels();
 bool Annotation_UnitTestInkRoundtrip();
 bool Annotation_UnitTestFontRoundtrip();
+bool Annotation_UnitTestShapeOpacity();
 bool Accelerators_UnitTestFolderNavIsSafe();
 bool Accelerators_UnitTestTreeTakesLetters();
 bool Accelerators_UnitTestCreateAnnotEdit();
@@ -517,6 +527,80 @@ static void SvgTextIcon_UnitTests() {
     }
 }
 
+static void PinIconStyles_UnitTests() {
+    Settings* saved = gSettings;
+    gSettings = NewSettings({});
+    defer {
+        DeleteSettings(gSettings);
+        gSettings = saved;
+    };
+    utassert(gSettings->pinIconStyle == (int)PinIconStyle::Soft);
+    Str defaultSvg = Str(GetPinIconSvg());
+    for (int invalid : {-1, 0, 5, 99}) {
+        Settings* prefs = NewSettings(fmt("PinIconStyle = %d\n", invalid));
+        utassert(prefs->pinIconStyle == (int)PinIconStyle::Soft);
+        DeleteSettings(prefs);
+        gSettings->pinIconStyle = invalid;
+        utassert(str::Eq(Str(GetPinIconSvg()), defaultSvg));
+    }
+    for (int size : {16, 24, 48}) {
+        for (Color foreground : {kColBlack, kColWhite}) {
+            Pixmap* previous = nullptr;
+            for (PinIconStyle style : {PinIconStyle::Solid, PinIconStyle::Round, PinIconStyle::Soft}) {
+                gSettings->pinIconStyle = (int)style;
+                Str encoded = SerializeSettings(gSettings, {});
+                Settings* reopened = NewSettings(encoded);
+                utassert(reopened->pinIconStyle == (int)style);
+                DeleteSettings(reopened);
+                str::Free(encoded);
+                Pixmap* px = GetCachedPixmapForSvg(Str(GetPinIconSvg()), size, size, foreground);
+                utassert(px && px->width == size && px->height == size);
+                utassert(CountPaintedPixels(px) > 0);
+                if (previous && px) utassert(memcmp(px->data, previous->data, (size_t)px->stride * size) != 0);
+                previous = px;
+            }
+        }
+    }
+    gSettings->pinIconStyle = (int)PinIconStyle::Soft;
+    utassert(str::Eq(Str(GetPinIconSvg()), defaultSvg));
+}
+
+static void ColorPickerIcons_UnitTests() {
+    Settings* saved = gSettings;
+    gSettings = NewSettings({});
+    defer {
+        DeleteSettings(gSettings);
+        gSettings = saved;
+    };
+    utassert(gSettings->colorPickerIconStyle == (int)ColorPickerIconStyle::Tiles);
+    Str defaultSvg = Str(GetColorPickerIconSvg());
+    Settings* invalid = NewSettings(StrL("ColorPickerIconStyle = 99\n"));
+    utassert(invalid->colorPickerIconStyle == (int)ColorPickerIconStyle::Tiles);
+    DeleteSettings(invalid);
+    for (int size : {16, 24, 48}) {
+        for (Color fg : {kColBlack, kColWhite}) {
+            Vec<Pixmap*> rendered;
+            for (ColorPickerIconStyle style :
+                 {ColorPickerIconStyle::Tiles, ColorPickerIconStyle::Classic, ColorPickerIconStyle::Soft,
+                  ColorPickerIconStyle::Dropper, ColorPickerIconStyle::Wheel}) {
+                gSettings->colorPickerIconStyle = (int)style;
+                Str encoded = SerializeSettings(gSettings, {});
+                Settings* reopened = NewSettings(encoded);
+                utassert(reopened->colorPickerIconStyle == (int)style);
+                DeleteSettings(reopened);
+                str::Free(encoded);
+                Pixmap* px = GetCachedPixmapForSvg(Str(GetColorPickerIconSvg()), size, size, fg);
+                utassert(px && px->width == size && px->height == size && CountPaintedPixels(px) > 0);
+                for (auto* previous : rendered)
+                    utassert(memcmp(px->data, previous->data, (size_t)px->stride * size) != 0);
+                VecAppend(rendered, px);
+            }
+        }
+    }
+    gSettings->colorPickerIconStyle = 99;
+    utassert(str::Eq(Str(GetColorPickerIconSvg()), defaultSvg));
+}
+
 static void ParseTip_UnitTests() {
     // issue #5752: brackets in filenames must not hang
     ParseTipExpectPlainContains(StrL("Loading Apocalypse Bringer Mynoghra_01 [CIW].pdf ..."), StrL("[CIW]"));
@@ -633,6 +717,60 @@ int RunAppUnitTests(bool forAi) {
     }
     printf("Running unit tests\n");
 #if IS_DEBUG
+    WCHAR shapeRenderOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_SHAPE_RENDER_ONLY", shapeRenderOnly, dimof(shapeRenderOnly))) {
+        Settings* savedSettings = gSettings;
+        gSettings = NewSettings({});
+        utassert(Annotation_UnitTestShapeOpacity());
+        DeleteSettings(gSettings);
+        gSettings = savedSettings;
+        return utassert_print_results();
+    }
+    WCHAR opacityOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_OPACITY_ONLY", opacityOnly, dimof(opacityOnly))) {
+        Settings* savedSettings = gSettings;
+        gSettings = NewSettings({});
+        if (!ThemeGetCount()) CreateThemeCommands();
+        SetCurrentThemeFromSettings();
+        utassert(ChangeColor_UnitTestsOpacity());
+        utassert(AnnotEditToolbar_UnitTestsOpacity());
+        DeleteSettings(gSettings);
+        gSettings = savedSettings;
+        return utassert_print_results();
+    }
+    WCHAR shapeOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_SHAPE_DEFAULTS_ONLY", shapeOnly, dimof(shapeOnly))) {
+        AppSettings_UnitTestsShapeDefaults();
+        return utassert_print_results();
+    }
+    WCHAR toolbarDragOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_TOOLBAR_REORDER_ONLY", toolbarDragOnly, dimof(toolbarDragOnly))) {
+        Settings* savedSettings = gSettings;
+        gSettings = NewSettings({});
+        if (!ThemeGetCount()) CreateThemeCommands();
+        SetCurrentThemeFromSettings();
+        ToolbarReorder_UnitTests();
+        DeleteSettings(gSettings);
+        gSettings = savedSettings;
+        return utassert_print_results();
+    }
+    WCHAR pdfScrollOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_PDF_SCROLL_ONLY", pdfScrollOnly, dimof(pdfScrollOnly))) {
+        Settings* savedSettings = gSettings;
+        gSettings = NewSettings({});
+        if (!ThemeGetCount()) CreateThemeCommands();
+        SetCurrentThemeFromSettings();
+        utassert(Canvas_UnitTestScrollLineAmount());
+        DisplayModelScroll_UnitTests();
+        DeleteSettings(gSettings);
+        gSettings = savedSettings;
+        return utassert_print_results();
+    }
+    WCHAR vocabularyOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_VOCABULARY_DECKS_ONLY", vocabularyOnly, dimof(vocabularyOnly))) {
+        Vocabulary_UnitTestsDeckIndex();
+        return utassert_print_results();
+    }
     WCHAR performanceOnly[2]{};
     if (GetEnvironmentVariableW(L"SUMATRA_PERFORMANCE_ONLY", performanceOnly, dimof(performanceOnly))) {
         utassert(AppSettings_UnitTestsFontStartup());
@@ -667,6 +805,7 @@ int RunAppUnitTests(bool forAi) {
     WCHAR learningOnly[2]{};
     WCHAR editorOnly[2]{};
     if (GetEnvironmentVariableW(L"SUMATRA_EDITOR_UI_ONLY", editorOnly, dimof(editorOnly))) {
+        utassert(AnnotEditToolbar_UnitTestsFontRefresh());
         utassert(ImageEdit_UnitTestsUi());
         utassert(CpdfBookmarks_UnitTestsUi());
         return utassert_print_results();
@@ -702,6 +841,20 @@ int RunAppUnitTests(bool forAi) {
         UninstallerSelfDeleteTests();
         return utassert_print_results();
     }
+    WCHAR selectionOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_SELECTION_TOOLS_ONLY", selectionOnly, dimof(selectionOnly))) {
+        Settings* savedSettings = gSettings;
+        gSettings = NewSettings({});
+        if (!ThemeGetCount()) CreateThemeCommands();
+        SetCurrentThemeFromSettings();
+        TextSelection_UnitTests();
+        Canvas_UnitTestsTextSelect();
+        Canvas_UnitTestsLasso();
+        DeleteSettings(gSettings);
+        gSettings = savedSettings;
+        if (gSettings) SetCurrentThemeFromSettings();
+        return utassert_print_results();
+    }
     WCHAR popupsOnly[2]{};
     if (GetEnvironmentVariableW(L"SUMATRA_TOOLBAR_POPUPS_ONLY", popupsOnly, dimof(popupsOnly))) {
         VirtCtrl_UnitTests();
@@ -711,6 +864,9 @@ int RunAppUnitTests(bool forAi) {
         RefHoverPopup_UnitTests();
         SelectionToolbar_UnitTests();
         ToolbarLayout_UnitTests();
+        PinIconStyles_UnitTests();
+        ColorPickerIcons_UnitTests();
+        KeyboardHelpLayout_UnitTests();
         return utassert_print_results();
     }
     WCHAR settingsOnly[2]{};
@@ -764,7 +920,10 @@ int RunAppUnitTests(bool forAi) {
 
     ParseTip_UnitTests();
     SvgTextIcon_UnitTests();
+    PinIconStyles_UnitTests();
+    ColorPickerIcons_UnitTests();
 #if IS_DEBUG
+    KeyboardHelpLayout_UnitTests();
     TextSelection_UnitTests();
     EngineDjvuDec_UnitTests();
     Layout_UnitTests();

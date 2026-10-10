@@ -636,12 +636,25 @@ void VirtRoot::ForgetTops() {
     }
 }
 
+static bool VisibleLayoutHasCtrl(ILayout* layout, VirtCtrl* control) {
+    if (!layout || layout->GetVisibility() != Visibility::Visible) return false;
+    if (layout->AsVirtCtrl() == control) return true;
+    for (int i = 0; i < layout->LayoutChildCount(); i++) {
+        if (VisibleLayoutHasCtrl(layout->LayoutChildAt(i), control)) return true;
+    }
+    return false;
+}
+
 void VirtRoot::SetTops(const Vec<VirtCtrl*>& newTops) {
     ReportIf(owned);
     auto retained = [&newTops](VirtCtrl* control) {
         for (VirtCtrl* w = control; w; w = w->parent) {
             if (w->GetVisibility() != Visibility::Visible) return false;
-            if (VecFind(newTops, w) >= 0) return true;
+            // ScrollBox owns a layout tree whose controls need not have a
+            // virtual parent. A refresh must retain those visible descendants.
+            for (VirtCtrl* top : newTops) {
+                if (VisibleLayoutHasCtrl(top, w)) return true;
+            }
         }
         return false;
     };
@@ -799,16 +812,13 @@ void VirtRoot::SetFocus(VirtCtrl* w) {
     }
 }
 
-static void CollectFocusable(VirtCtrl* w, Vec<VirtCtrl*>& out) {
-    if (!w || !w->IsHitTestable()) {
-        return;
+static void CollectFocusable(ILayout* layout, Vec<VirtCtrl*>& out) {
+    if (!layout || layout->GetVisibility() != Visibility::Visible) return;
+    if (auto* w = layout->AsVirtCtrl()) {
+        if (!w->IsHitTestable()) return;
+        if (w->HasFlag(vwfFocusable) && !w->HasFlag(vwfSkipTabStop)) VecAppend(out, w);
     }
-    if (w->HasFlag(vwfFocusable) && !w->HasFlag(vwfSkipTabStop)) {
-        VecAppend(out, w);
-    }
-    for (VirtCtrl* c : w->children) {
-        CollectFocusable(c, out);
-    }
+    for (int i = 0; i < layout->LayoutChildCount(); i++) CollectFocusable(layout->LayoutChildAt(i), out);
 }
 
 // a win32 control is in the ring if it says so (WS_TABSTOP) and can take focus
@@ -1051,6 +1061,7 @@ bool VirtRoot::OnMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT& res) {
             return false;
 
         case WM_CAPTURECHANGED: {
+            ClearPressed();
             // someone else took the mouse (or the window lost it): whoever was
             // tracking it has to stop, otherwise it keeps reacting to plain
             // mouse moves. Our own ReleaseCapture() clears `captured` first,
@@ -1102,6 +1113,18 @@ bool VirtRoot::OnMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT& res) {
             if (!wasPressed) {
                 return false;
             }
+            bool menuOffered = false;
+            if (ev.button == 1 && !wasCaptured) {
+                for (VirtCtrl* w = target; w; w = w->parent) {
+                    if (w->onContextMenu.IsValid()) {
+                        menuOffered = true;
+                        break;
+                    }
+                }
+                if (menuOffered && BubbleMouse(target, ev, &VirtCtrl::OnContextMenu)) {
+                    return true;
+                }
+            }
             bool didHandle;
             if (wasCaptured) {
                 didHandle = target->OnMouseUp(ev);
@@ -1109,7 +1132,8 @@ bool VirtRoot::OnMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT& res) {
             } else {
                 didHandle = BubbleMouse(target, ev, &VirtCtrl::OnMouseUp);
             }
-            return didHandle;
+            // DefWindowProc would synthesize and offer the context event again.
+            return didHandle || menuOffered;
         }
 
         case WM_LBUTTONDBLCLK: {
@@ -1146,17 +1170,30 @@ bool VirtRoot::OnMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT& res) {
 
         case WM_CONTEXTMENU: {
             POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            VirtCtrl* target = nullptr;
             if (pt.x == -1 && pt.y == -1) {
-                return false;
+                target = focused;
+                if (!target) {
+                    return false;
+                }
+                Rect visible = target->VisibleRectInWindow();
+                if (visible.IsEmpty()) {
+                    return false;
+                }
+                ptWindow = {visible.x + visible.dx / 2, visible.y + visible.dy / 2};
+                Rect b = target->BoundsInWindow();
+                ptLocal = {ptWindow.x - b.x, ptWindow.y - b.y};
+            } else {
+                ScreenToClient(hwnd, &pt);
+                ptWindow = {pt.x, pt.y};
+                target = VirtAtPoint(this, ptWindow, &ptLocal);
             }
-            ScreenToClient(hwnd, &pt);
-            ptWindow = {pt.x, pt.y};
-            VirtCtrl* target = VirtAtPoint(this, ptWindow, &ptLocal);
             if (!target) {
                 return false;
             }
             VirtMouseEvent ev;
-            FillMouseEvent(ev, target, ptWindow, ptLocal, false, wp);
+            FillMouseEvent(ev, target, ptWindow, ptLocal, false);
+            ev.button = 1;
             return BubbleMouse(target, ev, &VirtCtrl::OnContextMenu);
         }
 
@@ -3362,7 +3399,7 @@ void VirtSlider::OnMouseLeave() {
 
 void VirtSlider::OnCaptureLost() {
     adjusting = false;
-    SetValue(committed, false);
+    SetValue(committed, true);
 }
 
 //--- VirtSpacer
@@ -3586,6 +3623,7 @@ bool VirtTreeOnMessage(HWND hwnd, VirtRoot* root, UINT msg, WPARAM wp, LPARAM lp
         }
         return false;
     }
+    if (msg == WM_CAPTURECHANGED) return root->OnMessage(msg, wp, lp, res);
     if (IsVirtMouseMsg(msg)) {
         // WM_CONTEXTMENU and the wheel come in screen coordinates, which
         // VirtRoot::OnMessage converts itself

@@ -49,6 +49,7 @@ void ToolbarSetFindExpanded(MainWindow*, bool expanded, int minWidth = 0, int pr
 Rect ToolbarFindScreenRect(MainWindow*);
 bool FocusToolbar(MainWindow*, bool backwards = false);
 void TogglePdfAnnotationsToolbar(MainWindow*);
+void ShowLassoToolbarActions(MainWindow*);
 void EnablePdfAnnotationsToolbar(MainWindow*);
 int ToolbarIconSize(int dpi = 0);
 
@@ -101,9 +102,9 @@ bool ToolbarHoverDropdownContainsScreenPoint(MainWindow*, Point);
 // thicknessLabel names the slider (Thickness when empty), minThickness is its lowest width
 void ShowAnnotColorPopup(MainWindow*, Rect anchor, Color current, bool withNone, Str label, const Func1<Color>& onPick,
                          float thickness = -1, const Func1<float>& onThickness = {}, Str thicknessLabel = {},
-                         float minThickness = 0.1f);
+                         float minThickness = 0.1f, bool forAnnotEditor = false);
 void ShowAnnotSliderPopup(MainWindow*, Rect anchor, Str label, int value, int minVal, int maxVal,
-                          const Func1<int>& onValue);
+                          const Func1<int>& onValue, bool forAnnotEditor = false);
 // for tests: the swatches of the drop-down that is up, if any
 TempStr AnnotColorPopupStateTemp();
 
@@ -123,6 +124,7 @@ constexpr int kHideOverlayToolbarTimerId = 0x101;
 // the hover drop-down's timers, also on the toolbar's own host
 constexpr int kOpenHoverDropdownTimerId = 0x102;
 constexpr int kCloseHoverDropdownTimerId = 0x103;
+constexpr int kToolbarDragScrollTimerId = 0x104;
 
 // one row or cell of the drop-down that is up, for the -dbg-control dump
 struct ToolbarHoverItemState {
@@ -171,6 +173,14 @@ struct ToolbarVirt {
     PlatformFont* platformFont = nullptr;
     int iconSize = 0;
     int rowDy = 0;
+    VirtCtrl* dragItem = nullptr;
+    VirtCtrl* dragTarget = nullptr;
+    Point dragStart;
+    Point dragPoint;
+    Rect dragMarker;
+    bool dragActive = false;
+    bool dragAfter = false;
+    int dragScroll = 0;
 
     // buttons with a hover drop-down, and the one currently open (if any)
     Vec<ToolbarHoverReg> hoverRegs;

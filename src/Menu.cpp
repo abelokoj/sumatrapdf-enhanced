@@ -40,6 +40,7 @@
 #include "HomePage.h"
 #include "Translations.h"
 #include "Toolbar.h"
+#include "SvgIcons.h"
 #include "PagePosition.h"
 #include "resource.h"
 #include "DarkMode.h"
@@ -69,6 +70,7 @@ struct MenuOwnerDrawInfo {
     HBITMAP hbmpChecked = nullptr;
     HBITMAP hbmpUnchecked = nullptr;
     HBITMAP hbmpItem = nullptr;
+    bool isPinAction = false;
 };
 
 constexpr UINT kMenuSeparatorID = (UINT)-13;
@@ -2246,6 +2248,7 @@ void OnAboutContextMenu(MainWindow* win, int x, int y) {
         }
     }
     MarkMenuOwnerDraw(popup);
+    SetMenuPinIcon(popup, CmdPinSelectedDocument);
     INT cmd = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, win->hwndFrame, nullptr);
     FreeMenuOwnerDrawInfoData(popup);
     DestroyMenu(popup);
@@ -2880,6 +2883,14 @@ void MarkMenuOwnerDraw(HMENU hmenu, bool /*isMenuBar*/, MenuDrawScope scope) {
     }
 }
 
+void SetMenuPinIcon(HMENU menu, UINT command) {
+    MENUITEMINFOW info{sizeof(info)};
+    info.fMask = MIIM_DATA;
+    if (GetMenuItemInfoW(menu, command, FALSE, &info) && info.dwItemData) {
+        ((MenuOwnerDrawInfo*)info.dwItemData)->isPinAction = true;
+    }
+}
+
 static int GetMenuCheckMarkCx(HWND hwnd) {
     DpiSetFromHwnd(hwnd);
     // GetSystemMetrics() already answers in pixels for the system dpi, so the
@@ -3056,6 +3067,19 @@ void MenuCustomDrawItem(HWND hwnd, DRAWITEMSTRUCT* dis) {
         gfx->DrawText(shortcutText, rc, gfxTextSingleLine | gfxTextRight, font, txtCol);
     }
 
+    if (modi->isPinAction) {
+        Rect bounds = ToRect(dis->rcItem);
+        int size = std::max(8, std::min(cxCheckMark - DpiScale(4), rcDy - 2 * padY));
+        Rect pinRect{bounds.x + (cxCheckMark - size) / 2, bounds.y + (rcDy - size) / 2, size, size};
+        if (isChecked) {
+            Rect active = pinRect;
+            active.Inflate(DpiScale(2), DpiScale(2));
+            gfx->FillRoundedRect(active, DpiScale(3), AccentColor(bgCol, 40));
+        }
+        Pixmap* pin = GetCachedPixmapForSvg(Str(GetPinIconSvg()), size, size, txtCol, bgCol);
+        if (pin) gfx->DrawPixmap(pin, pinRect);
+        return;
+    }
     constexpr int kRadioCircleDx = 6;
     if (isChecked) {
         rc = ToRect(dis->rcItem);
@@ -3283,7 +3307,7 @@ static int gMenuBarLastDismissedIdx = -1;
 static u64 gMenuBarLastDismissedTick = 0;
 
 static bool ShouldSwitchCustomMenuBarPopup(UINT vk) {
-    if (!gMenuBarPopupNav.win || !gMenuBarPopupNav.rootMenu) {
+    if (!IsMainWindowValidAndNotClosing(gMenuBarPopupNav.win) || !gMenuBarPopupNav.rootMenu) {
         return false;
     }
     if (!gMenuBarPopupNav.currentMenu || gMenuBarPopupNav.currentMenu != gMenuBarPopupNav.rootMenu) {
@@ -3319,7 +3343,7 @@ static bool ShouldSwitchCustomMenuBarPopup(UINT vk) {
 
 // check if mouse is over a different toolbar button and switch to it
 static bool ShouldSwitchMenuBarOnMouseMove() {
-    if (!gMenuBarPopupNav.win || !gMenuBarPopupNav.win->hwndMenuToolbar) {
+    if (!IsMainWindowValidAndNotClosing(gMenuBarPopupNav.win) || !gMenuBarPopupNav.win->hwndMenuToolbar) {
         return false;
     }
     HWND hwndTb = gMenuBarPopupNav.win->hwndMenuToolbar;
@@ -3567,6 +3591,7 @@ bool IsShowingMenuBarRebar(MainWindow* win) {
 }
 
 bool HandleMenuBarCommand(MainWindow* win, int cmdId) {
+    if (!IsMainWindowValidAndNotClosing(win)) return false;
     if (cmdId < kMenuBarCmdFirst || cmdId >= kMenuBarCmdLast) {
         return false;
     }
@@ -3615,6 +3640,7 @@ bool HandleMenuBarCommand(MainWindow* win, int cmdId) {
 
         int nextMenuIdx = gMenuBarPopupNav.nextMenuIdx;
         gMenuBarPopupNav = {};
+        if (!IsMainWindowValidAndNotClosing(win)) return true;
         if (nextMenuIdx == menuIdx || menuCount <= 1) {
             gMenuBarLastDismissedIdx = menuIdx;
             gMenuBarLastDismissedTick = GetTickCount64();
@@ -3687,8 +3713,40 @@ bool ActivateMenuBarByAccel(MainWindow* win, WCHAR accel) {
 
 #if IS_DEBUG
 #include "base/tests/UtAssert.h"
+#include "gui/win/TabsCtrl.h"
+
+static void MenuBarOwnerTests() {
+    MainWindow win(nullptr);
+    win.tabsCtrl = new TabsCtrl();
+    HMENU menu = CreateMenu();
+    HMENU first = CreatePopupMenu();
+    HMENU second = CreatePopupMenu();
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)first, L"First");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)second, L"Second");
+    win.menu = menu;
+    auto saved = gMenuBarPopupNav;
+    gMenuBarPopupNav.win = &win;
+    gMenuBarPopupNav.rootMenu = first;
+    gMenuBarPopupNav.currentMenu = first;
+    gMenuBarPopupNav.currentFlags = 0;
+    gMenuBarPopupNav.nextMenuIdx = 0;
+    VecAppend(gWindows, &win);
+    utassert(ShouldSwitchCustomMenuBarPopup(VK_RIGHT));
+    utassert(gMenuBarPopupNav.nextMenuIdx == 1);
+    win.isBeingClosed = true;
+    utassert(!ShouldSwitchCustomMenuBarPopup(VK_LEFT));
+    utassert(gMenuBarPopupNav.nextMenuIdx == 1);
+    VecRemove(gWindows, &win);
+    win.isBeingClosed = false;
+    utassert(!ShouldSwitchCustomMenuBarPopup(VK_LEFT));
+    utassert(gMenuBarPopupNav.nextMenuIdx == 1);
+    gMenuBarPopupNav = saved;
+    win.menu = nullptr;
+    DestroyMenu(menu);
+}
 
 void MenuOwnerDraw_UnitTests() {
+    MenuBarOwnerTests();
     Settings* saved = gSettings;
     Settings* settings = NewSettings({});
     settings->uIFontSize = 22;
@@ -3712,6 +3770,12 @@ void MenuOwnerDraw_UnitTests() {
     GetMenuItemInfoW(submenu, 0, TRUE, &info);
     auto* draw = (MenuOwnerDrawInfo*)info.dwItemData;
     utassert(draw && str::Eq(draw->text, StrL("Open")));
+    utassert(!draw->isPinAction);
+    SetMenuPinIcon(submenu, CmdOpenFile);
+    utassert(draw->isPinAction);
+    MarkMenuOwnerDraw(submenu);
+    utassert(draw->isPinAction);
+    draw->isPinAction = false;
     MEASUREITEMSTRUCT measure{};
     measure.CtlType = ODT_MENU;
     measure.itemData = (ULONG_PTR)draw;

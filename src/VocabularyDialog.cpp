@@ -175,6 +175,13 @@ struct LearningWindow {
 static Vec<LearningWindow*> gLearningWindows;
 static int gLearningSerial = 0;
 
+static LearningWindow* FindLearningWindow(HWND hwnd, int serial) {
+    for (LearningWindow* w : gLearningWindows) {
+        if (w->hwnd == hwnd && w->serial == serial) return w;
+    }
+    return nullptr;
+}
+
 static HWND Control(LearningWindow* w, int id) {
     return w->controls[id];
 }
@@ -1352,7 +1359,13 @@ static void CheckAnswer(LearningWindow* w) {
     Text(w, lcCheck, Tr("Next word"));
     Status(w, Tr("Progress saved. Continue when ready."));
 }
+#if IS_DEBUG
+static TempStr (*learningFilePickerProbe)(HWND owner) = nullptr;
+#endif
 static TempStr ChooseLearningFile(HWND owner, bool save, bool dictionary) {
+#if IS_DEBUG
+    if (learningFilePickerProbe) return learningFilePickerProbe(owner);
+#endif
     WCHAR path[MAX_PATH]{};
     OPENFILENAMEW args{};
     args.lStructSize = sizeof(args);
@@ -1663,7 +1676,7 @@ static void SaveMeaning(LearningWindow* w, bool learned) {
     Status(w, word ? learned ? Tr("Saved and marked learned.")
                              : Tr("Saved to vocabulary. Review it from the learning hub.")
                    : VocabularyLastError());
-    InvalidateRect(w->owner->hwndCanvas, nullptr, false);
+    if (IsMainWindowValidAndNotClosing(w->owner)) InvalidateRect(w->owner->hwndCanvas, nullptr, false);
 }
 static void LearningAction(LearningWindow* w, int id, int notification) {
     if (!w->ready || w->updating) {
@@ -2002,7 +2015,11 @@ static void LearningAction(LearningWindow* w, int id, int notification) {
                 Status(w, Tr("Import is unavailable in restricted mode."));
                 break;
             }
-            TempStr path = ChooseLearningFile(w->hwnd, false, true);
+            HWND receiver = w->hwnd;
+            int serial = w->serial;
+            TempStr path = ChooseLearningFile(receiver, false, true);
+            w = FindLearningWindow(receiver, serial);
+            if (!w) return;
             if (len(path)) {
                 StartDictionaryJob(w, DictionaryJobKind::Import, path);
             }
@@ -2032,7 +2049,11 @@ static void LearningAction(LearningWindow* w, int id, int notification) {
                 Status(w, Tr("Import and export are unavailable in restricted mode."));
                 break;
             }
-            TempStr path = ChooseLearningFile(w->hwnd, id == lcExport, false);
+            HWND receiver = w->hwnd;
+            int serial = w->serial;
+            TempStr path = ChooseLearningFile(receiver, id == lcExport, false);
+            w = FindLearningWindow(receiver, serial);
+            if (!w) return;
             if (!len(path)) {
                 break;
             }
@@ -2045,7 +2066,7 @@ static void LearningAction(LearningWindow* w, int id, int notification) {
             break;
         }
     }
-    InvalidateRect(w->owner->hwndCanvas, nullptr, false);
+    if (IsMainWindowValidAndNotClosing(w->owner)) InvalidateRect(w->owner->hwndCanvas, nullptr, false);
 }
 static void LibraryContextMenu(LearningWindow* w, LPARAM point) {
     if (w->practice) {
@@ -2069,6 +2090,12 @@ static void LibraryContextMenu(LearningWindow* w, LPARAM point) {
     if (!word) {
         return;
     }
+    HWND receiver = w->hwnd;
+    int serial = w->serial;
+    Str wordId = str::Dup(word->id);
+    defer {
+        str::Free(wordId);
+    };
     constexpr int lookup = 10001;
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, lookup, CWStrTemp(Tr("Look up offline")));
@@ -2076,6 +2103,10 @@ static void LibraryContextMenu(LearningWindow* w, LPARAM point) {
     AppendMenuW(menu, MF_STRING, lcDeleteWord, CWStrTemp(Tr("Remove word")));
     int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0, w->hwnd, nullptr);
     DestroyMenu(menu);
+    w = FindLearningWindow(receiver, serial);
+    if (!w) return;
+    word = VocabularyFind(wordId);
+    if (!word) return;
     if (command == lookup) {
         ShowDictionaryDialog(w->owner, word->word, word->context, word->sourcePath, word->page);
     } else if (command) {
@@ -2898,9 +2929,13 @@ static LRESULT CALLBACK LearningSplitProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
         AppendMenuW(menu, MF_STRING, 1, CWStrTemp(Tr("More word space")));
         AppendMenuW(menu, MF_STRING, 2, CWStrTemp(Tr("More answer space")));
         AppendMenuW(menu, MF_STRING, 3, CWStrTemp(Tr("Reset panels")));
-        int action =
-            TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, w->hwnd, nullptr);
+        HWND receiver = w->hwnd;
+        int serial = w->serial;
+        int action = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, receiver,
+                                    nullptr);
         DestroyMenu(menu);
+        w = FindLearningWindow(receiver, serial);
+        if (!w) return 0;
         if (action) {
             w->promptShare = action == 3 ? 30 : std::clamp(w->promptShare + (action == 1 ? 5 : -5), 10, 80);
             LayoutLearning(w);
@@ -4291,6 +4326,24 @@ static void LearningHiddenTests(LearningWindow* w) {
     for (int id : {lcPack, lcImportPack, lcDownload, lcRemovePack, lcInstallDeck}) EnableWindow(Control(w, id), true);
     SendMessageW(Control(w, lcManageToggle), BM_CLICK, 0, 0);
 }
+static TempStr CloseLearningPicker(HWND owner) {
+    DestroyWindow(owner);
+    return {};
+}
+static void LearningPickerCloseTests() {
+    learningFilePickerProbe = CloseLearningPicker;
+    defer {
+        learningFilePickerProbe = nullptr;
+    };
+    for (int id : {lcImportPack, lcImport, lcExport}) {
+        LearningWindow* w = OpenLearningWindow(nullptr, id == lcImportPack, false);
+        utassert(w != nullptr);
+        if (!w) continue;
+        HWND hwnd = w->hwnd;
+        LearningAction(w, id, BN_CLICKED);
+        utassert(!IsWindow(hwnd));
+    }
+}
 static LearningWindow* OpenLearningForTest(bool dictionary) {
     Vec<LearningFontProbe> probes;
     learningFontProbes = &probes;
@@ -4349,6 +4402,7 @@ void VocabularyDialog_UnitTests() {
             str::Free(originalData);
             str::Free(testData);
         };
+        LearningPickerCloseTests();
         int originalScale = gSettings->interfaceScale;
         auto* learning = OpenLearningForTest(true);
         utassert(learning != nullptr);

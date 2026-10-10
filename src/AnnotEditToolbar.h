@@ -7,6 +7,18 @@ struct Annotation;
 struct Gfx;
 struct PlatformFont;
 struct StrVec;
+struct AnnotEditToolbar;
+
+// Immutable selection identity for annotation-property picker callbacks.
+struct AnnotEditPickerContext {
+    AnnotEditToolbar* toolbar = nullptr;
+    WindowTab* tab = nullptr;
+    Annotation* annotation = nullptr;
+    int kind = -1;
+};
+
+AnnotEditPickerContext CaptureAnnotEditPickerContext(MainWindow*);
+bool IsAnnotEditPickerContextValid(const AnnotEditPickerContext&);
 template <typename T>
 struct Vec;
 

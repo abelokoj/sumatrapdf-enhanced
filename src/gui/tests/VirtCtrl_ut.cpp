@@ -200,6 +200,38 @@ static void CollectVirtCtrls_Test() {
     delete box;
 }
 
+static void ScrollLayoutFocus_Test() {
+    auto* inner = new VBox();
+    auto* button = new VirtButton(StrL("color"));
+    inner->AddChild(button);
+    auto* scroll = new ScrollBox(inner);
+    Vec<VirtCtrl*> tops;
+    CollectVirtCtrls(scroll, tops);
+    utassert(len(tops) == 1 && tops[0] == scroll);
+    VirtRoot root(nullptr);
+    root.SetTops(tops);
+    button->SetRoot(&root);
+    utassert(root.TabNavigate(false));
+    utassert(root.focused == button);
+    root.focused = button;
+    root.hovered = button;
+    root.pressed = button;
+    root.captured = button;
+    root.SetTops(tops);
+    utassert(root.focused == button && root.hovered == button);
+    utassert(root.pressed == button && root.captured == button);
+
+    inner->SetVisibility(Visibility::Collapse);
+    root.SetTops(tops);
+    utassert(!root.focused && !root.hovered && !root.pressed && !root.captured);
+    inner->SetVisibility(Visibility::Visible);
+    root.focused = button;
+    button->SetVisibility(Visibility::Hidden);
+    root.SetTops(tops);
+    utassert(!root.focused);
+    delete scroll;
+}
+
 static void CollectTabStops_Test() {
     Vec<TabStop> out;
     CollectTabStops(nullptr, out);
@@ -370,6 +402,207 @@ static void Splitter_ShrinkTest() {
     delete col;
 }
 
+struct MouseDispatchProbe {
+    VirtRoot* root = nullptr;
+    int clicks = 0;
+    int rightClicks = 0;
+    int menus = 0;
+    int mouseUps = 0;
+    int captureLost = 0;
+    bool handleMenu = true;
+    bool capturedOnMouseUp = false;
+    VirtMouseEvent last;
+};
+
+static void RecordDispatchClick(MouseDispatchProbe* probe, VirtMouseEvent* ev) {
+    if (ev->button == 0) probe->clicks++;
+    if (ev->button == 1) probe->rightClicks++;
+}
+
+static void RecordDispatchMenu(MouseDispatchProbe* probe, VirtMouseEvent* ev) {
+    probe->menus++;
+    probe->last = *ev;
+    ev->didHandle = probe->handleMenu;
+}
+
+static void RecordDispatchMouseUp(MouseDispatchProbe* probe, VirtMouseEvent* ev) {
+    probe->mouseUps++;
+    probe->last = *ev;
+    probe->capturedOnMouseUp = probe->root->captured == ev->target;
+    ev->didHandle = true;
+}
+
+static void RecordDispatchCaptureLost(MouseDispatchProbe* probe) {
+    probe->captureLost++;
+}
+
+struct MouseDispatchWindow {
+    VirtRoot* root = nullptr;
+    int contextMessages = 0;
+};
+
+static LRESULT CALLBACK MouseDispatchWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    auto* window = (MouseDispatchWindow*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if (window) {
+        if (msg == WM_CONTEXTMENU) window->contextMessages++;
+        LRESULT res = 0;
+        if (VirtTreeOnMessage(hwnd, window->root, msg, wp, lp, res)) return res;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static void SendDispatchClick(HWND hwnd, int button, Point down, Point up) {
+    UINT downMsg = button == 0 ? WM_LBUTTONDOWN : WM_RBUTTONDOWN;
+    UINT upMsg = button == 0 ? WM_LBUTTONUP : WM_RBUTTONUP;
+    WPARAM flags = button == 0 ? MK_LBUTTON : MK_RBUTTON;
+    SendMessageW(hwnd, downMsg, flags, MAKELPARAM(down.x, down.y));
+    SendMessageW(hwnd, upMsg, 0, MAKELPARAM(up.x, up.y));
+}
+
+struct SliderCancelProbe {
+    VirtSlider* slider = nullptr;
+    int value = 0;
+    int commits = 0;
+};
+
+static void RecordSliderCancelValue(SliderCancelProbe* state) {
+    state->value = state->slider->value;
+}
+
+static void RecordSliderCancelCommit(SliderCancelProbe* state) {
+    state->commits++;
+}
+
+static void NativeMouseDispatch_Test() {
+    const WCHAR* className = L"SumatraVirtMouseDispatchTest";
+    WNDCLASSW cls{};
+    cls.lpfnWndProc = MouseDispatchWndProc;
+    cls.hInstance = GetInstance();
+    cls.lpszClassName = className;
+    ATOM atom = RegisterClassW(&cls);
+    utassert(atom != 0);
+    if (!atom) return;
+    defer {
+        UnregisterClassW(className, GetInstance());
+    };
+    HWND hwnd = CreateWindowExW(WS_EX_NOACTIVATE, className, L"", WS_POPUP, 100, 100, 200, 100, nullptr, nullptr,
+                                GetInstance(), nullptr);
+    utassert(hwnd != nullptr);
+    if (!hwnd) return;
+    defer {
+        DestroyWindow(hwnd);
+    };
+    VirtRoot root(hwnd);
+    root.bounds = {0, 0, 200, 100};
+    MouseDispatchWindow window{&root};
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)&window);
+    defer {
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+    };
+    auto* parent = new VirtCtrl();
+    auto* child = new VirtCtrl();
+    auto* sibling = new VirtCtrl();
+    parent->AddChild(child);
+    parent->AddChild(sibling);
+    root.SetChild(parent);
+    parent->SetBounds({20, 10, 160, 80});
+    child->SetBounds({35, 20, 50, 30});
+    sibling->SetBounds({100, 20, 50, 30});
+    root.layoutInPaint = false;
+    root.needsLayout = false;
+    MouseDispatchProbe leaf{&root}, ancestor{&root};
+    child->onClick = MkFunc1(RecordDispatchClick, &leaf);
+    child->onContextMenu = MkFunc1(RecordDispatchMenu, &leaf);
+    Point inside{45, 25};
+
+    SendDispatchClick(hwnd, 0, inside, inside);
+    utassert(leaf.clicks == 1 && leaf.menus == 0 && leaf.rightClicks == 0);
+    SendDispatchClick(hwnd, 1, inside, inside);
+    utassert(leaf.menus == 1 && leaf.clicks == 1 && leaf.rightClicks == 0);
+    utassert(leaf.last.button == 1 && leaf.last.target == child && leaf.last.hit == child);
+    utassert(leaf.last.pt == Point(10, 5) && leaf.last.ptWindow == inside);
+    utassert(!root.pressed && !child->HasFlag(vwfPressed));
+    utassert(window.contextMessages == 0);
+
+    leaf.handleMenu = false;
+    parent->onContextMenu = MkFunc1(RecordDispatchMenu, &ancestor);
+    SendDispatchClick(hwnd, 1, inside, inside);
+    utassert(leaf.menus == 2 && ancestor.menus == 1 && leaf.rightClicks == 0);
+    utassert(ancestor.last.target == parent && ancestor.last.hit == child);
+    utassert(ancestor.last.button == 1 && ancestor.last.pt == Point(25, 15));
+    utassert(window.contextMessages == 0);
+
+    // A declined context handler is offered once even without a click fallback.
+    parent->onContextMenu = {};
+    child->onClick = {};
+    SendDispatchClick(hwnd, 1, inside, inside);
+    utassert(leaf.menus == 3 && window.contextMessages == 0);
+
+    // Right-click actions registered through onClick retain their legacy path.
+    child->onContextMenu = {};
+    child->onClick = MkFunc1(RecordDispatchClick, &leaf);
+    SendDispatchClick(hwnd, 1, inside, inside);
+    utassert(leaf.rightClicks == 1 && leaf.menus == 3);
+    utassert(window.contextMessages == 0);
+
+    // Release over another control must not invoke the pressed control's menu.
+    leaf.handleMenu = true;
+    child->onContextMenu = MkFunc1(RecordDispatchMenu, &leaf);
+    SendDispatchClick(hwnd, 1, inside, {110, 25});
+    utassert(leaf.menus == 3 && leaf.rightClicks == 1 && !root.pressed);
+
+    root.focused = child;
+    SendMessageW(hwnd, WM_CONTEXTMENU, (WPARAM)hwnd, MAKELPARAM(-1, -1));
+    utassert(leaf.menus == 4 && leaf.last.button == 1);
+    utassert(leaf.last.target == child && leaf.last.hit == child);
+    utassert(leaf.last.pt == Point(25, 15) && leaf.last.ptWindow == Point(60, 35));
+    POINT screen{inside.x, inside.y};
+    ClientToScreen(hwnd, &screen);
+    SendMessageW(hwnd, WM_CONTEXTMENU, (WPARAM)hwnd, MAKELPARAM(screen.x, screen.y));
+    utassert(leaf.menus == 5 && leaf.last.button == 1 && leaf.last.ptWindow == inside);
+
+    child->SetFlag(vwfCapturesMouse, true);
+    child->onMouseUp = MkFunc1(RecordDispatchMouseUp, &leaf);
+    child->onCaptureLost = MkFunc0(RecordDispatchCaptureLost, &leaf);
+    for (int button : {0, 1}) {
+        SendMessageW(hwnd, button == 0 ? WM_LBUTTONDOWN : WM_RBUTTONDOWN, button == 0 ? MK_LBUTTON : MK_RBUTTON,
+                     MAKELPARAM(inside.x, inside.y));
+        utassert(root.captured == child);
+        Point outside{175, 95};
+        SendMessageW(hwnd, button == 0 ? WM_LBUTTONUP : WM_RBUTTONUP, 0, MAKELPARAM(outside.x, outside.y));
+        utassert(leaf.mouseUps == button + 1 && leaf.captureLost == button + 1);
+        utassert(leaf.capturedOnMouseUp && leaf.last.pt == outside && leaf.last.button == button);
+        utassert(!root.captured && !root.pressed && !child->HasFlag(vwfPressed));
+        utassert(leaf.menus == 5 && leaf.rightClicks == 1);
+    }
+
+    // A canceled press must not turn into a click when its old mouse-up arrives.
+    SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(inside.x, inside.y));
+    utassert(root.captured == child && root.pressed == child);
+    ReleaseCapture();
+    utassert(!root.captured && !root.pressed && !child->HasFlag(vwfPressed));
+    int previousUps = leaf.mouseUps;
+    SendMessageW(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(inside.x, inside.y));
+    utassert(leaf.mouseUps == previousUps);
+
+    auto* slider = new VirtSlider();
+    slider->minVal = 0;
+    slider->maxVal = 100;
+    slider->SetValue(37, false);
+    root.SetChild(slider);
+    slider->SetBounds({20, 20, 150, 30});
+    root.layoutInPaint = root.needsLayout = false;
+    SliderCancelProbe preview{slider, 37};
+    slider->onValueChanged = MkFunc0(RecordSliderCancelValue, &preview);
+    slider->onValueCommitted = MkFunc0(RecordSliderCancelCommit, &preview);
+    SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(160, 35));
+    utassert(slider->IsAdjusting() && slider->value != 37);
+    utassert(preview.value == slider->value);
+    ReleaseCapture();
+    utassert(!slider->IsAdjusting() && slider->value == 37);
+    utassert(preview.value == 37 && preview.commits == 0);
+}
+
 static void RoundedNativeControls_Test() {
     HWND parent =
         CreateWindowExW(0, WC_STATICW, L"", WS_POPUP, 0, 0, 400, 240, nullptr, nullptr, GetInstance(), nullptr);
@@ -438,11 +671,13 @@ void VirtCtrl_UnitTests() {
     Table_TestSpan();
     Table_TestHitTest();
     CollectVirtCtrls_Test();
+    ScrollLayoutFocus_Test();
     CollectTabStops_Test();
     ScrollBox_Test();
     PrecisionScrollWheel_Test();
     ListScrollbar_Test();
     Splitter_ShrinkTest();
+    NativeMouseDispatch_Test();
     RoundedNativeControls_Test();
 }
 

@@ -370,6 +370,10 @@ static SeqStrings gCommandNames =
     "CmdLassoRecolor\0"
     "CmdLassoThinner\0"
     "CmdLassoThicker\0"
+    "CmdTextSelectTool\0"
+    "CmdLassoFreehand\0"
+    "CmdLassoRectangle\0"
+    "CmdLassoDelete\0"
     "\0";
 
 static i32 gCommandIds[] = {
@@ -729,6 +733,10 @@ static i32 gCommandIds[] = {
     CmdLassoRecolor,
     CmdLassoThinner,
     CmdLassoThicker,
+    CmdTextSelectTool,
+    CmdLassoFreehand,
+    CmdLassoRectangle,
+    CmdLassoDelete,
 };
 
 SeqStrings gCommandDescriptions =
@@ -1088,6 +1096,10 @@ SeqStrings gCommandDescriptions =
     "Selected Annotations: Apply Pen Color\0"
     "Selected Annotations: Thinner\0"
     "Selected Annotations: Thicker\0"
+    "Select text: drag or Shift-click\0"
+    "Lasso: Freehand Selection\0"
+    "Lasso: Rectangular Selection\0"
+    "Lasso: Delete Selected Annotations\0"
     "\0";
 
 SeqStrings gCommandAltDescs =

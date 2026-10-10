@@ -2765,7 +2765,7 @@ static void DrawHomeListRow(Gfx* gfx, ThumbnailLayout& thumb, const StrVec& filt
     {
         int pinDx = thumb.rcListPin.dx > 0 ? thumb.rcListPin.dx : UiScalePx(16);
         int pinDy = thumb.rcListPin.dy > 0 ? thumb.rcListPin.dy : pinDx;
-        Pixmap* pin = GetCachedPixmapForSvg(Str(gIconPin), pinDx, pinDy);
+        Pixmap* pin = GetCachedPixmapForSvg(Str(GetPinIconSvg()), pinDx, pinDy);
         if (pin) {
             gfx->DrawPixmap(pin, thumb.rcListPin);
         }

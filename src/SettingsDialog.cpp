@@ -41,6 +41,7 @@
 #include "DisplayModel.h"
 #include "WindowTab.h"
 #include "RenderCache.h"
+#include "SvgIcons.h"
 #include "PdfDarkMode.h"
 #include "RefHover.h"
 #include <commdlg.h>
@@ -50,8 +51,45 @@
 #endif
 #include "SumatraDialogs.h"
 
+static const char* kSelectionColorNames[] = {"Default (yellow)", "Soft blue", "Mint", "Lavender", "Rose"};
+static const char* kSelectionColorValues[] = {"#ffff00", "#5f5289ef", "#5f4ec690", "#5f9c78df", "#5fe77fa7"};
+
+static bool ReadSelectionColor(Str text, Color& color) {
+    text = str::DupTemp(text);
+    str::TrimWSInPlace(text, str::TrimOpt::Both);
+    for (int i = 0; i < dimofi(kSelectionColorNames); i++) {
+        if (str::EqI(text, Tr(kSelectionColorNames[i]))) {
+            text = Str(kSelectionColorValues[i]);
+            break;
+        }
+    }
+    if (!ParseColor(&color, text) || color == kColorUnset) return false;
+    if (!str::TrimPrefix(text, StrL("0x"))) str::TrimPrefix(text, StrL("#"));
+    if (len(text) == 6) color = MkRgba(GetRed(color), GetGreen(color), GetBlue(color), 0x5f);
+    return true;
+}
+
+static TempStr SerializeSelectionColor(Color color) {
+    return fmt("#%02x%02x%02x%02x", GetAlpha(color), GetRed(color), GetGreen(color), GetBlue(color));
+}
+
 static constexpr int kSettingsMaxWidth = 900;
 static constexpr int kSettingsMinWidth = 560;
+static constexpr PinIconStyle kPinIconChoices[] = {PinIconStyle::Soft, PinIconStyle::Solid, PinIconStyle::Round};
+
+static int SelectedPinIconStyle(DropDown* drop) {
+    int index = CbGetCurrentSelection(drop);
+    return index >= 0 && index < dimofi(kPinIconChoices) ? (int)kPinIconChoices[index] : (int)PinIconStyle::Soft;
+}
+static constexpr ColorPickerIconStyle kColorPickerIconChoices[] = {
+    ColorPickerIconStyle::Tiles, ColorPickerIconStyle::Classic, ColorPickerIconStyle::Soft,
+    ColorPickerIconStyle::Dropper, ColorPickerIconStyle::Wheel};
+
+static int SelectedColorPickerIconStyle(DropDown* drop) {
+    int index = CbGetCurrentSelection(drop);
+    return index >= 0 && index < dimofi(kColorPickerIconChoices) ? (int)kColorPickerIconChoices[index]
+                                                                 : (int)ColorPickerIconStyle::Tiles;
+}
 #if IS_DEBUG
 static double settingsComboMs, settingsCheckMs;
 static double settingsLazyCreateMs, settingsLazyColorMs, settingsLazyShowMs;
@@ -597,7 +635,6 @@ struct SettingsViewport : ScrollBox {
 struct SettingsWnd : WindowBase {
     ~SettingsWnd() override {
         str::Free(colorFile);
-        delete captionPixmap;
         str::Free(cacheKey);
         for (auto& value : savedValues) str::Free(value.text);
     }
@@ -606,6 +643,8 @@ struct SettingsWnd : WindowBase {
     Str colorFile;
     DropDown* dropPageText = nullptr;
     DropDown* dropPageBg = nullptr;
+    DropDown* dropSelectionColor = nullptr;
+    void PickSelectionColor(VirtMouseEvent*);
     void PickPageColor(DropDown*);
     void PickPageText(VirtMouseEvent*) { PickPageColor(dropPageText); }
     void PickPageBg(VirtMouseEvent*) { PickPageColor(dropPageBg); }
@@ -631,6 +670,8 @@ struct SettingsWnd : WindowBase {
     DropDown* dropTreeSize = nullptr;
     DropDown* dropThumbnailSize = nullptr;
     DropDown* dropToolbarSize = nullptr;
+    DropDown* dropPinIconStyle = nullptr;
+    DropDown* dropColorPickerIconStyle = nullptr;
     DropDown* dropRecentCount = nullptr;
     DropDown* dropTabListCount = nullptr;
     DropDown* dropScrollbarWidth = nullptr;
@@ -658,10 +699,6 @@ struct SettingsWnd : WindowBase {
 
     VirtButton* btnCancel = nullptr;
     VirtButton* btnOk = nullptr;
-    HBox* caption = nullptr;
-    VirtText* captionTitle = nullptr;
-    VirtCloseButton* captionClose = nullptr;
-    Pixmap* captionPixmap = nullptr;
     struct SavedValue {
         ControlBase* control;
         Str text;
@@ -845,6 +882,8 @@ static TempStr SettingsCacheKey(MainWindow* win) {
                        gSettings->treeFontSize,
                        gSettings->homePageThumbnailSize,
                        gSettings->toolbarSize,
+                       gSettings->pinIconStyle,
+                       gSettings->colorPickerIconStyle,
                        gSettings->homePageMaxRecentItems,
                        gSettings->tabListVisibleItems,
                        gSettings->scrollbarWidth,
@@ -863,8 +902,13 @@ static TempStr SettingsCacheKey(MainWindow* win) {
                        (double)(win ? DpiGetForHwnd(win->hwndFrame) : DpiGet())};
     str::Builder key;
     for (double value : values) key.Append(fmt("%.17g|", value));
-    Str strings[] = {gSettings->defaultDisplayMode,   gSettings->uIFontFamily, gSettings->uiLanguage,
-                     gSettings->inverseSearchCmdLine, GetAppDataDirTemp(),     GetPendingDataDirTemp()};
+    Str strings[] = {gSettings->defaultDisplayMode,
+                     gSettings->uIFontFamily,
+                     gSettings->uiLanguage,
+                     gSettings->inverseSearchCmdLine,
+                     gSettings->fixedPageUI.selectionColor.s,
+                     GetAppDataDirTemp(),
+                     GetPendingDataDirTemp()};
     for (Str value : strings) {
         key.Append(fmt("%d:", len(value)));
         key.Append(value);
@@ -883,10 +927,14 @@ static TempStr SettingsCacheKey(MainWindow* win) {
 void SettingsWnd::SaveValues() {
     for (auto& value : savedValues) str::Free(value.text);
     VecReset(savedValues);
-    DropDown* drops[] = {dropLayout,       dropZoom,           dropInverse,       dropUiFamily,    dropInterfaceScale,
-                         dropUiSize,       dropTreeSize,       dropThumbnailSize, dropToolbarSize, dropRecentCount,
-                         dropTabListCount, dropScrollbarWidth, dropMinTabWidth,   dropHoverDelay,  dropPenMin,
-                         dropPenMax,       dropPenStep,        dropPageText,      dropPageBg};
+    DropDown* drops[] = {dropLayout,        dropZoom,           dropInverse,
+                         dropUiFamily,      dropInterfaceScale, dropUiSize,
+                         dropTreeSize,      dropThumbnailSize,  dropToolbarSize,
+                         dropRecentCount,   dropTabListCount,   dropScrollbarWidth,
+                         dropMinTabWidth,   dropHoverDelay,     dropPenMin,
+                         dropPenMax,        dropPenStep,        dropPageText,
+                         dropPageBg,        dropPinIconStyle,   dropColorPickerIconStyle,
+                         dropSelectionColor};
     for (auto* drop : drops)
         if (drop)
             VecAppend(savedValues, {drop, str::Dup(drop->GetTextTemp()), CbGetCurrentSelection(drop), false, false});
@@ -1031,6 +1079,14 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
         ScheduleDelete();
         return;
     }
+
+    Color selectionColor;
+    if (!ReadSelectionColor(dropSelectionColor->GetTextTemp(), selectionColor)) {
+        MessageBoxW(hwnd, CWStrTemp(Tr("Choose a selection color or enter #RRGGBB or #AARRGGBB.")),
+                    CWStrTemp(Tr("Check color")), MB_OK | MB_ICONWARNING);
+        dropSelectionColor->SetFocus();
+        return;
+    }
     Color colors[2] = {kColorUnset, kColorUnset};
     DropDown* colorDrops[] = {dropPageText, dropPageBg};
     for (int i = 0; i < 2 && len(colorFile); i++) {
@@ -1140,6 +1196,9 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     gSettings->citationHoverDelay =
         chkReferenceHover->IsChecked() ? (int)SelectedNumber(dropHoverDelay, 300, 0, 2000, StrL("ms")) : -1;
     gSettings->toolbarSize = (int)SelectedNumber(dropToolbarSize, gSettings->toolbarSize, 8, 64, StrL("px"));
+    gSettings->pinIconStyle = SelectedPinIconStyle(dropPinIconStyle);
+    gSettings->colorPickerIconStyle = SelectedColorPickerIconStyle(dropColorPickerIconStyle);
+    SetColorText(gSettings->fixedPageUI.selectionColor, SerializeSelectionColor(selectionColor));
     gSettings->homePageMaxRecentItems = (int)SelectedNumber(dropRecentCount, gSettings->homePageMaxRecentItems, 1, 200);
     gSettings->tabListVisibleItems = (int)SelectedNumber(dropTabListCount, gSettings->tabListVisibleItems, 1, 50);
     gSettings->scrollbarWidth = (int)SelectedNumber(dropScrollbarWidth, gSettings->scrollbarWidth, 8, 60, StrL("px"));
@@ -1204,6 +1263,7 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     // to do it right we would have to convert tabs to windows. When moving no tabs -> tabs,
     // there's no problem. When moving tabs -> no tabs, a half solution would be to only
     // call SetTabsInTitlebar() for windows that have only one tab, but that's somewhat inconsistent
+    for (MainWindow* window : gWindows) window->RedrawAll(true);
     ApplySettingsToOpenWindows();
     ScheduleSaveSettings();
     MaybeRedrawHomePage();
@@ -1213,6 +1273,29 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
         startZoom = gSettings->defaultZoomFloat;
         OnCancel();
     }
+}
+
+static void SelectionColorPicked(SettingsWnd* wnd, ChangeColorsArgs* args) {
+    if (wnd != gSettingsWnd || !IsWindow(wnd->hwnd) || !wnd->win || !args->didSelect) return;
+    wnd->dropSelectionColor->SetText(SerializeSelectionColor(args->color));
+    ((SettingsDropDown*)wnd->dropSelectionColor)->idle.Repaint();
+}
+
+void SettingsWnd::PickSelectionColor(VirtMouseEvent*) {
+    if (!win || !IsMainWindowValidAndNotClosing(win)) return;
+    Color current = GetParsedColor(gSettings->fixedPageUI.selectionColor, MkRgb(255, 255, 0));
+    ReadSelectionColor(dropSelectionColor->GetTextTemp(), current);
+    auto* args = new ChangeColorsArgs();
+    args->win = win;
+    args->title = Tr("Text selection background");
+    args->color = current;
+    args->withOpacity = true;
+    for (const char* value : kSelectionColorValues) {
+        Color color;
+        if (ReadSelectionColor(Str(value), color)) VecAppend(args->colors, color);
+    }
+    args->onClose = MkFunc1(SelectionColorPicked, this);
+    ShowChangeColorsDialog(args);
 }
 
 void SettingsWnd::PickPageColor(DropDown* drop) {
@@ -1492,7 +1575,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         args.title = Tr("Settings");
         args.owner = mainWin ? mainWin->hwndFrame : nullptr;
         args.visible = false;
-        args.style = WS_POPUPWINDOW | WS_THICKFRAME | WS_VSCROLL;
+        args.style = WS_POPUPWINDOW | WS_CAPTION | WS_THICKFRAME | WS_VSCROLL;
         args.font = GetFont();
         args.icon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(GetAppIconID()));
         CreateCustom(args);
@@ -1503,6 +1586,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
     }
     DpiScope dpi(hwnd);
     SetFont(GetAppFont());
+    WindowApplyScaledCaption(hwnd);
     SettingsMoveBatch initialMoves;
     bool isRtl = IsUIRtl();
 
@@ -1617,20 +1701,23 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         auto* table = new SettingsForm();
         table->rtl = isRtl;
         VecAppend(forms, table);
-        table->SetSize(11, 2);
+        table->SetSize(14, 2);
         table->colGap = UiScalePx(20);
         table->rowGap = UiScalePx(6);
         const Str names[] = {
             Tr("Overall interface scale (%):"), Tr("Interface font:"),         Tr("&Interface text size:"),
             Tr("&Sidebar text size:"),          Tr("Home &thumbnail size:"),   Tr("UI icon size (px):"),
             Tr("Recent documents shown:"),      Tr("Minimum tab width (px):"), Tr("Reference preview delay (ms):"),
-            Tr("Visible open-file list rows:"), Tr("Scrollbar width (px):")};
-        DropDown** controls[] = {&dropInterfaceScale, &dropUiFamily,     &dropUiSize,        &dropTreeSize,
-                                 &dropThumbnailSize,  &dropToolbarSize,  &dropRecentCount,   &dropMinTabWidth,
-                                 &dropHoverDelay,     &dropTabListCount, &dropScrollbarWidth};
+            Tr("Visible open-file list rows:"), Tr("Scrollbar width (px):"),   Tr("&Pin icon style:"),
+            Tr("Color-picker icon style:")};
+        DropDown** controls[] = {&dropInterfaceScale,      &dropUiFamily,     &dropUiSize,         &dropTreeSize,
+                                 &dropThumbnailSize,       &dropToolbarSize,  &dropRecentCount,    &dropMinTabWidth,
+                                 &dropHoverDelay,          &dropTabListCount, &dropScrollbarWidth, &dropPinIconStyle,
+                                 &dropColorPickerIconStyle};
         for (int row = 0; row < dimofi(names); row++) {
             auto* label = NewSettingsLabel({.s = names[row], .font = font, .isRtl = isRtl, .prefix = true});
-            auto* drop = MakeDropDown(this, GetFont(), isRtl, true);
+            auto* drop = MakeDropDown(this, GetFont(), isRtl,
+                                      controls[row] != &dropPinIconStyle && controls[row] != &dropColorPickerIconStyle);
             *controls[row] = drop;
             table->SetCell(row, 0, label).alignV = CrossAxisAlign::CrossCenter;
             auto& cell = table->SetCell(row, 1, drop);
@@ -1659,12 +1746,61 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         FillSizeChoices(dropTreeSize, treeSizes, gSettings ? gSettings->treeFontSize : 0, false);
         FillSizeChoices(dropThumbnailSize, thumbnailSizes, gSettings ? gSettings->homePageThumbnailSize : 100, true);
         FillNumberChoices(dropToolbarSize, StrL("12|16|18|24|28|32|40|48|64"), gSettings->toolbarSize);
+        StrVec pinStyles;
+        pinStyles.Append(Tr("Soft outline (10, default)"));
+        pinStyles.Append(Tr("Solid (3)"));
+        pinStyles.Append(Tr("Round head (4)"));
+        dropPinIconStyle->SetItems(pinStyles);
+        int pinIndex = 0;
+        for (int i = 0; i < dimofi(kPinIconChoices); i++)
+            if ((int)kPinIconChoices[i] == gSettings->pinIconStyle) pinIndex = i;
+        CbSetCurrentSelection(dropPinIconStyle, pinIndex);
+        StrVec pickerStyles;
+        pickerStyles.Append(Tr("Color tiles (8, default)"));
+        pickerStyles.Append(Tr("Classic palette (1)"));
+        pickerStyles.Append(Tr("Soft palette (2)"));
+        pickerStyles.Append(Tr("Eyedropper (6)"));
+        pickerStyles.Append(Tr("Color wheel (5)"));
+        dropColorPickerIconStyle->SetItems(pickerStyles);
+        int pickerIndex = 0;
+        for (int i = 0; i < dimofi(kColorPickerIconChoices); i++)
+            if ((int)kColorPickerIconChoices[i] == gSettings->colorPickerIconStyle) pickerIndex = i;
+        CbSetCurrentSelection(dropColorPickerIconStyle, pickerIndex);
         FillNumberChoices(dropRecentCount, StrL("10|20|30|50|100|200"), gSettings->homePageMaxRecentItems);
         FillNumberChoices(dropTabListCount, StrL("5|10|15|20|30|50"), gSettings->tabListVisibleItems);
         FillNumberChoices(dropScrollbarWidth, StrL("8|12|16|20|24|30|36|42|48|60"), gSettings->scrollbarWidth);
         FillNumberChoices(dropHoverDelay, StrL("0|150|300|500|750|1000|2000"),
                           std::max(0, gSettings->citationHoverDelay));
         FillNumberChoices(dropMinTabWidth, StrL("60|100|120|150|180|200|250|300|400"), gSettings->minTabWidth);
+
+        dropSelectionColor = MakeDropDown(this, font, isRtl, true);
+        StrVec selectionChoices;
+        for (const char* name : kSelectionColorNames) selectionChoices.Append(Tr(name));
+        dropSelectionColor->SetItems(selectionChoices);
+        Color selected = GetParsedColor(gSettings->fixedPageUI.selectionColor, MkRgb(255, 255, 0));
+        dropSelectionColor->SetText(gSettings->fixedPageUI.selectionColor.s);
+        for (int i = 0; i < dimofi(kSelectionColorValues); i++) {
+            Color preset;
+            if (ParseColor(&preset, Str(kSelectionColorValues[i])) && selected == preset) {
+                CbSetCurrentSelection(dropSelectionColor, i);
+                break;
+            }
+        }
+        auto* chooseSelection = new VirtIconButton();
+        int selectionIconSize = UiScalePx(20);
+        chooseSelection->pixmap =
+            GetCachedPixmapForSvg(Str(GetColorPickerIconSvg()), selectionIconSize, selectionIconSize,
+                                  ThemeWindowTextColor(), ThemeWindowBackgroundColor());
+        chooseSelection->SetTooltip(Tr("Choose text selection background"));
+        chooseSelection->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::PickSelectionColor>(this);
+        auto* selectionRow = new HBox();
+        selectionRow->gap = UiScalePx(8);
+        selectionRow->alignCross = CrossAxisAlign::CrossCenter;
+        selectionRow->AddChild(dropSelectionColor, 1);
+        selectionRow->AddChild(chooseSelection);
+        table->SetCell(13, 0, NewSettingsLabel({.s = Tr("Text selection background:"), .font = font, .isRtl = isRtl}))
+            .alignV = CrossAxisAlign::CrossCenter;
+        table->SetCell(13, 1, selectionRow).alignH = CrossAxisAlign::Stretch;
         vbox->AddChild(table);
         vbox->AddChild(NewSettingsLabel({
             .s = Tr("Overall scale changes the interface, not document zoom. Individual font and icon sizes remain "
@@ -1816,29 +1952,6 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
     auto* root = new VBox();
     root->alignCross = CrossAxisAlign::Stretch;
     root->gap = UiScalePx(12);
-    caption = new HBox();
-    caption->alignCross = CrossAxisAlign::CrossCenter;
-    caption->gap = UiScalePx(8);
-    int iconSize = PlatformFontLineHeight(font);
-    HICON icon = (HICON)LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(GetAppIconID()), IMAGE_ICON, iconSize,
-                                   iconSize, 0);
-    captionPixmap = icon ? PixmapFromHICON(icon) : nullptr;
-    if (icon) DestroyIcon(icon);
-    if (captionPixmap) {
-        auto* badge = new VirtImage();
-        badge->pixmap = captionPixmap;
-        caption->AddChild(badge);
-    }
-    captionTitle = NewSettingsLabel({.s = Tr("Settings"), .font = font, .isRtl = isRtl});
-    caption->AddChild(captionTitle, 1);
-    captionClose = new VirtCloseButton();
-    int closeSize = std::max(UiScalePx(20), PlatformFontLineHeight(font));
-    captionClose->idealSize = {closeSize + UiScalePx(8), closeSize + UiScalePx(8)};
-    captionClose->padding = Insets{UiScalePx(4), UiScalePx(4), UiScalePx(4), UiScalePx(4)};
-    captionClose->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::OnCancel>(this);
-    captionClose->SetTooltip(Tr("Close"));
-    caption->AddChild(captionClose);
-    root->AddChild(caption);
     scroll = new SettingsViewport(vbox);
     scroll->lineDy = PlatformFontLineHeight(font) + UiScalePx(8);
     root->AddChild(scroll, 1);
@@ -1940,14 +2053,6 @@ static void OnSettingsMessage(WindowBase::WndProcEvent* ev) {
         BOOL screenReader = FALSE;
         if (SystemParametersInfoW(SPI_GETSCREENREADER, 0, &screenReader, 0) && screenReader)
             window->ExposeNativeFields();
-        return;
-    }
-    if (ev->msg == WM_NCHITTEST && window->caption) {
-        Point pt = HwndScreenToClient(window->hwnd, {GET_X_LPARAM(ev->lparam), GET_Y_LPARAM(ev->lparam)});
-        if (window->caption->lastBounds.Contains(pt)) {
-            ev->result = window->captionClose->lastBounds.Contains(pt) ? HTCLIENT : HTCAPTION;
-            ev->didHandle = true;
-        }
         return;
     }
     if (ev->msg == WM_NCLBUTTONDBLCLK && ev->wparam == HTCAPTION) {
@@ -2081,13 +2186,13 @@ static void SettingsResponsivenessTests(SettingsWnd* wnd) {
     // Rapid alternating wheel/scrollbar input must not move the footer or
     // auto-scroll back to a focused edit while native bounds are updated.
     Rect footer = wnd->btnOk->lastBounds;
-    Rect caption = wnd->caption->lastBounds;
+    Rect frame = HwndWindowRect(wnd->hwnd);
     TimeStamp scrollingStart = TimeGet();
     for (int i = 0; i < 100; i++) {
         int target = (i & 1) ? 0 : wnd->scroll->MaxScrollY();
         wnd->scroll->ScrollTo(target);
         utassert(wnd->scroll->scrollY == target);
-        utassert(wnd->btnOk->lastBounds == footer && wnd->caption->lastBounds == caption);
+        utassert(wnd->btnOk->lastBounds == footer && HwndWindowRect(wnd->hwnd) == frame);
     }
     logf("Settings rapid scroll: %.3f ms for 100 alternating positions\n", TimeSinceInMs(scrollingStart));
     wnd->scroll->ScrollTo(0);
@@ -2536,11 +2641,11 @@ static void SettingsScaledVisualTests() {
     auto* wnd = new SettingsWnd();
     wnd->SetFont(GetAppFont());
     utassert(wnd->Create(nullptr, SettingsView::Hidden));
-    utassert((GetWindowLongPtrW(wnd->hwnd, GWL_STYLE) & WS_CAPTION) != WS_CAPTION);
+    utassert((GetWindowLongPtrW(wnd->hwnd, GWL_STYLE) & WS_CAPTION) == WS_CAPTION);
     utassert(wnd->chkReferenceHover->GetIdealSize().dy >= UiScalePx(20));
-    utassert(wnd->captionTitle->font == GetAppFont());
-    utassert(wnd->captionClose->GetIdealSize().dy >= PlatformFontLineHeight(GetAppFont()));
-    utassert(wnd->caption->lastBounds.Bottom() <= wnd->scroll->lastBounds.y);
+    utassert(str::Eq(HwndGetTextTemp(wnd->hwnd), Tr("Settings")));
+    utassert(wnd->GetFont() == GetAppFont());
+    utassert(wnd->scroll->lastBounds.y >= UiScalePx(16));
     // Native controls request a plain parent background through PRINTCLIENT.
     // Rendering the virtual labels into that shifted DC smears text on controls.
     BITMAPINFO info{};
@@ -2551,7 +2656,7 @@ static void SettingsScaledVisualTests() {
     utassert(bitmap && pixels);
     if (bitmap && pixels) {
         HGDIOBJ old = SelectObject(dc, bitmap);
-        Rect title = wnd->captionTitle->lastBounds;
+        Rect title = wnd->labelView->lastBounds;
         SetViewportOrgEx(dc, -title.x, -title.y, nullptr);
         SendMessageW(wnd->hwnd, WM_PRINTCLIENT, (WPARAM)dc, PRF_CLIENT);
         GdiFlush();
@@ -2571,12 +2676,17 @@ static void SettingsScaledVisualTests() {
     utassert(wnd->chkReferenceHover->IsChecked() != checked);
     SendMessageW(wnd->chkReferenceHover->hwnd, BM_CLICK, 0, 0);
     utassert(wnd->chkReferenceHover->IsChecked() == checked);
-    Rect title = wnd->captionTitle->lastBounds;
-    Point pt = HwndClientToScreen(wnd->hwnd, {title.x + title.dx / 2, title.y + title.dy / 2});
+    Rect frame = HwndWindowRect(wnd->hwnd);
+    Point origin = HwndClientToScreen(wnd->hwnd, {0, 0});
+    int dpi = wnd->GetDpi();
+    int height = std::max(DpiGetSystemMetrics(SM_CYCAPTION, dpi),
+                          PlatformFontLineHeight(GetAppFont()) + UiScalePxForDpi(dpi, 12));
+    Point pt = {frame.x + frame.dx / 2, origin.y - height / 2};
     utassert(SendMessageW(wnd->hwnd, WM_NCHITTEST, 0, MAKELPARAM(pt.x, pt.y)) == HTCAPTION);
-    Rect close = wnd->captionClose->lastBounds;
-    pt = HwndClientToScreen(wnd->hwnd, {close.x + close.dx / 2, close.y + close.dy / 2});
-    utassert(SendMessageW(wnd->hwnd, WM_NCHITTEST, 0, MAKELPARAM(pt.x, pt.y)) == HTCLIENT);
+    int border = origin.x - frame.x;
+    int lane = GetAppScrollbarWidth(dpi);
+    pt.x = frame.Right() - border - lane + lane / 2;
+    utassert(SendMessageW(wnd->hwnd, WM_NCHITTEST, 0, MAKELPARAM(pt.x, pt.y)) == HTCLOSE);
     DestroyWindow(wnd->hwnd);
     delete wnd;
     gSettings->interfaceScale = 100;
@@ -2613,6 +2723,59 @@ bool SettingsDialog_UnitTestsSizing() {
     int maxWidth = std::min(DpiScale(900), std::max(1, work.dx - DpiScale(32)));
     utassert(HwndClientRect(wnd->hwnd).dx <= maxWidth);
     utassert(!IsWindowVisible(wnd->hwnd));
+    utassert(len(wnd->dropPinIconStyle->items) == 3);
+    utassert(SelectedPinIconStyle(wnd->dropPinIconStyle) == (int)PinIconStyle::Soft);
+    for (int i = 0; i < dimofi(kPinIconChoices); i++) {
+        CbSetCurrentSelection(wnd->dropPinIconStyle, i);
+        utassert(SelectedPinIconStyle(wnd->dropPinIconStyle) == (int)kPinIconChoices[i]);
+    }
+    wnd->RestoreValues();
+    utassert(SelectedPinIconStyle(wnd->dropPinIconStyle) == (int)PinIconStyle::Soft);
+    utassert(len(wnd->dropColorPickerIconStyle->items) == 5);
+    utassert(SelectedColorPickerIconStyle(wnd->dropColorPickerIconStyle) == (int)ColorPickerIconStyle::Tiles);
+    for (int i = 0; i < dimofi(kColorPickerIconChoices); i++) {
+        CbSetCurrentSelection(wnd->dropColorPickerIconStyle, i);
+        utassert(SelectedColorPickerIconStyle(wnd->dropColorPickerIconStyle) == (int)kColorPickerIconChoices[i]);
+    }
+    wnd->RestoreValues();
+    utassert(SelectedColorPickerIconStyle(wnd->dropColorPickerIconStyle) == (int)ColorPickerIconStyle::Tiles);
+
+    Color selectionColor;
+    utassert(ReadSelectionColor(Tr("Soft blue"), selectionColor) && GetAlpha(selectionColor) == 0x5f);
+    utassert(ReadSelectionColor(StrL(" #a0123456 "), selectionColor) && GetAlpha(selectionColor) == 0xa0);
+    utassert(ReadSelectionColor(StrL("#123456"), selectionColor) && GetAlpha(selectionColor) == 0x5f);
+    utassert(ReadSelectionColor(StrL("0x123456"), selectionColor) && GetAlpha(selectionColor) == 0x5f);
+    utassert(ReadSelectionColor(StrL("#00123456"), selectionColor) && GetAlpha(selectionColor) == 0);
+    ChangeColorsArgs picked;
+    picked.didSelect = true;
+    picked.color = MkRgba(0x12, 0x34, 0x56, 0);
+    SettingsWnd* previousWindow = gSettingsWnd;
+    gSettingsWnd = wnd;
+    wnd->win = (MainWindow*)1;
+    SelectionColorPicked(wnd, &picked);
+    utassert(str::Eq(wnd->dropSelectionColor->GetTextTemp(), StrL("#00123456")));
+    wnd->win = nullptr;
+    gSettingsWnd = previousWindow;
+    utassert(!ReadSelectionColor(StrL("#badvalue"), selectionColor));
+    utassert(!ReadSelectionColor(StrL(""), selectionColor));
+    Color initialSelectionColor = GetParsedColor(gSettings->fixedPageUI.selectionColor, kColorUnset);
+    wnd->dropSelectionColor->SetText(StrL("#a0123456"));
+    wnd->RestoreValues();
+    utassert(ReadSelectionColor(wnd->dropSelectionColor->GetTextTemp(), selectionColor));
+    Color expectedSelectionColor;
+    utassert(ReadSelectionColor(gSettings->fixedPageUI.selectionColor.s, expectedSelectionColor));
+    utassert(selectionColor == expectedSelectionColor);
+    utassert(GetParsedColor(gSettings->fixedPageUI.selectionColor, kColorUnset) == initialSelectionColor);
+    Settings* selectionSample = NewSettings({});
+    SetColorText(selectionSample->fixedPageUI.selectionColor, StrL("#5f5289ef"));
+    Str selectionSerialized = SerializeSettings(selectionSample, {});
+    Settings* selectionRestored = NewSettings(selectionSerialized);
+    Color blue;
+    utassert(ReadSelectionColor(Tr("Soft blue"), blue));
+    utassert(GetParsedColor(selectionRestored->fixedPageUI.selectionColor, kColorUnset) == blue);
+    str::Free(selectionSerialized);
+    DeleteSettings(selectionSample);
+    DeleteSettings(selectionRestored);
     SettingsResponsivenessTests(wnd);
     SettingsCustomValueTests(wnd);
     Rect footer = wnd->btnOk->lastBounds;

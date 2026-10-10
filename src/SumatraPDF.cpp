@@ -11794,11 +11794,16 @@ static void SetAnnotCreateArgsFromCommand(AnnotCreateArgs& args, CustomCommand* 
     auto* interiorCol = GetCommandArg(cmd, kCmdArgInteriorColor);
     if (interiorCol && interiorCol->colorVal.parsedOk) {
         args.interiorCol = interiorCol->colorVal;
+        int alpha = (int)(interiorCol->colorVal.pdfCol >> 24);
+        // Six-digit colors leave Color's alpha unset; PdfColor still carries opaque alpha.
+        bool explicitAlpha = GetAlpha(interiorCol->colorVal.col) != 0 || alpha != 255;
+        if (args.interiorOpacity >= 0 && explicitAlpha) args.interiorOpacity = MulDiv(alpha, 100, 255);
     }
 
     if (GetCommandArg(cmd, kCmdArgOpacity)) {
         args.opacity = GetCommandIntArg(cmd, kCmdArgOpacity, 100);
         setMinMax(args.opacity, 0, 100);
+        if (args.interiorOpacity >= 0) args.interiorOpacity = args.opacity;
     }
 
     int textSize = GetCommandIntArg(cmd, kCmdArgTextSize, -1);
@@ -11825,6 +11830,8 @@ void SetAnnotCreateArgs(AnnotCreateArgs& args, CustomCommand* cmd) {
     auto& a = gSettings->annotations;
     ParsedColor* col = nullptr;
     ParsedColor* bgCol = nullptr;
+    ParsedColor* interiorCol = nullptr;
+    int interiorOpacity = -1;
     auto typ = args.annotType;
     if (typ == AnnotationType::Text) {
         col = GetParsedColor(a.textIconColor);
@@ -11848,14 +11855,24 @@ void SetAnnotCreateArgs(AnnotCreateArgs& args, CustomCommand* cmd) {
         args.quadding = QuaddingFromName(a.freeTextAlignment);
     } else if (typ == AnnotationType::Line) {
         col = GetParsedColor(a.lineColor);
+        interiorCol = GetParsedColor(a.lineInteriorColor);
+        interiorOpacity = a.lineInteriorOpacity;
     } else if (typ == AnnotationType::PolyLine) {
         col = GetParsedColor(a.polyLineColor);
+        interiorCol = GetParsedColor(a.polyLineInteriorColor);
+        interiorOpacity = a.polyLineInteriorOpacity;
     } else if (typ == AnnotationType::Square) {
         col = GetParsedColor(a.squareColor);
+        interiorCol = GetParsedColor(a.squareInteriorColor);
+        interiorOpacity = a.squareInteriorOpacity;
     } else if (typ == AnnotationType::Circle) {
         col = GetParsedColor(a.circleColor);
+        interiorCol = GetParsedColor(a.circleInteriorColor);
+        interiorOpacity = a.circleInteriorOpacity;
     } else if (typ == AnnotationType::Polygon) {
         col = GetParsedColor(a.polygonColor);
+        interiorCol = GetParsedColor(a.polygonInteriorColor);
+        interiorOpacity = a.polygonInteriorOpacity;
     } else if (typ == AnnotationType::Ink) {
         col = GetParsedColor(a.inkColor);
         args.borderWidth = a.inkBorderWidth;
@@ -11875,6 +11892,10 @@ void SetAnnotCreateArgs(AnnotCreateArgs& args, CustomCommand* cmd) {
     if (col && col->parsedOk) {
         args.col = *col;
     }
+    if (interiorCol && interiorCol->parsedOk) {
+        args.interiorCol = *interiorCol;
+    }
+    if (interiorOpacity >= 0) args.interiorOpacity = limitValue(interiorOpacity, 0, 100);
 
     // a command's arguments (e.g. Shift+A's "openedit", or a color) override
     // the settings; ones it doesn't give keep them (#6197). Test the arguments,
@@ -13928,6 +13949,12 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
         case CmdToggleLaserPointer:
             // the cursor itself is the feedback, so no notification
             ToggleLaserPointer(win);
+            break;
+
+        case CmdTextSelectTool:
+            SetTextSelectTool(win);
+            ToolbarUpdateStateForWindow(win, true);
+            RevealToolbarTool(win, cmdId);
             break;
 
         case CmdHandTool:

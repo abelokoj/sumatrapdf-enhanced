@@ -88,33 +88,17 @@ foreach ($arch in @('x64','arm64')) {
     $files += $hashedFiles + $sumsPath
 }
 if (@(Get-ChildItem -LiteralPath $PackageDirectory -File).Count -ne $files.Count) { throw 'Unexpected release files' }
-$changelog = Get-Content -LiteralPath (Join-Path $repoRoot 'CHANGELOG.md') -Raw
-$entry = [regex]::Match($changelog,'(?ms)^## ' + [regex]::Escape($Version) + '\s*\n(.*?)(?=^## |\z)').Groups[1].Value.Trim()
-if (-not $entry) { throw 'Missing public changelog entry for this release' }
-$notes = @"
-SumatraPDF Enhanced $Version
-
-$entry
-
-## Downloads
-
-- x64 installer EXE and standalone portable EXE: for Intel and AMD computers.
-- ARM64 installer EXE and standalone portable EXE: for ARM devices.
-- Portable ZIPs include the reader, dictionaries, license notices and optional shell helpers.
-- Architecture-specific build manifests and SHA256SUMS files record package hashes and source provenance.
-
-Run a portable EXE directly. The offline dictionary is embedded. Run an installer EXE to install; extract the entire folder when using a ZIP. Optional browser integrations require the separate WebView2 runtime. ARM64 is cross-compiled; real ARM64 hardware acceptance remains separate.
-
-Authenticode status: $($signing -join '; '). Unsigned files have no publisher signature; SHA-256 hashes establish package integrity, not a malware-free guarantee.
-
-## Upstream source
-
-Based on **SumatraPDF $($upstream.version)** at upstream commit [$($upstream.commit)](https://github.com/sumatrapdfreader/sumatrapdf/commit/$($upstream.commit)), dated **$($upstream.commitDateUtc)**. This is the upstream commit date.
-
-Enhanced source: [$SourceCommit](https://github.com/abelokoj/sumatrapdf-enhanced/commit/$SourceCommit).
-
-Bundled fonts, icons and dictionary data retain their separate licenses. Notices are included in the application payload and source repository.
-"@
+$notesFile = Join-Path $repoRoot "docs/releases/$Version.md"
+if (-not (Test-Path -LiteralPath $notesFile -PathType Leaf)) { throw 'Missing approved public release notes' }
+$notes = (Get-Content -LiteralPath $notesFile -Raw).Trim()
+if (-not $notes.Contains("SumatraPDF Enhanced $Version")) { throw 'Release notes version mismatch' }
+foreach ($arch in @('x64','arm64')) {
+    foreach ($kind in @('install.exe','portable.exe','portable.zip')) {
+        $url = "https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-$Version/SumatraPDF-Enhanced-$Version-$arch-$kind"
+        if (-not $notes.Contains($url)) { throw "Missing release download link: $arch $kind" }
+    }
+}
+$notes += "`n`n<!-- enhanced-release-provenance`nUpstream source: $($upstream.commit)`nUpstream date: $($upstream.commitDateUtc)`nEnhanced source: $SourceCommit`nAuthenticode status: $($signing -join '; ')`n-->"
 $notesRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
 $notesPath = Join-Path $notesRoot 'enhanced-public-release-notes.md'
 [IO.File]::WriteAllText($notesPath,$notes)

@@ -658,6 +658,7 @@ void StartAnnotationPlacement(MainWindow* win, int cmdId) {
     }
 
     win->handTool = false;
+    win->textSelectTool = false;
     CancelAnnotationLasso(win);
     StopLaserPointer(win);
     EndCurrentPlacement(win);

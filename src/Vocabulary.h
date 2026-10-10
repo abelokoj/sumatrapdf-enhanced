@@ -39,6 +39,8 @@ struct VocabularyDeck {
     int installedTotal = 0;
     bool builtin = false;
     const char* builtinWords = nullptr;
+    const char* indexedBuiltinWords = nullptr;
+    Vec<WStr> builtinIndex;
     ~VocabularyDeck();
 };
 

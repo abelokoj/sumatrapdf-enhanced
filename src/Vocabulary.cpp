@@ -32,6 +32,7 @@ VocabularyWord::~VocabularyWord() {
     str::Free(deckId);
 }
 VocabularyDeck::~VocabularyDeck() {
+    for (WStr word : builtinIndex) wstr::Free(word);
     str::Free(id);
     str::Free(name);
     str::Free(description);
@@ -793,6 +794,9 @@ static int CountDeckWords(const Vec<WStr>& expected, const Vec<WStr>& available)
     }
     return count;
 }
+#if IS_DEBUG
+static int deckIndexBuilds = 0;
+#endif
 bool VocabularyDeckInstalled(Str id, int* count, int* total) {
     if (count) *count = 0;
     if (total) *total = 0;
@@ -802,17 +806,40 @@ bool VocabularyDeckInstalled(Str id, int* count, int* total) {
     AutoArenaSavepoint scratch;
     Vec<WStr> expected;
     if (deck->builtin) {
-        StrVec split;
-        const StrVec* words = &deck->words;
-        if (!len(*words) && deck->builtinWords) {
-            Split(&split, Str(deck->builtinWords), StrL("\n"), true);
-            words = &split;
+        // Cache immutable built-in lists; installed/custom deck words remain live.
+        if (!len(deck->words) && deck->builtinWords) {
+            if (deck->indexedBuiltinWords != deck->builtinWords) {
+#if IS_DEBUG
+                deckIndexBuilds++;
+#endif
+                for (WStr word : deck->builtinIndex) wstr::Free(word);
+                VecReset(deck->builtinIndex);
+                StrVec split;
+                Split(&split, Str(deck->builtinWords), StrL("\n"), true);
+                for (Str required : split) {
+                    Str word = CleanWord(required);
+                    if (len(word)) VecAppend(deck->builtinIndex, wstr::Dup(ToWStrTemp(word)));
+                }
+                VecSort(deck->builtinIndex, [](const WStr* a, const WStr* b) { return CmpDeckWord(*a, *b); });
+                int unique = 0;
+                for (WStr word : deck->builtinIndex) {
+                    if (unique && CmpDeckWord(deck->builtinIndex[unique - 1], word) == 0) {
+                        wstr::Free(word);
+                    } else {
+                        deck->builtinIndex[unique++] = word;
+                    }
+                }
+                deck->builtinIndex.len = unique;
+                deck->indexedBuiltinWords = deck->builtinWords;
+            }
+            expected = deck->builtinIndex;
+        } else {
+            for (Str required : deck->words) {
+                Str word = CleanWord(required);
+                if (len(word)) VecAppend(expected, ToWStrTemp(word));
+            }
+            SortDeckWords(expected);
         }
-        for (Str required : *words) {
-            Str word = CleanWord(required);
-            if (len(word)) VecAppend(expected, ToWStrTemp(word));
-        }
-        SortDeckWords(expected);
     }
     Vec<WStr> available;
     for (VocabularyWord* word : data->words) {
@@ -1231,6 +1258,9 @@ static void DeckInstalledTests() {
     int count = -1, total = -1;
     utassert(!VocabularyDeckInstalled(deck->id, &count, &total));
     utassert(count == 0 && total == 2 && len(deck->words) == 0);
+    int builds = deckIndexBuilds;
+    utassert(!VocabularyDeckInstalled(deck->id, &count, &total));
+    utassert(count == 0 && total == 2 && deckIndexBuilds == builds);
     auto* cat = VocabularyAdd(StrL("cat"), StrL("A feline."), StrL("one"), {}, {}, 0, deck->id);
     auto* duplicate = VocabularyAdd(StrL("CAT"), StrL("A feline."), StrL("two"), {}, {}, 0, deck->id);
     utassert(cat && duplicate && cat != duplicate);
@@ -1330,6 +1360,10 @@ static void DeckInstallationTests() {
     utassert(VocabularyUndoRemove());
     utassert(VocabularyDeckInstalled(restoredDeck->id, &count, &total));
 }
+void Vocabulary_UnitTestsDeckIndex() {
+    DeckInstalledTests();
+}
+
 void Vocabulary_UnitTests() {
     {
         constexpr int count = 4096;

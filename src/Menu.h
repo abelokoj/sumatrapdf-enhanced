@@ -21,6 +21,7 @@ enum class MenuDrawScope {
 };
 void MarkMenuOwnerDraw(HMENU, bool isMenuBar = false, MenuDrawScope = MenuDrawScope::Tree);
 void FreeMenuOwnerDrawInfoData(HMENU, MenuDrawScope = MenuDrawScope::Tree);
+void SetMenuPinIcon(HMENU, UINT command);
 void MenuCustomDrawMesureItem(HWND, MEASUREITEMSTRUCT*);
 void MenuCustomDrawItem(HWND, DRAWITEMSTRUCT*);
 

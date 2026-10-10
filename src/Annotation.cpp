@@ -179,12 +179,155 @@ bool AnnotationIsLive(Annotation* annot) {
     return IsAnnotationInEngine(annot->engine, annot);
 }
 
+bool AnnotationIsReadOnly(Annotation* annot) {
+    if (!AnnotationIsLive(annot)) return true;
+    EngineMupdf* e = annot->engine;
+    auto* ctx = e->Ctx();
+    AutoUnlockRecursiveMutex cs(&e->docLock);
+    int flags = PDF_ANNOT_IS_READ_ONLY | PDF_ANNOT_IS_LOCKED;
+    fz_try(ctx) {
+        flags = pdf_annot_flags(ctx, annot->pdfannot);
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+    }
+    return (flags & (PDF_ANNOT_IS_READ_ONLY | PDF_ANNOT_IS_LOCKED)) != 0;
+}
+
 AnnotationType Type(Annotation* annot) {
     if (!annot) {
         return AnnotationType::Unknown;
     }
     ReportIf((int)annot->type < 0);
     return annot->type;
+}
+
+static const char* kInteriorOpacityKey = "SumatraFillOpacity";
+static const char* kInteriorGraphicsState = "SumatraFillAlpha";
+
+static void ApplyInteriorOpacity(fz_context* ctx, pdf_annot* annot) {
+    pdf_obj* obj = pdf_annot_obj(ctx, annot);
+    pdf_obj* saved = pdf_dict_gets(ctx, obj, kInteriorOpacityKey);
+    if (!saved) return;
+    pdf_obj* appearance = pdf_dict_getp(ctx, obj, "AP/N");
+    if (!pdf_is_stream(ctx, appearance)) return;
+    float opacity = limitValue(pdf_to_int(ctx, saved), 0, 100) / 100.f;
+    pdf_obj* resources = pdf_dict_get(ctx, appearance, PDF_NAME(Resources));
+    if (!resources) resources = pdf_dict_put_dict(ctx, appearance, PDF_NAME(Resources), 1);
+    pdf_obj* states = pdf_dict_get(ctx, resources, PDF_NAME(ExtGState));
+    if (!states) states = pdf_dict_put_dict(ctx, resources, PDF_NAME(ExtGState), 2);
+    bool prepend = !pdf_dict_gets(ctx, states, kInteriorGraphicsState);
+    bool changed = prepend;
+    if (prepend) {
+        pdf_obj* state = pdf_dict_puts_dict(ctx, states, kInteriorGraphicsState, 2);
+        pdf_dict_put(ctx, state, PDF_NAME(Type), PDF_NAME(ExtGState));
+    }
+    // PDF keeps stroke /CA separate from fill /ca; MuPDF normally emits one opacity for both.
+    for (int i = 0; i < pdf_dict_len(ctx, states); i++) {
+        pdf_obj* state = pdf_dict_get_val(ctx, states, i);
+        pdf_obj* value = pdf_dict_get(ctx, state, PDF_NAME(ca));
+        if (!value || pdf_to_real(ctx, value) != opacity) {
+            pdf_dict_put_real(ctx, state, PDF_NAME(ca), opacity);
+            changed = true;
+        }
+    }
+    if (!changed) return;
+    if (!prepend) {
+        pdf_clean_obj(ctx, obj);
+        pdf_set_annot_resynthesised(ctx, annot);
+        return;
+    }
+    fz_buffer* original = nullptr;
+    fz_buffer* combined = nullptr;
+    fz_var(original);
+    fz_var(combined);
+    fz_try(ctx) {
+        original = pdf_load_stream(ctx, appearance);
+        combined = fz_new_buffer(ctx, original->len + 32);
+        fz_append_printf(ctx, combined, "/%s gs\n", kInteriorGraphicsState);
+        fz_append_buffer(ctx, combined, original);
+        pdf_update_stream(ctx, pdf_get_bound_document(ctx, appearance), appearance, combined, 0);
+        pdf_clean_obj(ctx, obj);
+        pdf_set_annot_resynthesised(ctx, annot);
+    }
+    fz_always(ctx) {
+        fz_drop_buffer(ctx, original);
+        fz_drop_buffer(ctx, combined);
+    }
+    fz_catch(ctx) {
+        fz_rethrow(ctx);
+    }
+}
+
+static void* ApplyPageFillOpacity(fz_context* ctx, fz_page* page, void*) {
+    auto* pdfPage = pdf_page_from_fz_page(ctx, page);
+    for (pdf_annot* item = pdf_first_annot(ctx, pdfPage); item; item = pdf_next_annot(ctx, item))
+        ApplyInteriorOpacity(ctx, item);
+    return nullptr;
+}
+
+static void UpdateAnnot(fz_context* ctx, pdf_annot* annot) {
+    auto* page = pdf_annot_page(ctx, annot);
+    auto* document = page->doc;
+    pdf_begin_implicit_operation(ctx, document);
+    fz_try(ctx) {
+        bool allPages = document->resynth_required != 0;
+        pdf_update_annot(ctx, annot);
+        // MuPDF regenerates all open pages, including a page still being loaded.
+        if (allPages) fz_process_opened_pages(ctx, &document->super, ApplyPageFillOpacity, nullptr);
+        if (!allPages || (!page->super.prev && !page->super.next)) ApplyPageFillOpacity(ctx, &page->super, nullptr);
+        pdf_end_operation(ctx, document);
+    }
+    fz_catch(ctx) {
+        pdf_abandon_operation(ctx, document);
+        fz_rethrow(ctx);
+    }
+}
+
+bool AnnotationSupportsFillOpacity(AnnotationType type) {
+    return AnnotationSupportsInteriorColor(type);
+}
+
+int InteriorOpacity(Annotation* annot) {
+    if (!AnnotationIsLive(annot)) return 100;
+    auto* engine = annot->engine;
+    auto* ctx = engine->Ctx();
+    AutoUnlockRecursiveMutex lock(&engine->docLock);
+    int percent = 100;
+    fz_try(ctx) {
+        pdf_obj* saved = pdf_dict_gets(ctx, pdf_annot_obj(ctx, annot->pdfannot), kInteriorOpacityKey);
+        percent = saved ? pdf_to_int(ctx, saved) : (int)roundf(pdf_annot_opacity(ctx, annot->pdfannot) * 100.f);
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+    }
+    return limitValue(percent, 0, 100);
+}
+
+void SetInteriorOpacity(Annotation* annot, int percent) {
+    if (!AnnotationIsLive(annot) || !AnnotationSupportsFillOpacity(annot->type)) return;
+    auto* engine = annot->engine;
+    AutoEndEngineOperation operation(engine, "Change shape fill opacity");
+    auto* ctx = engine->Ctx();
+    percent = limitValue(percent, 0, 100);
+    bool changed = false;
+    {
+        AutoUnlockRecursiveMutex lock(&engine->docLock);
+        fz_try(ctx) {
+            pdf_obj* obj = pdf_annot_obj(ctx, annot->pdfannot);
+            pdf_obj* saved = pdf_dict_gets(ctx, obj, kInteriorOpacityKey);
+            if (!saved || pdf_to_int(ctx, saved) != percent) {
+                pdf_dict_puts_drop(ctx, obj, kInteriorOpacityKey, pdf_new_int(ctx, percent));
+                pdf_annot_request_resynthesis(ctx, annot->pdfannot);
+                UpdateAnnot(ctx, annot->pdfannot);
+                changed = true;
+            }
+        }
+        fz_catch(ctx) {
+            fz_report_error(ctx);
+        }
+    }
+    if (changed) MarkNotificationAsModified(engine, annot);
 }
 
 int PageNo(Annotation* annot) {
@@ -316,7 +459,7 @@ void SetRect(Annotation* annot, RectF r) {
             } else {
                 pdf_set_annot_rect(ctx, a, ToFzRect(r));
             }
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -391,7 +534,7 @@ static bool MapAnnotation(Annotation* annot, fz_matrix matrix) {
                 fz_point p = map({r.x0, r.y0}), end = map({r.x1, r.y1});
                 pdf_set_annot_rect(ctx, a, {p.x, p.y, end.x, end.y});
             }
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -482,7 +625,7 @@ Annotation* DuplicateAnnotation(Annotation* source, PointF offset) {
                 if (!pdf_is_stream(ctx, value)) value = pdf_resolve_indirect(ctx, value);
                 pdf_dict_put_drop(ctx, dst, key, CloneAnnotValue(ctx, engine->pdfdoc, value, 0));
             }
-            pdf_update_annot(ctx, copy);
+            UpdateAnnot(ctx, copy);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -604,7 +747,7 @@ bool SetQuadding(Annotation* annot, int newQuadding) {
                     WriteFreeTextFontLocked(ctx, a, family, style);
                 }
             }
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -642,7 +785,7 @@ void SetQuadPointsAsRect(Annotation* annot, const Vec<RectF>& rects) {
         fz_try(ctx) {
             pdf_clear_annot_quad_points(ctx, a);
             pdf_set_annot_quad_points(ctx, a, n, quads);
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -780,12 +923,12 @@ bool ToggleFormButton(Annotation* annot) {
                     pdf_abandon_operation(ctx, e->pdfdoc);
                     fz_rethrow(ctx);
                 }
-                pdf_update_annot(ctx, a);
+                UpdateAnnot(ctx, a);
                 UpdateFormFieldPage(ctx, a); // refresh all radio-group siblings
                 changed = true;
             } else if (wt == PDF_WIDGET_TYPE_CHECKBOX && !readOnly) {
                 pdf_toggle_widget(ctx, a);
-                pdf_update_annot(ctx, a);
+                UpdateAnnot(ctx, a);
                 UpdateFormFieldPage(ctx, a);
                 changed = true;
             }
@@ -900,7 +1043,7 @@ bool SetWidgetTextValue(Annotation* annot, Str value) {
         AutoUnlockRecursiveMutex cs(&e->docLock);
         fz_try(ctx) {
             ok = pdf_set_text_field_value(ctx, a, len(valueZ) == 0 ? "" : valueZ.s) != 0;
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
             UpdateFormFieldPage(ctx, a); // refresh JS-calculated fields
         }
         fz_catch(ctx) {
@@ -956,7 +1099,7 @@ bool SetWidgetChoiceValue(Annotation* annot, Str value) {
         AutoUnlockRecursiveMutex cs(&e->docLock);
         fz_try(ctx) {
             pdf_set_choice_field_value(ctx, a, len(valueZ) == 0 ? "" : valueZ.s);
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
             UpdateFormFieldPage(ctx, a); // refresh JS-calculated fields
             ok = true;
         }
@@ -1008,7 +1151,7 @@ bool SetContents(Annotation* annot, Str sv) {
         AutoUnlockRecursiveMutex cs(&e->docLock);
         fz_try(ctx) {
             pdf_set_annot_contents(ctx, a, len(valueZ) == 0 ? "" : valueZ.s);
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -1139,6 +1282,7 @@ void SetModificationDateToNow(Annotation* annot) {
     AutoUnlockRecursiveMutex cs(&e->docLock);
     fz_try(ctx) {
         pdf_set_annot_modification_date(ctx, a, time(nullptr));
+        UpdateAnnot(ctx, a);
     }
     fz_catch(ctx) {
         fz_report_error(ctx);
@@ -1184,7 +1328,7 @@ void SetIconName(Annotation* annot, Str iconName) {
         AutoUnlockRecursiveMutex cs(&e->docLock);
         fz_try(ctx) {
             pdf_set_annot_icon_name(ctx, a, len(nameZ) == 0 ? "" : nameZ.s);
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -1314,7 +1458,7 @@ bool SetEmbeddedFileFromPath(Annotation* annot, Str path) {
             fs = pdf_add_embedded_file(ctx, e->pdfdoc, CStrTemp(name), mime ? CStrTemp(mime) : nullptr, buf, modified,
                                        modified, 0);
             pdf_set_annot_filespec(ctx, annot->pdfannot, fs);
-            pdf_update_annot(ctx, annot->pdfannot);
+            UpdateAnnot(ctx, annot->pdfannot);
             ok = true;
         }
         fz_always(ctx) {
@@ -1345,7 +1489,7 @@ void SetLineEndStyles(Annotation* annot, int end) {
         AutoUnlockRecursiveMutex cs(&e->docLock);
         fz_try(ctx) {
             pdf_set_annot_line_end_style(ctx, a, (pdf_line_ending)end);
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -1365,7 +1509,7 @@ void SetLineStartStyles(Annotation* annot, int start) {
         AutoUnlockRecursiveMutex cs(&e->docLock);
         fz_try(ctx) {
             pdf_set_annot_line_start_style(ctx, a, (pdf_line_ending)start);
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -1521,7 +1665,7 @@ bool SetColor(Annotation* annot, PdfColor c) {
                     pdf_set_annot_opacity(ctx, a, opacity);
                 }
             }
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -1590,7 +1734,7 @@ bool SetInteriorColor(Annotation* annot, PdfColor c) {
         }
         fz_try(ctx) {
             pdf_set_annot_interior_color(ctx, a, newN, newColor);
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -1857,7 +2001,7 @@ void SetFreeTextFont(Annotation* annot, Str family, int style) {
         AutoUnlockRecursiveMutex cs(&e->docLock);
         fz_try(ctx) {
             WriteFreeTextFontLocked(ctx, annot->pdfannot, family, style);
-            pdf_update_annot(ctx, annot->pdfannot);
+            UpdateAnnot(ctx, annot->pdfannot);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -1909,7 +2053,7 @@ void SetDefaultAppearanceTextSize(Annotation* annot, int textSize) {
             if (IsCustomFreeTextFont(family, style)) {
                 WriteFreeTextFontLocked(ctx, a, family, style);
             }
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -1963,7 +2107,7 @@ void SetDefaultAppearanceTextColor(Annotation* annot, PdfColor col) {
             if (IsCustomFreeTextFont(family, style)) {
                 WriteFreeTextFontLocked(ctx, a, family, style);
             }
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -2046,7 +2190,7 @@ void SetLinePoints(Annotation* annot, PointF start, PointF end) {
         AutoUnlockRecursiveMutex cs(&e->docLock);
         fz_try(ctx) {
             pdf_set_annot_line(ctx, a, fz_point{start.x, start.y}, fz_point{end.x, end.y});
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -2112,7 +2256,7 @@ void SetVertices(Annotation* annot, const Vec<PointF>& points) {
         AutoUnlockRecursiveMutex cs(&e->docLock);
         fz_try(ctx) {
             pdf_set_annot_vertices(ctx, a, len(pts), pts.els);
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -2331,7 +2475,7 @@ static InkEraseResult EraseAnnotInk(Annotation* annot, PointF pt, float radius, 
         AutoUnlockRecursiveMutex cs(&e->docLock);
         fz_try(ctx) {
             pdf_set_annot_ink_list(ctx, a, len(strokeCounts), strokeCounts.els, pts.els);
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -2391,7 +2535,7 @@ void SetBorderWidth(Annotation* annot, float newWidth) {
         AutoUnlockRecursiveMutex cs(&e->docLock);
         fz_try(ctx) {
             pdf_set_annot_border_width(ctx, a, (float)newWidth);
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -2457,7 +2601,7 @@ void SetOpacity(Annotation* annot, int newOpacity) {
 
         fz_try(ctx) {
             pdf_set_annot_opacity(ctx, a, fopacity);
-            pdf_update_annot(ctx, a);
+            UpdateAnnot(ctx, a);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -2910,7 +3054,7 @@ Annotation* EngineMupdfCreateAnnotation(EngineBase* engine, int pageNo, PointF p
                 int nInteriorCol = (interiorCol.pdfCol == 0) ? 0 : 3;
                 pdf_set_annot_interior_color(ctx, annot, nInteriorCol, interiorColor);
             }
-            pdf_update_annot(ctx, annot);
+            UpdateAnnot(ctx, annot);
         }
         fz_catch(ctx) {
             fz_report_error(ctx);
@@ -2949,6 +3093,8 @@ Annotation* EngineMupdfCreateAnnotation(EngineBase* engine, int pageNo, PointF p
     if (args->opacity < 100) {
         SetOpacity(res, (args->opacity * 255) / 100);
     }
+    if (args->interiorOpacity >= 0 && AnnotationSupportsFillOpacity(typ))
+        SetInteriorOpacity(res, args->interiorOpacity);
     pdf_drop_annot(ctx, annot);
     return res;
 }
@@ -2967,6 +3113,7 @@ struct AnnotationClipboard {
     bool hasColor = false;
     PdfColor interiorColor = 0;
     bool hasInteriorColor = false;
+    int interiorOpacity = -1;
     PdfColor textColor = 0;
     bool hasTextColor = false;
     int opacity = 255;
@@ -3002,6 +3149,7 @@ static void ClearAnnotationClipboard() {
     gAnnotClipboard.hasColor = false;
     gAnnotClipboard.interiorColor = 0;
     gAnnotClipboard.hasInteriorColor = false;
+    gAnnotClipboard.interiorOpacity = -1;
     gAnnotClipboard.textColor = 0;
     gAnnotClipboard.hasTextColor = false;
     gAnnotClipboard.opacity = 255;
@@ -3208,11 +3356,14 @@ bool CopyAnnotation(Annotation* annot) {
     if (AnnotationSupportsInteriorColor(annot->type)) {
         gAnnotClipboard.interiorColor = InteriorColor(annot);
         gAnnotClipboard.hasInteriorColor = true;
+        gAnnotClipboard.interiorOpacity = InteriorOpacity(annot);
     }
-    GetLineEndingStyles(annot, &gAnnotClipboard.lineStartStyle, &gAnnotClipboard.lineEndStyle);
+    if (annot->type == AnnotationType::Line || annot->type == AnnotationType::PolyLine)
+        GetLineEndingStyles(annot, &gAnnotClipboard.lineStartStyle, &gAnnotClipboard.lineEndStyle);
     gAnnotClipboard.hasLine = GetLinePoints(annot, gAnnotClipboard.lineStart, gAnnotClipboard.lineEnd);
     gAnnotClipboard.vertices = GetVertices(annot);
-    gAnnotClipboard.quads = GetQuadPointsAsRect(annot);
+    if (AnnotationIsTextMarkup(annot->type) || annot->type == AnnotationType::Redact)
+        gAnnotClipboard.quads = GetQuadPointsAsRect(annot);
     GetInkList(annot, gAnnotClipboard.inkStrokeCounts, gAnnotClipboard.inkPoints);
     gAnnotClipboard.stampImage = GetStampImage(annot);
     return true;
@@ -3271,6 +3422,7 @@ Annotation* PasteCopiedAnnotation(EngineBase* engine, int pageNo, PointF topLeft
     if (clip.hasInteriorColor) {
         args.interiorCol.parsedOk = true;
         args.interiorCol.pdfCol = clip.interiorColor;
+        args.interiorOpacity = clip.interiorOpacity;
     }
     args.stampImage = clip.stampImage;
     if (clip.hasLine) {
@@ -3377,6 +3529,182 @@ AnnotationType CmdIdToAnnotationType(int cmdId) {
 }
 
 #if IS_DEBUG
+
+static bool TestShapeAppearance(Annotation* annot, bool checkPixels) {
+    auto* ctx = annot->engine->Ctx();
+    AutoUnlockRecursiveMutex lock(&annot->engine->docLock);
+    bool ok = true;
+    fz_pixmap* pixmap = nullptr;
+    fz_var(pixmap);
+    fz_try(ctx) {
+        pdf_obj* states = pdf_dict_getp(ctx, pdf_annot_obj(ctx, annot->pdfannot), "AP/N/Resources/ExtGState");
+        ok = pdf_dict_gets(ctx, states, kInteriorGraphicsState) != nullptr;
+        float expected = InteriorOpacity(annot) / 100.f;
+        for (int i = 0; ok && i < pdf_dict_len(ctx, states); i++)
+            ok = fabsf(pdf_dict_get_real(ctx, pdf_dict_get_val(ctx, states, i), PDF_NAME(ca)) - expected) < 0.0001f;
+        if (checkPixels) {
+            pixmap = pdf_new_pixmap_from_annot(ctx, annot->pdfannot, fz_identity, fz_device_rgb(ctx), nullptr, 0);
+            int x = pixmap->w / 2;
+            int y = pixmap->h / 2;
+            auto* center = pixmap->samples + y * pixmap->stride + x * pixmap->n;
+            int expectedWhite = (int)roundf((1.f - expected) * 255.f);
+            ok = ok && abs((int)center[0] - expectedWhite) <= 3 && abs((int)center[1] - expectedWhite) <= 3 &&
+                 center[2] == 255;
+            bool redStroke = false;
+            for (int column = 0; column < pixmap->w; column++) {
+                auto* pixel = pixmap->samples + y * pixmap->stride + column * pixmap->n;
+                redStroke |= pixel[0] >= 253 && pixel[1] <= 2 && pixel[2] <= 2;
+            }
+            ok = ok && redStroke;
+            WCHAR directory[32768]{};
+            DWORD count = GetEnvironmentVariableW(L"ENHANCED_EXPORT_TEST_DIR", directory, dimof(directory));
+            if (count && count < dimof(directory))
+                fz_save_pixmap_as_png(ctx, pixmap,
+                                      CStrTemp(path::JoinTemp(ToUtf8Temp(WStr(directory)),
+                                                              fmt("shape-fill-%d.png", InteriorOpacity(annot)))));
+        }
+    }
+    fz_always(ctx) {
+        fz_drop_pixmap(ctx, pixmap);
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+        ok = false;
+    }
+    return ok;
+}
+
+bool Annotation_UnitTestShapeOpacity() {
+    const char* objects[] = {"<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] >>",
+                             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+                             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>"};
+    str::Builder pdf;
+    pdf.Append(StrL("%PDF-1.7\n"));
+    Vec<int> offsets;
+    for (int i = 0; i < dimof(objects); i++) {
+        VecAppend(offsets, len(pdf));
+        pdf.Append(fmt("%d 0 obj\n%s\nendobj\n", i + 1, Str(objects[i])));
+    }
+    int xref = len(pdf);
+    pdf.Append(fmt("xref\n0 %d\n0000000000 65535 f \n", dimof(objects) + 1));
+    for (int offset : offsets) pdf.Append(fmt("%010d 00000 n \n", offset));
+    pdf.Append(fmt("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", dimof(objects) + 1, xref));
+    EngineBase* engine = CreateEngineMupdfFromData(ToStr(pdf), StrL("shape-fill.pdf"), nullptr);
+    if (!engine) return false;
+    defer {
+        SafeEngineRelease(&engine);
+    };
+    Vec<PointF> points;
+    for (PointF point : {PointF{20, 20}, PointF{120, 20}, PointF{120, 120}, PointF{20, 120}}) VecAppend(points, point);
+    bool ok = true;
+    AnnotationType currentType = AnnotationType::Unknown;
+    auto check = [&](bool condition, const char* stage) {
+        if (!condition) printf("Shape opacity check failed (%d): %s\n", (int)currentType, stage);
+        ok = condition && ok;
+    };
+    for (auto type : {AnnotationType::Square, AnnotationType::Circle, AnnotationType::Polygon, AnnotationType::Line,
+                      AnnotationType::PolyLine}) {
+        currentType = type;
+        AnnotCreateArgs args{type};
+        args.col.parsedOk = args.interiorCol.parsedOk = true;
+        args.col.pdfCol = MkPdfColor(255, 0, 0, 255);
+        args.interiorCol.pdfCol = MkPdfColor(0, 0, 255, 255);
+        args.interiorOpacity = 44;
+        args.borderWidth = 4;
+        args.hasRect = true;
+        args.rect = {20, 20, 100, 100};
+        args.hasLineEnd = true;
+        args.lineEnd = {120, 120};
+        args.polyLinePoints = &points;
+        Annotation* annot = EngineMupdfCreateAnnotation(engine, 1, {20, 20}, &args);
+        if (!annot) return false;
+        bool square = type == AnnotationType::Square;
+        check(InteriorOpacity(annot) == 44 && Opacity(annot) == 255 && TestShapeAppearance(annot, square), "create");
+        SetBorderWidth(annot, 6);
+        SetColor(annot, MkPdfColor(255, 0, 0, 128));
+        check(InteriorOpacity(annot) == 44 && Opacity(annot) == 128 && TestShapeAppearance(annot, false),
+              "outline edit");
+        SetColor(annot, MkPdfColor(255, 0, 0, 255));
+        SetInteriorOpacity(annot, 0);
+        check(Opacity(annot) == 255 && InteriorOpacity(annot) == 0 && TestShapeAppearance(annot, square),
+              "transparent fill");
+        SetInteriorOpacity(annot, 100);
+        check(TestShapeAppearance(annot, square), "opaque fill");
+        SetInteriorOpacity(annot, 44);
+        RectF bounds = GetBounds(annot);
+        bounds.x += 10;
+        bounds.y += 10;
+        SetRect(annot, bounds);
+        check(InteriorOpacity(annot) == 44 && TestShapeAppearance(annot, square), "move");
+    }
+    Vec<Annotation*> annotations;
+    EngineMupdfGetAnnotations(engine, annotations);
+    check(len(annotations) == 5, "annotation count");
+    if (len(annotations) == 5) {
+        AnnotCreateArgs otherArgs{AnnotationType::Square};
+        otherArgs.col.parsedOk = otherArgs.interiorCol.parsedOk = true;
+        otherArgs.col.pdfCol = MkPdfColor(255, 0, 0, 255);
+        otherArgs.interiorCol.pdfCol = MkPdfColor(0, 0, 255, 255);
+        otherArgs.interiorOpacity = 37;
+        otherArgs.borderWidth = 4;
+        otherArgs.hasRect = true;
+        otherArgs.rect = {20, 20, 100, 100};
+        Annotation* other = EngineMupdfCreateAnnotation(engine, 2, {20, 20}, &otherArgs);
+        if (!other) return false;
+        EngineMupdfBeginOperation(engine, "Test pending appearance on another page");
+        {
+            auto* ctx = other->engine->Ctx();
+            AutoUnlockRecursiveMutex lock(&other->engine->docLock);
+            fz_try(ctx) {
+                pdf_set_annot_border_width(ctx, other->pdfannot, 8);
+            }
+            fz_catch(ctx) {
+                ok = false;
+            }
+        }
+        SetBorderWidth(annotations[0], 8);
+        EngineMupdfEndOperation(engine);
+        check(TestShapeAppearance(other, true), "pending appearance on another page");
+        check(TestShapeAppearance(annotations[0], true), "current page appearance");
+        DeleteAnnotation(other);
+        SetBorderWidth(annotations[0], 6);
+        EngineMupdfBeginOperation(engine, "Test fill edit undo");
+        SetInteriorOpacity(annotations[0], 25);
+        EngineMupdfEndOperation(engine);
+        Vec<Annotation*> removed;
+        check(EngineMupdfUndo(engine, removed), "undo operation");
+        EngineMupdfGetAnnotations(engine, annotations);
+        check(InteriorOpacity(annotations[0]) == 44 && TestShapeAppearance(annotations[0], true), "undo fill");
+        check(EngineMupdfRedo(engine, removed), "redo operation");
+        EngineMupdfGetAnnotations(engine, annotations);
+        check(InteriorOpacity(annotations[0]) == 25, "redo fill");
+        SetInteriorOpacity(annotations[0], 44);
+        Annotation* copy = DuplicateAnnotation(annotations[0], {150, 0});
+        check(copy && InteriorOpacity(copy) == 44 && TestShapeAppearance(copy, true), "duplicate");
+        if (copy) DeleteAnnotation(copy);
+        check(CopyAnnotation(annotations[0]), "copy");
+        Annotation* pasted = PasteCopiedAnnotation(engine, 1, {300, 20});
+        check(pasted && InteriorOpacity(pasted) == 44 && TestShapeAppearance(pasted, true), "paste");
+        if (pasted) DeleteAnnotation(pasted);
+        FreeAnnotationClipboard();
+    }
+    Str destination = str::Dup(GetTempFilePathTemp(StrL("shape-opacity")));
+    check(EngineMupdfSaveCopy(engine, destination), "save PDF");
+    SafeEngineRelease(&engine);
+    Str data = ok ? file::ReadFile(destination) : Str{};
+    file::Delete(destination);
+    str::Free(destination);
+    engine = ok ? CreateEngineMupdfFromData(data, StrL("shape-reopened.pdf"), nullptr) : nullptr;
+    str::Free(data);
+    if (!engine) return false;
+    EngineMupdfGetAnnotations(engine, annotations);
+    check(len(annotations) == 5, "annotation count");
+    for (auto* annot : annotations)
+        check(InteriorOpacity(annot) == 44 && TestShapeAppearance(annot, annot->type == AnnotationType::Square),
+              "reopen PDF");
+    return ok;
+}
+
 bool Annotation_UnitTestFontRoundtrip() {
     const char* objects[] = {
         "<< /Type /Catalog /Pages 2 0 R >>",

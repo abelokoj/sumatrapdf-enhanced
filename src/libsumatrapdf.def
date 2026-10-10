@@ -2101,3 +2101,16 @@ EXPORTS
 
 	deskey
 	des
+
+; Independent annotation fill appearances.
+
+	pdf_dict_put_dict
+	pdf_dict_puts_dict
+	pdf_dict_put_real
+	pdf_set_annot_resynthesised
+	fz_append_printf
+	fz_append_buffer
+	pdf_get_bound_document
+	pdf_annot_request_resynthesis
+
+	fz_process_opened_pages

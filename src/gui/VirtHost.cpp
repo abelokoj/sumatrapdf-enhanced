@@ -175,6 +175,7 @@ VirtHost* VirtHost::Create(const CreateArgs& args) {
     RegisterHostClass(args.className);
 
     DWORD style = args.isPopup ? WS_POPUP : (WS_CHILD | WS_CLIPCHILDREN);
+    if (args.isPopup && len(args.title)) style |= WS_CAPTION | WS_SYSMENU;
     if (args.visible) {
         style |= WS_VISIBLE;
     }
@@ -199,8 +200,8 @@ VirtHost* VirtHost::Create(const CreateArgs& args) {
 
     Size sz = args.initialSize;
     // WM_NCCREATE sets host->native
-    HWND hwnd = CreateWindowExW(exStyle, args.className.s, nullptr, style, 0, 0, sz.dx, sz.dy, args.parent, nullptr,
-                                GetModuleHandle(nullptr), host);
+    HWND hwnd = CreateWindowExW(exStyle, args.className.s, CWStrTemp(args.title), style, 0, 0, sz.dx, sz.dy,
+                                args.parent, nullptr, GetModuleHandle(nullptr), host);
     if (!hwnd) {
         delete host;
         return nullptr;
@@ -259,10 +260,23 @@ Size VirtHost::SetLayoutSizedToContent(ILayout* l) {
     if (!layout || !native) {
         return {};
     }
+    // Updating a scroll range can send WM_SIZE before the caller applies
+    // the measured window size. Keep that old size out of this measurement.
+    bool wasRelayouting = relayouting;
+    relayouting = true;
+    defer {
+        relayouting = wasRelayouting;
+    };
     Size sz = layout->Layout(ExpandInf());
     Rect bounds{0, 0, sz.dx, sz.dy};
     layout->SetBounds(bounds);
     RefreshVirtTops(native, layout, bounds, &vroot);
+    if ((GetWindowLongPtrW(native, GWL_STYLE) & WS_CAPTION) == WS_CAPTION) {
+        Rect window = HwndWindowRect(native);
+        Rect client = ClientRect();
+        sz.dx += window.dx - client.dx;
+        sz.dy += window.dy - client.dy;
+    }
     return sz;
 }
 

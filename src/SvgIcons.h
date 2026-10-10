@@ -38,7 +38,20 @@ extern const char* gIconHomeList;
 extern const char* gIconHomeThumbnails;
 extern const char* gIconSidebarBookmarks;
 extern const char* gIconSidebarFavorites;
-extern const char* gIconPin;
+enum class PinIconStyle {
+    Solid = 3,
+    Round = 4,
+    Soft = 10
+};
+const char* GetPinIconSvg();
+enum class ColorPickerIconStyle {
+    Classic = 1,
+    Soft = 2,
+    Dropper = 6,
+    Wheel = 5,
+    Tiles = 8
+};
+const char* GetColorPickerIconSvg();
 extern const char* gIconEditAnnotations;
 extern const char* gIconAnnotHighlight;
 extern const char* gIconAnnotHighlightBrush;

@@ -759,6 +759,71 @@ void WindowCorners_UnitTests() {
             dialog.Destroy();
         }
     }
+    {
+        int oldScale = gSettings->interfaceScale;
+        int oldFontSize = gSettings->uIFontSize;
+        int oldBarWidth = gSettings->scrollbarWidth;
+        defer {
+            gSettings->interfaceScale = oldScale;
+            gSettings->uIFontSize = oldFontSize;
+            gSettings->scrollbarWidth = oldBarWidth;
+            RefreshUiFonts();
+        };
+        for (int scale : {100, 200}) {
+            gSettings->interfaceScale = scale;
+            gSettings->uIFontSize = 22;
+            RefreshUiFonts();
+            for (int width : {8, 30, 60}) {
+                gSettings->scrollbarWidth = width;
+                WindowBase dialog;
+                dialog.CreateCustom({.title = StrL("Scrollbar caption alignment"),
+                                     .style = WS_POPUPWINDOW | WS_CAPTION | WS_VSCROLL,
+                                     .pos = {-10000, -10000, 520, 420},
+                                     .visible = false});
+                utassert(dialog.hwnd != nullptr);
+                if (!dialog.hwnd) continue;
+                ApplyScaledWindowCaption(dialog.hwnd);
+                Rect caption = AppCaptionRect(dialog.hwnd);
+                Rect content = AppCaptionButtonContent(dialog.hwnd, HTCLOSE);
+                int lane = GetAppScrollbarWidth(dialog.GetDpi());
+                utassert(content.x + content.dx / 2 == caption.Right() - lane + lane / 2);
+                utassert(content.Right() <= caption.Right());
+                utassert(AppCaptionButton(dialog.hwnd, HTCLOSE)
+                             .Contains({content.x + content.dx / 2, content.y + content.dy / 2}));
+                dialog.Destroy();
+            }
+        }
+    }
+    {
+        for (bool titled : {false, true}) {
+            VirtHost::CreateArgs args;
+            args.className = WStrL(L"SumatraToolbarHoverMenu");
+            args.title = titled ? StrL("Palette caption sizing") : Str{};
+            args.initialSize = {300, 200};
+            args.visible = false;
+            args.isPopup = true;
+            auto* host = VirtHost::Create(args);
+            utassert(host && host->native);
+            if (!host) continue;
+            if (titled) ApplyScaledWindowCaption(host->native);
+            LONG_PTR style = GetWindowLongPtrW(host->native, GWL_STYLE);
+            utassert(((style & WS_CAPTION) == WS_CAPTION) == titled);
+            Size expected{120, 80};
+            Size size = host->SetLayoutSizedToContent(new Spacer(expected.dx, expected.dy));
+            if (titled) {
+                utassert(size.dy >= 80 + AppCaptionHeight(host->native));
+                utassert(str::Eq(HwndGetTextTemp(host->native), args.title));
+                Rect frame = HwndWindowRect(host->native);
+                Point client = HwndClientToScreen(host->native, {0, 0});
+                utassert(AppCaptionRect(host->native).Bottom() == client.y - frame.y);
+            } else {
+                utassert(size == expected);
+            }
+            host->SetBounds({-10000, -10000, size.dx, size.dy});
+            utassert(host->ClientRect().Size() == expected);
+            delete host;
+        }
+    }
     MenuBorderPixelTests();
     HWND frame = CreateWindowExW(0, L"STATIC", L"Corner test", WS_OVERLAPPEDWINDOW, 0, 0, 300, 200, nullptr, nullptr,
                                  GetModuleHandleW(nullptr), nullptr);

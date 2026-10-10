@@ -118,6 +118,8 @@ static void EndContentsEdit(AnnotEditToolbar*, bool accept);
 static void DestroyContentsEditor(AnnotEditToolbar*);
 static void PostedStartContentsEdit(MainWindow*);
 static void PostedDeleteSelectedAnnotation(MainWindow*);
+static void ShowSelectedAnnotationView(WindowTab*);
+static void OnAnnotsProgress(WindowTab*);
 static bool FreeTextInPlaceEditJustEnded();
 
 struct AnnotEditToolbar {
@@ -261,21 +263,7 @@ static PdfColor WinToPdfColor(Color c) {
     u8 b;
     u8 a;
     UnpackColor(c, r, g, b, a);
-    // in a Color alpha 0 means opaque, in a PdfColor it means transparent
-    return MkPdfColor(r, g, b, a == 0 ? 0xff : a);
-}
-
-// the same color, made fully opaque
-static PdfColor OpaquePdfColor(PdfColor c) {
-    if (c == 0) {
-        return 0;
-    }
-    u8 r;
-    u8 g;
-    u8 b;
-    u8 a;
-    UnpackPdfColor(c, r, g, b, a);
-    return MkPdfColor(r, g, b, 0xff);
+    return MkPdfColor(r, g, b, a);
 }
 
 // a chip shows a color the way the page does: with the annotation's opacity
@@ -290,6 +278,18 @@ static PdfColor ColorWithOpacity(PdfColor c, Annotation* annot, bool withOpacity
     u8 a;
     UnpackPdfColor(c, r, g, b, a);
     return MkPdfColor(r, g, b, (u8)Opacity(annot));
+}
+
+static PdfColor InteriorChipColor(Annotation* annot) {
+    PdfColor color = InteriorColor(annot);
+    if (!AnnotationSupportsFillOpacity(Type(annot))) {
+        return ColorWithOpacity(color, annot, AnnotationSupportsOpacity(Type(annot)));
+    }
+    if (color == 0) return 0;
+    u8 r, g, b, a;
+    UnpackPdfColor(color, r, g, b, a);
+    a = (u8)((InteriorOpacity(annot) * 255 + 50) / 100);
+    return MkPdfColor(r, g, b, a);
 }
 
 static Str KindName(AnnotEditKind kind) {
@@ -512,8 +512,8 @@ static void CollectItems(Annotation* annot, Vec<AnnotEditItem>& out) {
     if (AnnotationSupportsInteriorColor(type)) {
         AnnotEditItem it;
         it.kind = AnnotEditKind::InteriorColor;
-        it.color = ColorWithOpacity(InteriorColor(annot), annot, colorCarriesOpacity);
-        it.tooltip = Tr("Interior Color");
+        it.color = InteriorChipColor(annot);
+        it.tooltip = AnnotationSupportsFillOpacity(type) ? Tr("Fill Color and Opacity") : Tr("Interior Color");
         VecAppend(out, it);
     }
     if (AnnotationSupportsOpacity(type) && !colorCarriesOpacity) {
@@ -1025,6 +1025,9 @@ struct MupdfIconCacheEntry {
 static MupdfIconCacheEntry* gMupdfIconCache = nullptr;
 
 static Pixmap* GetCachedMupdfAnnotIcon(Str name, Color fg, int dx, int dy) {
+    if (str::EqI(name, StrL("PushPin"))) {
+        return GetCachedPixmapForSvg(Str(GetPinIconSvg()), dx, dy, fg);
+    }
     for (MupdfIconCacheEntry* e = gMupdfIconCache; e; e = e->next) {
         if (e->dx == dx && e->dy == dy && e->fg == fg && str::EqI(e->name, name)) {
             return e->pixmap;
@@ -1500,9 +1503,34 @@ static void PickFreeTextFont(AnnotEditToolbar* tb, Annotation* annot, Point scre
     AnnotChanged(tab);
 }
 
-// a color from the drop-down of the chip that was clicked last; its alpha is
-// the annotation's opacity, kColorUnset means no color at all
+// Picker callbacks may outlive their floating toolbar. Compare registered
+// owner pointers before reading any field of the non-owning callback target.
+static bool IsAnnotEditToolbarLive(AnnotEditToolbar* tb) {
+    if (!tb) return false;
+    for (MainWindow* win : gWindows) {
+        if (win->annotEditToolbar == tb) return !win->isBeingClosed;
+    }
+    return false;
+}
+
+AnnotEditPickerContext CaptureAnnotEditPickerContext(MainWindow* win) {
+    if (!IsMainWindowValidAndNotClosing(win) || !win->annotEditToolbar) return {};
+    AnnotEditToolbar* tb = win->annotEditToolbar;
+    return {tb, tb->tab, tb->annot, (int)tb->colorPickKind};
+}
+
+bool IsAnnotEditPickerContextValid(const AnnotEditPickerContext& context) {
+    if (!IsAnnotEditToolbarLive(context.toolbar) || !context.tab || !context.annotation) return false;
+    AnnotEditToolbar* tb = context.toolbar;
+    if (tb->win->CurrentTab() != context.tab || tb->tab != context.tab || tb->annot != context.annotation ||
+        (int)tb->colorPickKind != context.kind)
+        return false;
+    return context.tab->selectedAnnotation == context.annotation;
+}
+
+// The clicked chip chooses whether alpha sets outline or independent fill opacity.
 static void ChipColorPicked(AnnotEditToolbar* tb, Color col) {
+    if (!IsAnnotEditToolbarLive(tb) || tb->win->CurrentTab() != tb->tab) return;
     WindowTab* tab = tb->tab;
     Annotation* annot = tab ? tab->selectedAnnotation : nullptr;
     if (!AnnotationIsLive(annot) || annot != tb->annot) {
@@ -1510,25 +1538,26 @@ static void ChipColorPicked(AnnotEditToolbar* tb, Color col) {
     }
     AnnotationType type = Type(annot);
     bool isNone = (col == kColorUnset);
-    PdfColor pdfCol = isNone ? 0 : WinToPdfColor(col);
-    u8 opacity = isNone ? 0 : PdfColorAlpha(pdfCol);
+    u8 opacity = isNone ? 0 : GetAlpha(col);
+    PdfColor solidCol = isNone ? 0 : WinToPdfColor(col | 0xff000000);
     bool setsOpacity = !isNone && AnnotationSupportsOpacity(type);
     // a color and its opacity: one undo step
     AutoEndEngineOperation op(annot->engine, "Set color");
     switch (tb->colorPickKind) {
         case AnnotEditKind::Color:
-            // SetColor() takes the opacity from the color's alpha
-            SetColor(annot, setsOpacity ? pdfCol : OpaquePdfColor(pdfCol));
+            SetColor(annot, solidCol);
+            if (setsOpacity) SetOpacity(annot, opacity);
             break;
         case AnnotEditKind::InteriorColor:
-            // /IC has no alpha of its own, the annotation's opacity covers it
-            SetInteriorColor(annot, OpaquePdfColor(pdfCol));
-            if (setsOpacity) {
+            SetInteriorColor(annot, solidCol);
+            if (!isNone && AnnotationSupportsFillOpacity(type)) {
+                SetInteriorOpacity(annot, ((int)opacity * 100 + 127) / 255);
+            } else if (setsOpacity) {
                 SetOpacity(annot, opacity);
             }
             break;
         case AnnotEditKind::TextColor:
-            SetDefaultAppearanceTextColor(annot, OpaquePdfColor(pdfCol));
+            SetDefaultAppearanceTextColor(annot, solidCol);
             if (setsOpacity) {
                 SetOpacity(annot, opacity);
             }
@@ -1542,6 +1571,7 @@ static void ChipColorPicked(AnnotEditToolbar* tb, Color col) {
 // how wide the stroke of an ink annotation is, from the Thickness slider of
 // its color drop-down
 static void ChipThicknessPicked(AnnotEditToolbar* tb, float width) {
+    if (!IsAnnotEditToolbarLive(tb) || tb->win->CurrentTab() != tb->tab) return;
     WindowTab* tab = tb->tab;
     Annotation* annot = tab ? tab->selectedAnnotation : nullptr;
     if (!AnnotationIsLive(annot) || annot != tb->annot) {
@@ -1562,15 +1592,16 @@ static void ChipBorderPicked(AnnotEditToolbar* tb, int width) {
 constexpr int kBorderWidthMax = 12;
 constexpr int kFreeTextSizeMin = 6;
 constexpr int kFreeTextSizeMax = 72;
-constexpr int kOpacityPercentMin = 10;
+constexpr int kOpacityPercentMin = 0;
 
 static void ChipOpacityPicked(AnnotEditToolbar* tb, int percent) {
+    if (!IsAnnotEditToolbarLive(tb) || tb->win->CurrentTab() != tb->tab) return;
     WindowTab* tab = tb->tab;
     Annotation* annot = tab ? tab->selectedAnnotation : nullptr;
     if (!AnnotationIsLive(annot) || annot != tb->annot) {
         return;
     }
-    int opacity = ((percent * 255) + 50) / 100;
+    int opacity = ((limitValue(percent, 0, 100) * 255) + 50) / 100;
     if (Opacity(annot) == opacity) {
         return;
     }
@@ -1579,6 +1610,7 @@ static void ChipOpacityPicked(AnnotEditToolbar* tb, int percent) {
 }
 
 static void ChipTextSizePicked(AnnotEditToolbar* tb, int size) {
+    if (!IsAnnotEditToolbarLive(tb) || tb->win->CurrentTab() != tb->tab) return;
     WindowTab* tab = tb->tab;
     Annotation* annot = tab ? tab->selectedAnnotation : nullptr;
     if (!AnnotationIsLive(annot) || annot != tb->annot) {
@@ -1619,7 +1651,10 @@ static void OnChipClick(AnnotEditChip* chip, VirtMouseEvent*) {
         case AnnotEditKind::InteriorColor:
         case AnnotEditKind::TextColor: {
             PdfColor col = chip->item.color;
-            Color current = (col == 0) ? kColorUnset : PdfToWinColorWithAlpha(col);
+            PdfColor actual = kind == AnnotEditKind::InteriorColor ? InteriorColor(annot)
+                              : kind == AnnotEditKind::TextColor   ? DefaultAppearanceTextColor(annot)
+                                                                   : GetColor(annot);
+            Color current = actual == 0 ? kColorUnset : PdfToWinColorWithAlpha(col);
             // a text markup annotation without a color isn't invisible, mupdf
             // draws it in a default one, so offering "none" there is a trap
             bool withNone = !AnnotationIsTextMarkup(Type(annot));
@@ -1632,7 +1667,10 @@ static void OnChipClick(AnnotEditChip* chip, VirtMouseEvent*) {
             float thickness = (isInk || isBorder) ? std::max(BorderWidthF(annot), 0.f) : -1.f;
             // a note's color fills its icon, behind the note
             bool isNoteColor = (Type(annot) == AnnotationType::Text) && isColor;
-            Str label = isNoteColor ? Tr("Background Color") : Tr("Color");
+            Str label = kind == AnnotEditKind::InteriorColor && AnnotationSupportsFillOpacity(Type(annot))
+                            ? Tr("Fill Color")
+                        : isNoteColor ? Tr("Background Color")
+                                      : Tr("Color");
             Str thicknessLabel;
             float minThickness = isInk ? std::max(gSettings->penMinWidth, 0.1f) : 1.f;
             if (isBorder) {
@@ -1642,24 +1680,23 @@ static void OnChipClick(AnnotEditChip* chip, VirtMouseEvent*) {
                 minThickness = 0;
             }
             ShowAnnotColorPopup(tb->win, chipScreen, current, withNone, label, MkFunc1(ChipColorPicked, tb), thickness,
-                                MkFunc1(ChipThicknessPicked, tb), thicknessLabel, minThickness);
+                                MkFunc1(ChipThicknessPicked, tb), thicknessLabel, minThickness, true);
             break;
         }
         case AnnotEditKind::Opacity: {
-            // in percent, as the chip shows it; fully transparent would lose the annotation
             int percent = ((chip->item.number * 100) + 127) / 255;
             ShowAnnotSliderPopup(tb->win, chipScreen, Tr("Opacity"), percent, kOpacityPercentMin, 100,
-                                 MkFunc1(ChipOpacityPicked, tb));
+                                 MkFunc1(ChipOpacityPicked, tb), true);
             break;
         }
         case AnnotEditKind::Border: {
             ShowAnnotSliderPopup(tb->win, chipScreen, Tr("Border Width"), std::max(BorderWidth(annot), 0), 0,
-                                 kBorderWidthMax, MkFunc1(ChipBorderPicked, tb));
+                                 kBorderWidthMax, MkFunc1(ChipBorderPicked, tb), true);
             break;
         }
         case AnnotEditKind::TextSize: {
             ShowAnnotSliderPopup(tb->win, chipScreen, Tr("Text Size"), chip->item.number, kFreeTextSizeMin,
-                                 kFreeTextSizeMax, MkFunc1(ChipTextSizePicked, tb));
+                                 kFreeTextSizeMax, MkFunc1(ChipTextSizePicked, tb), true);
             break;
         }
         case AnnotEditKind::FontName:
@@ -2007,14 +2044,14 @@ static void EndContentsEdit(AnnotEditToolbar* tb, bool accept) {
 }
 
 static void PostedAcceptContents(MainWindow* win) {
-    if (!win || !win->annotEditToolbar) {
+    if (!IsMainWindowValidAndNotClosing(win) || !win->annotEditToolbar) {
         return;
     }
     EndContentsEdit(win->annotEditToolbar, true);
 }
 
 static void PostedCancelContents(MainWindow* win) {
-    if (!win || !win->annotEditToolbar) {
+    if (!IsMainWindowValidAndNotClosing(win) || !win->annotEditToolbar) {
         return;
     }
     EndContentsEdit(win->annotEditToolbar, false);
@@ -2063,6 +2100,7 @@ static bool KeepContentsEditOnKillFocus(AnnotEditToolbar* tb, HWND next) {
 }
 
 static void PostedRefocusContents(MainWindow* win) {
+    if (!IsMainWindowValidAndNotClosing(win)) return;
     AnnotEditToolbar* tb = win ? win->annotEditToolbar : nullptr;
     if (!tb || tb->contentsEditClosing || !tb->editingContents || !tb->contentsEdit) {
         return;
@@ -2257,10 +2295,12 @@ void StartSelectedAnnotContentsEdit(MainWindow* win) {
 }
 
 static void PostedStartContentsEdit(MainWindow* win) {
+    if (!IsMainWindowValidAndNotClosing(win)) return;
     StartSelectedAnnotContentsEdit(win);
 }
 
 static void PostedDeleteSelectedAnnotation(MainWindow* win) {
+    if (!IsMainWindowValidAndNotClosing(win)) return;
     AnnotEditToolbar* tb = win ? win->annotEditToolbar : nullptr;
     Annotation* annot = LiveToolbarAnnot(tb);
     if (annot) {
@@ -2891,6 +2931,26 @@ void RefreshAnnotEditToolbar(MainWindow* win) {
 
 #if IS_DEBUG
 bool AnnotEditToolbar_UnitTestsFontRefresh() {
+    auto* closedToolbar = new AnnotEditToolbar();
+    delete closedToolbar;
+    ChipColorPicked(closedToolbar, MkRgba(18, 52, 86, 128));
+    ChipThicknessPicked(closedToolbar, 2.f);
+    ChipBorderPicked(closedToolbar, 2);
+    ChipOpacityPicked(closedToolbar, 50);
+    ChipTextSizePicked(closedToolbar, 12);
+    auto* closedWin = new MainWindow(nullptr);
+    closedWin->tabsCtrl = new TabsCtrl();
+    delete closedWin;
+    PostedAcceptContents(closedWin);
+    PostedCancelContents(closedWin);
+    PostedRefocusContents(closedWin);
+    PostedStartContentsEdit(closedWin);
+    PostedDeleteSelectedAnnotation(closedWin);
+    auto* closedTab = new WindowTab(nullptr);
+    delete closedTab;
+    ShowSelectedAnnotationView(closedTab);
+    OnAnnotsProgress(closedTab);
+
     Settings* saved = gSettings;
     gSettings = NewSettings({});
     MainWindow win(nullptr);
@@ -3332,10 +3392,15 @@ static void CollectAnnotationHoverRows(Annotation* annot, AnnotationHoverRows& r
         rows.Add(StrL("color"), label, AnnotationColorNameTemp(GetColor(annot)));
     }
     if (AnnotationSupportsInteriorColor(type)) {
-        rows.Add(StrL("interiorColor"), Tr("Interior Color:"), AnnotationColorNameTemp(InteriorColor(annot)));
+        rows.Add(StrL("interiorColor"), AnnotationSupportsFillOpacity(type) ? Tr("Fill Color:") : Tr("Interior Color:"),
+                 AnnotationColorNameTemp(InteriorColor(annot)));
     }
     if (AnnotationSupportsOpacity(type)) {
-        rows.Add(StrL("opacity"), Tr("Opacity:"), fmt("%d", Opacity(annot)));
+        rows.Add(StrL("opacity"), AnnotationSupportsFillOpacity(type) ? Tr("Outline Opacity:") : Tr("Opacity:"),
+                 fmt("%d%%", (Opacity(annot) * 100 + 127) / 255));
+    }
+    if (AnnotationSupportsFillOpacity(type)) {
+        rows.Add(StrL("fillOpacity"), Tr("Fill Opacity:"), fmt("%d%%", InteriorOpacity(annot)));
     }
 
     rows.Add(StrL("author"), Tr("Author:"), ShortAnnotationHoverValueTemp(Author(annot)));
@@ -3353,6 +3418,79 @@ static void CollectAnnotationHoverRows(Annotation* annot, AnnotationHoverRows& r
         rows.Add(StrL("rect"), Tr("Rect:"), fmt("%d-%d@%d-%d", (int)rect.dx, (int)rect.dy, (int)rect.x, (int)rect.y));
     }
 }
+
+#if IS_DEBUG
+bool AnnotEditToolbar_UnitTestsOpacity() {
+    const char* objects[] = {
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Square /Rect [10 10 100 100] /C [1 0 0] /IC [0 1 0] /CA 0.5 >>",
+    };
+    str::Builder pdf;
+    pdf.Append(StrL("%PDF-1.4\n"));
+    Vec<int> offsets;
+    for (int i = 0; i < dimof(objects); i++) {
+        VecAppend(offsets, len(pdf));
+        pdf.Append(fmt("%d 0 obj\n%s\nendobj\n", i + 1, Str(objects[i])));
+    }
+    int xref = len(pdf);
+    pdf.Append(fmt("xref\n0 %d\n0000000000 65535 f \n", dimof(objects) + 1));
+    for (int offset : offsets) pdf.Append(fmt("%010d 00000 n \n", offset));
+    pdf.Append(fmt("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", dimof(objects) + 1, xref));
+    EngineBase* engine = CreateEngineMupdfFromData(ToStr(pdf), StrL("opacity-ui.pdf"), nullptr);
+    if (!engine) return false;
+    defer {
+        SafeEngineRelease(&engine);
+    };
+    Vec<Annotation*> annots;
+    EngineMupdfGetAnnotations(engine, annots);
+    if (len(annots) != 1) return false;
+    Annotation* annot = annots[0];
+    bool ok = kOpacityPercentMin == 0;
+    for (int opacity : {0, 26, 128, 255}) {
+        SetOpacity(annot, opacity);
+        AnnotationHoverRows rows;
+        CollectAnnotationHoverRows(annot, rows);
+        int idx = rows.keys.Find(StrL("opacity"));
+        ok &= idx >= 0 && str::Eq(rows.values[idx], fmt("%d%%", (opacity * 100 + 127) / 255));
+    }
+    SetOpacity(annot, 128);
+    MainWindow win(nullptr);
+    win.tabsCtrl = new TabsCtrl();
+    // Mutation checks do not run the document-window repaint pipeline.
+    WindowTab tab(nullptr);
+    tab.selectedAnnotation = annot;
+    win.currentTabTemp = &tab;
+    VirtHost host;
+    AnnotEditToolbar tb;
+    tb.host = &host;
+    tb.win = &win;
+    tb.tab = &tab;
+    tb.annot = annot;
+    win.annotEditToolbar = &tb;
+    VecAppend(gWindows, &win);
+    defer {
+        VecRemove(gWindows, &win);
+        win.annotEditToolbar = nullptr;
+        win.currentTabTemp = nullptr;
+    };
+    tb.colorPickKind = AnnotEditKind::InteriorColor;
+    for (int alpha : {64, 0, 255}) {
+        ChipColorPicked(&tb, MkRgba(19, 200, 91, (u8)alpha));
+        ok &= Opacity(annot) == 128;
+        ok &= InteriorColor(annot) == MkPdfColor(19, 200, 91);
+        AnnotationHoverRows rows;
+        CollectAnnotationHoverRows(annot, rows);
+        int idx = rows.keys.Find(StrL("fillOpacity"));
+        ok &= idx >= 0 && str::Eq(rows.values[idx], fmt("%d%%", (alpha * 100 + 127) / 255));
+    }
+    tb.colorPickKind = AnnotEditKind::Color;
+    ChipColorPicked(&tb, MkRgba(0, 0, 0, 0));
+    ok &= Opacity(annot) == 0 && GetColor(annot) == MkPdfColor(0, 0, 0);
+    return ok;
+}
+#endif
 
 static Color AnnotationHoverBg() {
     return ThemeNotificationsBackgroundColor();
@@ -3614,24 +3752,9 @@ TempStr AnnotationHoverOverlayStateTemp(MainWindow* win) {
 // arrows in the annot list can keep moving the caret (issue #6009). Find
 // uses ScheduleRepaint, not MainWindowRerender, for the same reason.
 static void ShowSelectedAnnotationView(WindowTab* tab) {
-    if (!tab) {
-        return;
-    }
+    MainWindow* win = FindMainWindowByTab(tab);
+    if (!IsMainWindowValidAndNotClosing(win)) return;
     tab->pendingShowSelectedAnnotation = false;
-    if (!IsMainWindowValidAndNotClosing(tab->win)) {
-        return;
-    }
-    MainWindow* win = tab->win;
-    bool tabOpen = false;
-    for (WindowTab* t : win->Tabs()) {
-        if (t == tab) {
-            tabOpen = true;
-            break;
-        }
-    }
-    if (!tabOpen) {
-        return;
-    }
     Annotation* annot = tab->selectedAnnotation;
     DisplayModel* dm = tab->AsFixed();
     if (AnnotationIsLive(annot) && dm) {
@@ -3723,10 +3846,9 @@ static void CollectPriorityAnnotPages(WindowTab* tab, Annotation* extra, Vec<int
 }
 
 static void OnAnnotsProgress(WindowTab* tab) {
-    if (!tab || !IsMainWindowValidAndNotClosing(tab->win)) {
-        return;
-    }
-    RefreshAnnotFilterAnnotations(tab->win);
+    MainWindow* win = FindMainWindowByTab(tab);
+    if (!IsMainWindowValidAndNotClosing(win)) return;
+    RefreshAnnotFilterAnnotations(win);
     CommandPaletteOnAnnotationsChanged();
 }
 

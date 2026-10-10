@@ -119,6 +119,16 @@ try {
     if ($edit[1] -ne 'edit' -or $edit -notcontains '--draft=false') { throw 'Draft not promoted' }
     $notes = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'enhanced-public-release-notes.md') -Raw
     if ($notes -notmatch [Regex]::Escape($upstream.commit) -or $notes -notmatch [Regex]::Escape($upstream.commitDateUtc) -or $notes -notmatch 'unsigned') { throw 'Missing upstream source/date or unsigned status' }
+    $approved = (Get-Content -LiteralPath (Join-Path $repoRoot "docs/releases/$version.md") -Raw).Trim()
+    $visible = [regex]::Replace($notes,'(?s)\s*<!-- enhanced-release-provenance.*?-->\s*$','').Trim()
+    if ($visible -cne $approved) { throw 'Visible notes differ from the approved document' }
+    if (-not $notes.Contains("Enhanced source: $source")) { throw 'Missing Enhanced source identity' }
+    foreach ($arch in @('x64','arm64')) {
+        foreach ($kind in @('install.exe','portable.exe','portable.zip')) {
+            $url = "https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-$version/SumatraPDF-Enhanced-$version-$arch-$kind"
+            if (-not $notes.Contains($url)) { throw 'Missing direct download link' }
+        }
+    }
     Write-Output 'PASS: package/source/hash/privacy/repository guards and verified draft promotion.'
 } finally {
     $env:RUNNER_TEMP = $savedRunnerTemp; $env:GH_REPO = $savedRepo

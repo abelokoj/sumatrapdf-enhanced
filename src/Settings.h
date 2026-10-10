@@ -757,33 +757,59 @@ struct Annotations {
     Str freeTextAlignment;
     // colors offered by the drop-down on the annotation toolbar's buttons,
     // separated by space. Picking one sets the color of new annotations of
-    // that type. The color a button currently makes annotations in is
-    // added when it is missing
+    // that type. Use the palette add button or right-click a swatch to
+    // remove or pin a color
     Str presetColors;
     // color of newly created text (sticky note) annotations
     ParsedColor textIconColor;
     // color of newly created line annotations. If not set, the PDF
     // engine's default (red) is used
     ParsedColor lineColor;
+    // fill color of newly created line annotations; unset means no fill
+    ParsedColor lineInteriorColor;
+    // fill opacity of newly created line annotations, from 0 to 100
+    // percent
+    int lineInteriorOpacity;
     // color of newly created polyline annotations. If not set, the PDF
     // engine's default (red) is used
     ParsedColor polyLineColor;
+    // fill color of newly created polyline annotations; unset means no
+    // fill
+    ParsedColor polyLineInteriorColor;
+    // fill opacity of newly created polyline annotations, from 0 to 100
+    // percent
+    int polyLineInteriorOpacity;
     // color of newly created square annotations. If not set, the PDF
     // engine's default (red) is used
     ParsedColor squareColor;
+    // fill color of newly created square annotations; unset means no fill
+    ParsedColor squareInteriorColor;
+    // fill opacity of newly created square annotations, from 0 to 100
+    // percent
+    int squareInteriorOpacity;
     // color of newly created circle annotations. If not set, the PDF
     // engine's default (red) is used
     ParsedColor circleColor;
+    // fill color of newly created circle annotations; unset means no fill
+    ParsedColor circleInteriorColor;
+    // fill opacity of newly created circle annotations, from 0 to 100
+    // percent
+    int circleInteriorOpacity;
     // color of newly created polygon annotations. If not set, the PDF
     // engine's default (red) is used
     ParsedColor polygonColor;
+    // fill color of newly created polygon annotations; unset means no fill
+    ParsedColor polygonInteriorColor;
+    // fill opacity of newly created polygon annotations, from 0 to 100
+    // percent
+    int polygonInteriorOpacity;
     // color of newly created ink annotations, as #aarrggbb: the alpha is
     // how translucent the stroke is (00 = transparent, FF = opaque), so
     // the color is exactly what ends up on the page
     ParsedColor inkColor;
     // colors offered by the ink button's drop-down, separated by space.
-    // Use #aarrggbb values: the alpha is the stroke's opacity. The color
-    // ink currently draws in is added when it is missing
+    // Use #aarrggbb values: the alpha is the stroke's opacity. Use the
+    // palette add button or right-click a swatch to remove or pin a color
     Str inkColors;
     // width of the stroke of new ink annotations, in points
     float inkBorderWidth;
@@ -862,6 +888,10 @@ struct Settings {
     // from numbered headings in its text (Generate Table Of Contents
     // command does it on demand)
     bool autoGenerateTOC;
+    // saved order of toolbar command icons
+    Str toolbarOrder;
+    // saved order of annotation toolbar command icons
+    Str toolbarAnnotationOrder;
     // list of handlers for selected text, shown in context menu when text
     // selection is active. See [docs for more
     // information](https://www.sumatrapdfreader.org/docs/Customize-search-translation-services)
@@ -1085,6 +1115,8 @@ struct Settings {
     // laser width in screen pixels at 100% DPI (0.1 to 32), independent of
     // pen width
     float laserWidth;
+    // colors offered in the laser pointer palette, separated by spaces
+    Str laserColors;
     // favorite annotation tool, color and width combinations
     Vec<PinnedAnnotationTool*>* pinnedAnnotationTools;
     // if both the favorites and the bookmarks part of the sidebar are
@@ -1094,6 +1126,12 @@ struct Settings {
     // size of the toolbar icons in pixels at 100% display scaling (8-64);
     // the toolbar itself is a few pixels taller
     int toolbarSize;
+    // pin icon design: 10 = soft outline (default), 3 = solid, 4 = round
+    // head; all use the same diagonal angle
+    int pinIconStyle;
+    // color picker icon design: 8 = color tiles (default), 1 = classic
+    // palette, 2 = soft palette, 6 = palette and dropper, 5 = color wheel
+    int colorPickerIconStyle;
     // font size for bookmarks and favorites tree views, in pixels; 0 means
     // the Windows default. Not scaled by the display scaling
     int treeFontSize;

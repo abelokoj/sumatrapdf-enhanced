@@ -365,8 +365,12 @@ enum {
     CmdLassoRecolor = 559,
     CmdLassoThinner = 560,
     CmdLassoThicker = 561,
+    CmdTextSelectTool = 562,
+    CmdLassoFreehand = 563,
+    CmdLassoRectangle = 564,
+    CmdLassoDelete = 565,
 
-    CmdLast = 561,
+    CmdLast = 565,
     CmdFirstCustom = CmdLast + 100,
 
     // aliases, at the end to not mess ordering

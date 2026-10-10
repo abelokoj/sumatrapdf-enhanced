@@ -202,6 +202,7 @@ struct LaserTrailPoint {
 
 struct AnnotationLasso {
     bool active = false;
+    bool rectangular = false;
     bool drawing = false;
     bool transforming = false;
     bool rotating = false;
@@ -554,6 +555,7 @@ struct MainWindow { // NOLINT(clang-analyzer-optin.performance.Padding)
     AnnotPlacement annotPlacement;
     AnnotationLasso annotationLasso;
     bool handTool = false;
+    bool textSelectTool = false;
     int inkEraseMode = 0;
     InkPenStyle inkPenStyle = InkPenStyle::Ballpoint;
     bool penOnly = true;
@@ -740,6 +742,8 @@ struct MainWindow { // NOLINT(clang-analyzer-optin.performance.Padding)
 
     // Smooth mouse-wheel scrolling: exponential chase of scrollTargetY.
     // scrollAnimY is sub-pixel; only integer steps are applied to the view.
+    DisplayModel* scrollAnimModel = nullptr;
+    u64 scrollAnimViewChange = 0;
     int scrollTargetY = 0;
     double scrollAnimY = 0;
     LARGE_INTEGER scrollAnimLastTime{};

@@ -11,14 +11,19 @@ struct ScaledWindowCaption {
 static int appCaptionPaintCount = 0;
 #endif
 
+static int AppCaptionNativeHeight(HWND hwnd) {
+    bool toolWindow = (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0;
+    return DpiGetSystemMetrics(toolWindow ? SM_CYSMCAPTION : SM_CYCAPTION, DpiGetForHwnd(hwnd));
+}
+
 static int AppCaptionHeight(HWND hwnd) {
     int dpi = DpiGetForHwnd(hwnd);
     int textHeight = PlatformFontLineHeight(GetAppFontForDpi(dpi));
-    return std::max(DpiGetSystemMetrics(SM_CYCAPTION, dpi), textHeight + UiScalePxForDpi(dpi, 12));
+    return std::max(AppCaptionNativeHeight(hwnd), textHeight + UiScalePxForDpi(dpi, 12));
 }
 
 static int AppCaptionExtraHeight(HWND hwnd) {
-    return AppCaptionHeight(hwnd) - DpiGetSystemMetrics(SM_CYCAPTION, DpiGetForHwnd(hwnd));
+    return AppCaptionHeight(hwnd) - AppCaptionNativeHeight(hwnd);
 }
 
 static Rect AppCaptionRect(HWND hwnd) {
@@ -37,10 +42,23 @@ static Rect AppCaptionButton(HWND hwnd, int hit) {
     int width = caption.dy;
     LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
     bool rtl = (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) != 0;
-    int index = hit == HTCLOSE ? 0 : hit == HTMAXBUTTON ? 1 : 2;
-    if (hit == HTMINBUTTON && !(style & WS_MAXIMIZEBOX)) index--;
-    int x = rtl ? caption.x + index * width : caption.Right() - (index + 1) * width;
+    int closeWidth = (style & WS_VSCROLL) ? std::max(width, GetAppScrollbarWidth(DpiGetForHwnd(hwnd))) : width;
+    if (hit == HTCLOSE) width = closeWidth;
+    int preceding = 0;
+    if (hit != HTCLOSE) preceding = closeWidth;
+    if (hit == HTMINBUTTON && (style & WS_MAXIMIZEBOX)) preceding += caption.dy;
+    int x = rtl ? caption.x + preceding : caption.Right() - preceding - width;
     return {x, caption.y, width, caption.dy};
+}
+
+static Rect AppCaptionButtonContent(HWND hwnd, int hit) {
+    Rect button = AppCaptionButton(hwnd, hit);
+    if (hit != HTCLOSE || !(GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_VSCROLL)) return button;
+    int lane = GetAppScrollbarWidth(DpiGetForHwnd(hwnd));
+    bool rtl = (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) != 0;
+    if (!rtl) button.x = button.Right() - lane;
+    button.dx = lane;
+    return button;
 }
 
 static bool AppCaptionButtonEnabled(HWND hwnd, int hit) {
@@ -110,8 +128,9 @@ static void PaintAppCaption(HWND hwnd, ScaledWindowCaption* state, HDC target = 
         if (!rtl) title.x += iconSize + pad;
     }
     int buttons = (style & WS_SYSMENU) ? 1 + !!(style & WS_MINIMIZEBOX) + !!(style & WS_MAXIMIZEBOX) : 0;
-    title.dx = std::max(0, title.dx - buttons * caption.dy);
-    if (rtl) title.x += buttons * caption.dy;
+    int buttonsWidth = buttons ? AppCaptionButton(hwnd, HTCLOSE).dx + (buttons - 1) * caption.dy : 0;
+    title.dx = std::max(0, title.dx - buttonsWidth);
+    if (rtl) title.x += buttonsWidth;
     u32 textFlags = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX;
     if (rtl) textFlags |= DT_RTLREADING | DT_RIGHT;
     int saved = SaveDC(dc);
@@ -124,17 +143,22 @@ static void PaintAppCaption(HWND hwnd, ScaledWindowCaption* state, HDC target = 
         if (hit == HTMAXBUTTON && !(style & WS_MAXIMIZEBOX)) continue;
         if (hit == HTMINBUTTON && !(style & WS_MINIMIZEBOX)) continue;
         Rect button = AppCaptionButton(hwnd, hit);
+        Rect content = AppCaptionButtonContent(hwnd, hit);
         bool closeHot = hit == HTCLOSE && hit == state->hot && AppCaptionButtonEnabled(hwnd, hit);
         if (closeHot) {
-            int inset = UiScalePxForDpi(dpi, 4);
-            gfx.FillEllipse({button.x + inset, button.y + inset, button.dx - inset * 2, button.dy - inset * 2},
-                            gColsCloseBtn[kColCloseCircleHover]);
+            int diameter = std::min(content.dx, content.dy);
+            int inset = std::min(UiScalePxForDpi(dpi, 4), diameter / 6);
+            diameter = std::max(1, diameter - inset * 2);
+            gfx.FillEllipse(
+                {content.x + (content.dx - diameter) / 2, content.y + (content.dy - diameter) / 2, diameter, diameter},
+                gColsCloseBtn[kColCloseCircleHover]);
         } else if (hit == state->hot) {
             gfx.FillRoundedRect(button, GetAppCornerRadius(dpi, 4), ThemeHotBackgroundColor());
         }
         int glyph = std::max(UiScalePxForDpi(dpi, 10), iconSize / 2);
-        int x = button.x + (button.dx - glyph) / 2;
-        int y = button.y + (button.dy - glyph) / 2;
+        glyph = std::min(glyph, std::max(2, std::min(content.dx, content.dy) / 2));
+        int x = content.x + (content.dx - glyph) / 2;
+        int y = content.y + (content.dy - glyph) / 2;
         int stroke = std::max(1, UiScalePxForDpi(dpi, 1));
         Color color = AppCaptionButtonEnabled(hwnd, hit) ? ThemeWindowTextColor() : ThemeWindowTextDisabledColor();
         if (closeHot) color = gColsCloseBtn[kColCloseXHover];
@@ -260,7 +284,8 @@ static void ApplyScaledWindowCaption(HWND hwnd) {
     if (!gSettings || (style & WS_CHILD) || (style & WS_CAPTION) != WS_CAPTION) return;
     WCHAR name[64]{};
     GetClassNameW(hwnd, name, dimof(name));
-    if (!WindowBaseFromHwnd(hwnd) && wcscmp(name, L"#32770") != 0 && wcscmp(name, L"SumatraPDFEnhancedLearning") != 0)
+    if (!WindowBaseFromHwnd(hwnd) && wcscmp(name, L"#32770") != 0 && wcscmp(name, L"SumatraPDFEnhancedLearning") != 0 &&
+        wcscmp(name, L"SumatraToolbarHoverMenu") != 0)
         return;
     if (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & (WS_EX_LAYERED | WS_EX_TRANSPARENT)) return;
     DWORD_PTR existing = 0;

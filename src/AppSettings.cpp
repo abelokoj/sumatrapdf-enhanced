@@ -26,6 +26,7 @@
 
 #include "Settings.h"
 #include "Commands.h"
+#include "Annotation.h"
 #include "DisplayMode.h"
 #include "DocController.h"
 #include "EngineBase.h"
@@ -58,6 +59,7 @@
 #include "PagePosition.h"
 #include "CachedObjects.h"
 #include "UiFonts.h"
+#include "SvgIcons.h"
 #include "AIChatPanel.h"
 #include "MarkdownModel.h"
 #include "VocabularyDialog.h"
@@ -1748,8 +1750,12 @@ void ParseColorList(Str s, Vec<Color>& out, int maxColors) {
             i++;
         }
         ParsedColor parsed;
-        ParseColor(parsed, Str(s.s + start, i - start));
+        Str token(s.s + start, i - start);
+        ParseColor(parsed, token);
         if (parsed.parsedOk) {
+            if (!str::TrimPrefix(token, StrL("0x"))) str::TrimPrefix(token, StrL("#"));
+            if (len(token) == 6)
+                parsed.col = MkRgba(GetRed(parsed.col), GetGreen(parsed.col), GetBlue(parsed.col), 255);
             VecAppend(out, parsed.col);
         }
     }
@@ -1761,7 +1767,9 @@ TempStr SerializeColorList(const Vec<Color>& colors) {
         if (len(buf) > 0) {
             buf.AppendChar(' ');
         }
-        buf.Append(SerializeColorTemp(col));
+        buf.Append(col == kColorUnset
+                       ? StrL("checkered")
+                       : fmt("#%02x%02x%02x%02x", GetAlpha(col), GetRed(col), GetGreen(col), GetBlue(col)));
     }
     return ToStrTemp(buf);
 }
@@ -2155,6 +2163,7 @@ void DeleteFavorite(Favorite* fav) {
 
 Settings* NewSettings(Str data) {
     Settings* settings = (Settings*)DeserializeStruct(&gSettingsInfo, data);
+    if (!settings) return nullptr;
     if (settings && !settings->scrollbarWidthExpanded) {
         // Expand a saved width once; fresh profiles already have the new default.
         SquareTreeNode* root = ParseSquareTree(data);
@@ -2164,10 +2173,143 @@ Settings* NewSettings(Str data) {
         delete root;
         settings->scrollbarWidthExpanded = true;
     }
+    if (settings && settings->pinIconStyle != (int)PinIconStyle::Solid &&
+        settings->pinIconStyle != (int)PinIconStyle::Round && settings->pinIconStyle != (int)PinIconStyle::Soft) {
+        settings->pinIconStyle = (int)PinIconStyle::Soft;
+    }
+    switch ((ColorPickerIconStyle)settings->colorPickerIconStyle) {
+        case ColorPickerIconStyle::Classic:
+        case ColorPickerIconStyle::Soft:
+        case ColorPickerIconStyle::Dropper:
+        case ColorPickerIconStyle::Wheel:
+        case ColorPickerIconStyle::Tiles:
+            break;
+        default:
+            settings->colorPickerIconStyle = (int)ColorPickerIconStyle::Tiles;
+            break;
+    }
+    auto& a = settings->annotations;
+    setMinMax(a.lineInteriorOpacity, 0, 100);
+    setMinMax(a.polyLineInteriorOpacity, 0, 100);
+    setMinMax(a.squareInteriorOpacity, 0, 100);
+    setMinMax(a.circleInteriorOpacity, 0, 100);
+    setMinMax(a.polygonInteriorOpacity, 0, 100);
     return settings;
 }
 
 #if IS_DEBUG
+void AppSettings_UnitTestsShapeDefaults() {
+    Vec<Color> palette;
+    ParseColorList(StrL("#123456 0xabcdef 112233 #00123456 0x80123456 #ff123456 checkered invalid"), palette, 0);
+    utassert(len(palette) == 7);
+    if (len(palette) == 7) {
+        utassert(palette[0] == MkRgba(0x12, 0x34, 0x56, 255));
+        utassert(palette[1] == MkRgba(0xab, 0xcd, 0xef, 255));
+        utassert(palette[2] == MkRgba(0x11, 0x22, 0x33, 255));
+        utassert(palette[3] == MkRgba(0x12, 0x34, 0x56, 0));
+        utassert(palette[4] == MkRgba(0x12, 0x34, 0x56, 128));
+        utassert(palette[5] == MkRgba(0x12, 0x34, 0x56, 255));
+        utassert(palette[6] == kColorUnset);
+    }
+    Vec<Color> transparent;
+    VecAppend(transparent, MkRgba(0x12, 0x34, 0x56, 0));
+    VecAppend(transparent, MkRgba(0x12, 0x34, 0x56, 128));
+    VecAppend(transparent, MkRgba(0x12, 0x34, 0x56, 255));
+    VecAppend(transparent, kColorUnset);
+    Str serialized = str::Dup(SerializeColorList(transparent));
+    utassert(str::StartsWith(serialized, StrL("#00123456 ")));
+    Vec<Color> restored;
+    ParseColorList(serialized, restored, 0);
+    utassert(len(restored) == len(transparent));
+    for (int i = 0; i < std::min(len(restored), len(transparent)); i++) utassert(restored[i] == transparent[i]);
+    str::Free(serialized);
+    Settings* saved = gSettings;
+    AnnotationType types[] = {AnnotationType::Line, AnnotationType::PolyLine, AnnotationType::Square,
+                              AnnotationType::Circle, AnnotationType::Polygon};
+    gSettings = NewSettings({});
+    for (AnnotationType type : types) {
+        AnnotCreateArgs args{type};
+        SetAnnotCreateArgs(args, nullptr);
+        utassert(!args.interiorCol.parsedOk && args.interiorOpacity == 100);
+    }
+    DeleteSettings(gSettings);
+
+    gSettings =
+        NewSettings(StrL("Annotations [\n"
+                         "LineColor = #102030\nLineInteriorColor = #112233\nLineInteriorOpacity = 0\n"
+                         "PolyLineColor = #203040\nPolyLineInteriorColor = #223344\nPolyLineInteriorOpacity = 25\n"
+                         "SquareColor = #304050\nSquareInteriorColor = #334455\nSquareInteriorOpacity = 50\n"
+                         "CircleColor = #405060\nCircleInteriorColor = #445566\nCircleInteriorOpacity = 75\n"
+                         "PolygonColor = #506070\nPolygonInteriorColor = #556677\nPolygonInteriorOpacity = 100\n"
+                         "]\n"));
+    Str encoded = SerializeSettings(gSettings, {});
+    Settings* reloaded = NewSettings(encoded);
+    DeleteSettings(gSettings);
+    gSettings = reloaded;
+    str::Free(encoded);
+    PdfColor outlines[] = {MkPdfColor(0x10, 0x20, 0x30), MkPdfColor(0x20, 0x30, 0x40), MkPdfColor(0x30, 0x40, 0x50),
+                           MkPdfColor(0x40, 0x50, 0x60), MkPdfColor(0x50, 0x60, 0x70)};
+    PdfColor fills[] = {MkPdfColor(0x11, 0x22, 0x33), MkPdfColor(0x22, 0x33, 0x44), MkPdfColor(0x33, 0x44, 0x55),
+                        MkPdfColor(0x44, 0x55, 0x66), MkPdfColor(0x55, 0x66, 0x77)};
+    for (int i = 0; i < dimof(types); i++) {
+        AnnotCreateArgs args{types[i]};
+        SetAnnotCreateArgs(args, nullptr);
+        utassert(args.col.parsedOk && args.col.pdfCol == outlines[i]);
+        utassert(args.interiorCol.parsedOk && args.interiorCol.pdfCol == fills[i]);
+        utassert(args.interiorOpacity == i * 25 && args.opacity == 100);
+    }
+
+    CommandArg color;
+    color.name = kCmdArgInteriorColor;
+    color.type = CommandArg::Type::Color;
+    ParseColor(color.colorVal, StrL("#aabbcc"));
+    CommandArg opacity;
+    opacity.name = kCmdArgOpacity;
+    opacity.type = CommandArg::Type::Int;
+    opacity.intVal = 37;
+    color.next = &opacity;
+    CustomCommand cmd;
+    cmd.firstArg = &color;
+    AnnotCreateArgs overrideArgs{AnnotationType::Square};
+    SetAnnotCreateArgs(overrideArgs, &cmd);
+    utassert(overrideArgs.col.pdfCol == outlines[2]);
+    utassert(overrideArgs.interiorCol.pdfCol == MkPdfColor(0xaa, 0xbb, 0xcc));
+    utassert(overrideArgs.interiorOpacity == 37 && overrideArgs.opacity == 37);
+    opacity.intVal = 130;
+    SetAnnotCreateArgs(overrideArgs, &cmd);
+    utassert(overrideArgs.interiorOpacity == 100);
+    opacity.intVal = -20;
+    SetAnnotCreateArgs(overrideArgs, &cmd);
+    utassert(overrideArgs.interiorOpacity == 0);
+    color.next = nullptr;
+    AnnotCreateArgs colorOnly{AnnotationType::Square};
+    SetAnnotCreateArgs(colorOnly, &cmd);
+    utassert(colorOnly.interiorOpacity == 50 && colorOnly.opacity == 100);
+    for (Str value : {StrL("#00aabbcc"), StrL("#ffaabbcc"), StrL("0x80aabbcc")}) {
+        color.colorVal = {};
+        ParseColor(color.colorVal, value);
+        AnnotCreateArgs alphaOverride{AnnotationType::Square};
+        SetAnnotCreateArgs(alphaOverride, &cmd);
+        utassert(alphaOverride.interiorOpacity == MulDiv((int)(color.colorVal.pdfCol >> 24), 100, 255));
+        utassert(alphaOverride.opacity == 100);
+    }
+    DeleteSettings(gSettings);
+
+    gSettings =
+        NewSettings(StrL("Annotations [\n"
+                         "LineInteriorOpacity = -1\nPolyLineInteriorOpacity = 101\n"
+                         "SquareInteriorOpacity = -40\nCircleInteriorOpacity = 150\nPolygonInteriorOpacity = 35\n"
+                         "]\n"));
+    int clamped[] = {0, 100, 0, 100, 35};
+    for (int i = 0; i < dimof(types); i++) {
+        AnnotCreateArgs args{types[i]};
+        SetAnnotCreateArgs(args, nullptr);
+        utassert(args.interiorOpacity == clamped[i]);
+    }
+    DeleteSettings(gSettings);
+    gSettings = saved;
+}
+
 bool AppSettings_UnitTestsScrollbars() {
     for (int oldWidth : {8, 12, 20, 28, 40}) {
         Settings* legacy = NewSettings(fmt("ScrollbarWidth = %d\n", oldWidth));

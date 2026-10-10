@@ -1058,6 +1058,7 @@ static DocumentLayoutMargin ToDocumentLayoutMargin(WindowMargin margin) {
 }
 
 static void CopyDocumentLayoutToPageInfo(const DisplayModel* dm, const DocumentLayout& layout) {
+    dm->visibleSummaryValid = false;
     for (int pageNo = 1; pageNo <= dm->PageCount(); pageNo++) {
         PageInfo* pageInfo = dm->GetPageInfo(pageNo);
         const DocumentLayoutPage* page = layout.GetPage(pageNo);
@@ -1116,6 +1117,8 @@ void DisplayModel::SetInitialViewSettings(DisplayMode newDisplayMode, int newSta
 // pageCount under pagesInfoLock, so a concurrent render-thread read via
 // PageVisibleNearbyLocked() never sees a freed or half-built array
 void DisplayModel::BuildPagesInfo() {
+    viewChangeId++;
+    visibleSummaryValid = false;
     // read the generation BEFORE the count: a concurrent bump in between can
     // only make this snapshot look older than the engine (forcing another
     // sync later), never newer than the count we're about to read
@@ -1475,6 +1478,7 @@ float DisplayModel::ZoomRealFromVirtualForPage(float zoomVirtual, int pageNo) co
 }
 
 int DisplayModel::FirstVisiblePageNo() const {
+    if (visibleSummaryValid) return visibleFirstPage ? visibleFirstPage : kInvalidPageNo;
     ReportIf(!pagesInfo);
     if (!pagesInfo) {
         return kInvalidPageNo;
@@ -1505,6 +1509,7 @@ int DisplayModel::CurrentPageNo() const {
     if (!pagesInfo) {
         return kInvalidPageNo;
     }
+    if (visibleSummaryValid) return visibleCurrentPage;
     // determine the most visible page
     int mostVisiblePage = kInvalidPageNo;
     float ratio = 0;
@@ -1705,6 +1710,8 @@ bool DisplayModel::ViewportReadyForRelayout() const {
      * switching between display modes
      * navigating to another page in non-continuous mode */
 void DisplayModel::Relayout(float newZoomVirtual, int newRotation) {
+    viewChangeId++;
+    visibleSummaryValid = false;
     ReportIf(!pagesInfo);
     if (!pagesInfo) {
         return;
@@ -1999,7 +2006,8 @@ bool DisplayModel::EnsureMediaBoxesForVisiblePages() {
     constexpr int kMaxRelayouts = 4;
     for (int i = 0; i < kMaxRelayouts; i++) {
         int nInPass = 0;
-        for (int pageNo = 1; pageNo <= PageCount(); pageNo++) {
+        for (int pageNo = visibleSummaryValid ? visibleFirstPage : 1;
+             pageNo > 0 && pageNo <= (visibleSummaryValid ? visibleLastPage : PageCount()); pageNo++) {
             PageInfo* pi = GetPageInfo(pageNo);
             if (pi->visibleRatio <= 0 || !pi->usedEstimatedMediaBox) {
                 continue;
@@ -2059,7 +2067,8 @@ bool DisplayModel::EnsureTrimEmptyMarginsForVisiblePages() {
     constexpr int kMaxRelayouts = 4;
     for (int i = 0; i < kMaxRelayouts; i++) {
         int nInPass = 0;
-        for (int pageNo = 1; pageNo <= PageCount(); pageNo++) {
+        for (int pageNo = visibleSummaryValid ? visibleFirstPage : 1;
+             pageNo > 0 && pageNo <= (visibleSummaryValid ? visibleLastPage : PageCount()); pageNo++) {
             PageInfo* pi = GetPageInfo(pageNo);
             if (!pi || pi->visibleRatio <= 0 || pi->contentBoxCalculated) {
                 continue;
@@ -2126,21 +2135,33 @@ void DisplayModel::RecalcVisibleParts() const {
         return;
     }
 
-    DocumentLayout layout;
-    layout.Reset(PageCount());
-    layout.viewPort = viewPort;
-    for (int pageNo = 1; pageNo <= PageCount(); ++pageNo) {
-        DocumentLayoutPage* layoutPage = layout.GetPage(pageNo);
-        PageInfo* pageInfo = GetPageInfo(pageNo);
-        if (!layoutPage || !pageInfo) {
-            continue;
+    visibleFirstPage = visibleLastPage = 0;
+    visibleCurrentPage = PageCount();
+    int bandPage = 0;
+    float ratio = 0;
+    // Scrolling changes the viewport only: reuse page geometry instead of
+    // allocating and copying an entire DocumentLayout on every animation tick.
+    for (int pageNo = 1; pageNo <= PageCount(); pageNo++) {
+        PageInfo* page = GetPageInfo(pageNo);
+        Rect visible = page->pos.Intersect(viewPort);
+        page->visibleRatio = 0;
+        if (!visible.IsEmpty() && !page->pos.IsEmpty()) {
+            page->visibleRatio =
+                1.0f * (float)visible.dx * (float)visible.dy / ((float)page->pos.dx * (float)page->pos.dy);
         }
-        layoutPage->pos = pageInfo->pos;
-        layoutPage->isShown = pageInfo->isShown;
-        layoutPage->zoomReal = pageInfo->zoomReal;
+        page->pageOnScreen = page->pos;
+        page->pageOnScreen.Offset(-viewPort.x, -viewPort.y);
+        if (!bandPage && viewPort.y < page->pos.Bottom()) bandPage = pageNo;
+        if (page->visibleRatio <= 0) continue;
+        if (!visibleFirstPage) visibleFirstPage = pageNo;
+        visibleLastPage = pageNo;
+        if (page->visibleRatio > ratio) {
+            visibleCurrentPage = pageNo;
+            ratio = page->visibleRatio;
+        }
     }
-    layout.RecalcVisibleParts();
-    CopyDocumentLayoutToPageInfo(this, layout);
+    if (!visibleFirstPage && bandPage) visibleCurrentPage = bandPage;
+    visibleSummaryValid = true;
 }
 
 int DisplayModel::GetPageNoByPoint(Point pt) {
@@ -2358,14 +2379,19 @@ void DisplayModel::RenderVisibleParts() {
     int firstVisiblePage = 0;
     int lastVisiblePage = 0;
 
-    for (int pageNo = 1; pageNo <= PageCount(); ++pageNo) {
-        PageInfo* pageInfo = GetPageInfo(pageNo);
-        if (pageInfo->visibleRatio > 0.0) {
-            ReportIf(!pagesInfo[pageNo - 1].isShown);
-            if (0 == firstVisiblePage) {
-                firstVisiblePage = pageNo;
+    if (visibleSummaryValid) {
+        firstVisiblePage = visibleFirstPage;
+        lastVisiblePage = visibleLastPage;
+    } else {
+        for (int pageNo = 1; pageNo <= PageCount(); ++pageNo) {
+            PageInfo* pageInfo = GetPageInfo(pageNo);
+            if (pageInfo->visibleRatio > 0.0) {
+                ReportIf(!pagesInfo[pageNo - 1].isShown);
+                if (0 == firstVisiblePage) {
+                    firstVisiblePage = pageNo;
+                }
+                lastVisiblePage = pageNo;
             }
-            lastVisiblePage = pageNo;
         }
     }
     // no page is visible if e.g. the window is resized
@@ -2497,6 +2523,8 @@ void DisplayModel::GoToPage(int pageNo, int scrollY, bool addNavPt, int scrollX)
         ReportIf(true);
         return;
     }
+
+    viewChangeId++;
 
     // a suppressed nav point ignores the scroll state; don't compute it: when
     // SyncWithEngineLayout() restores the view, pages aren't laid out yet
@@ -2969,6 +2997,7 @@ void DisplayModel::ScrollXBy(int dx) {
 }
 
 void DisplayModel::ScrollYTo(int yOff) {
+    viewChangeId++;
     if (ShouldCommitStableNavPointBeforeViewChange(this, GetScrollState())) {
         AddNavPoint();
     }
@@ -3003,6 +3032,7 @@ void DisplayModel::ScrollYBy(int dy, bool changePage) {
     if (0 == dy) {
         return;
     }
+    viewChangeId++;
 
     if (ShouldCommitStableNavPointBeforeViewChange(this, GetScrollState())) {
         AddNavPoint();
@@ -3805,5 +3835,91 @@ void DisplayModelZoom_UnitTests() {
     float zoom = 200;
     utassert(!(!MaybeGetNextZoomByIncrement(&zoom, kZoomMax)));
     utassert(!(fabsf(zoom - 220) > 0.01f));
+}
+#endif
+
+#if IS_DEBUG
+struct ScrollTestCallback : DocControllerCallback {
+    void PageNoChanged(DocController*, int) override {}
+    void ZoomChanged(DocController*, float) override {}
+    void GotoLink(IPageDestination*) override {}
+    void Repaint() override {}
+    void UpdateScrollbars(DisplayModel*, Size) override {}
+    void RequestRendering(DisplayModel*, int) override {}
+    void RequestPredictiveRendering(DisplayModel*, int, const int*, int) override {}
+    void CleanUp(DisplayModel*) override {}
+    void RenderThumbnail(DisplayModel*, Size, const OnBitmapRendered*) override {}
+    void FocusFrame(bool) override {}
+    void SaveDownload(Str, Str) override {}
+    void FindResultReceived(int, int, int) override {}
+    void FindAllResultReceived(Str) override {}
+    void TocChanged(DocController*) override {}
+    void PagesRenumbered(DisplayModel*) override {}
+};
+
+void DisplayModelScroll_UnitTests() {
+    constexpr int pages = 10000;
+    str::Builder pdf;
+    Vec<int> offsets;
+    pdf.Append(StrL("%PDF-1.4\n"));
+    VecAppend(offsets, len(pdf));
+    pdf.Append(StrL("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"));
+    VecAppend(offsets, len(pdf));
+    pdf.Append(fmt("2 0 obj\n<< /Type /Pages /Count %d /Kids [", pages));
+    for (int i = 0; i < pages; i++) pdf.Append(fmt("%d 0 R ", i + 3));
+    pdf.Append(StrL("] >>\nendobj\n"));
+    for (int i = 0; i < pages; i++) {
+        VecAppend(offsets, len(pdf));
+        pdf.Append(fmt("%d 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %d %d] >>\nendobj\n", i + 3,
+                       i % 13 == 0 ? 850 : 612, i % 7 == 0 ? 450 : 792));
+    }
+    int xref = len(pdf);
+    pdf.Append(fmt("xref\n0 %d\n0000000000 65535 f \n", len(offsets) + 1));
+    for (int offset : offsets) pdf.Append(fmt("%010d 00000 n \n", offset));
+    pdf.Append(fmt("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(offsets) + 1, xref));
+    EngineBase* engine = CreateEngineMupdfFromData(ToStr(pdf), StrL("long-scroll-test.pdf"), nullptr);
+    utassert(engine && engine->PageCount() == pages);
+    if (!engine) return;
+    ScrollTestCallback callback;
+    DisplayModel dm(engine, &callback);
+    dm.SetInitialViewSettings(DisplayMode::Continuous, 1, {1100, 800}, 96);
+    dm.useLazyMediaBoxes = false;
+    for (DisplayMode mode : {DisplayMode::SinglePage, DisplayMode::Facing, DisplayMode::BookView,
+                             DisplayMode::Continuous, DisplayMode::ContinuousFacing, DisplayMode::ContinuousBookView}) {
+        dm.SetDisplayMode(mode);
+        for (float zoom : {50.f, 200.f}) {
+            dm.Relayout(zoom, 0);
+            double elapsed = 0;
+            for (int page : {1, pages / 2, pages}) {
+                dm.GoToPage(page, false);
+                int origin = dm.yOffset();
+                auto start = TimeGet();
+                for (int i = 0; i < 120; i++) dm.ScrollYTo(origin + (i % 2) * 24);
+                elapsed += TimeSinceInMs(start);
+                DocumentLayout expected;
+                expected.Reset(pages);
+                expected.params.displayMode = mode;
+                expected.params.startPage = dm.CurrentPageNo();
+                expected.viewPort = dm.GetViewPort();
+                for (int n = 1; n <= pages; n++) {
+                    auto* actual = dm.GetPageInfo(n);
+                    auto* item = expected.GetPage(n);
+                    item->pos = actual->pos;
+                    item->isShown = actual->isShown;
+                }
+                expected.RecalcVisibleParts();
+                for (int n = 1; n <= pages; n++) {
+                    auto* actual = dm.GetPageInfo(n);
+                    auto* item = expected.GetPage(n);
+                    utassert(actual->pageOnScreen == item->pageOnScreen);
+                    utassert(actual->visibleRatio == item->visibleRatio);
+                }
+                utassert(dm.CurrentPageNo() >= 1 && dm.CurrentPageNo() <= pages);
+                utassert(dm.CurrentPageNo() == expected.CurrentPageNo());
+                utassert(dm.FirstVisiblePageNo() == expected.FirstVisiblePageNo());
+            }
+            printf("Long PDF: mode=%d zoom=%.0f 360 scroll steps=%.2f ms\n", (int)mode, zoom, elapsed);
+        }
+    }
 }
 #endif

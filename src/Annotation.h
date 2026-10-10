@@ -100,6 +100,7 @@ struct AnnotCreateArgs {
     ParsedColor bgCol;
     // interior color (fill) for shapes like Square, Circle, Line
     ParsedColor interiorCol;
+    int interiorOpacity = -1;
     // opacity for free text, 0-100, 0-fully transparent (invisible), 100-fully opaque
     // if 100 we don't actually set it (it's the default)
     int opacity = 100;
@@ -179,6 +180,9 @@ int BorderWidth(Annotation*);
 float BorderWidthF(Annotation*);
 Str IconName(Annotation*); // empty if no icon
 int Opacity(Annotation*);
+int InteriorOpacity(Annotation*);
+void SetInteriorOpacity(Annotation*, int percent);
+bool AnnotationSupportsFillOpacity(AnnotationType);
 int InkPenStyleTag(Annotation*);
 void GetLineEndingStyles(Annotation*, int* start, int* end);
 bool GetLinePoints(Annotation*, PointF& start, PointF& end);
@@ -228,6 +232,7 @@ bool SetWidgetChoiceValue(Annotation*, Str value);
 bool ToggleFormButton(Annotation*);
 
 bool AnnotationIsLive(Annotation*);
+bool AnnotationIsReadOnly(Annotation*);
 
 void DeleteAnnotation(Annotation*);
 bool AnnotationCanBeMoved(AnnotationType);

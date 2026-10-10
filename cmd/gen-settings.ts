@@ -900,8 +900,8 @@ const annotations: Field[] = [
     Str,
     "#ffff00 #8bf05d #99defa #f199d2 #e24745 #ff0000 #0000ff #000000",
     "colors offered by the drop-down on the annotation toolbar's buttons, separated by space. " +
-      "Picking one sets the color of new annotations of that type. The color a button currently makes " +
-      "annotations in is added when it is missing",
+      "Picking one sets the color of new annotations of that type. Use the palette add button or " +
+      "right-click a swatch to remove or pin a color",
   ).ver("3.7"),
   field("TextIconColor", Color, "", "color of newly created text (sticky note) annotations"),
   field(
@@ -910,30 +910,40 @@ const annotations: Field[] = [
     "",
     "color of newly created line annotations. If not set, the PDF engine's default (red) is used",
   ).ver("3.7"),
+  field("LineInteriorColor", Color, "", "fill color of newly created line annotations; unset means no fill").ver("3.7"),
+  field("LineInteriorOpacity", Int, 100, "fill opacity of newly created line annotations, from 0 to 100 percent").ver("3.7"),
   field(
     "PolyLineColor",
     Color,
     "",
     "color of newly created polyline annotations. If not set, the PDF engine's default (red) is used",
   ).ver("3.7"),
+  field("PolyLineInteriorColor", Color, "", "fill color of newly created polyline annotations; unset means no fill").ver("3.7"),
+  field("PolyLineInteriorOpacity", Int, 100, "fill opacity of newly created polyline annotations, from 0 to 100 percent").ver("3.7"),
   field(
     "SquareColor",
     Color,
     "",
     "color of newly created square annotations. If not set, the PDF engine's default (red) is used",
   ).ver("3.7"),
+  field("SquareInteriorColor", Color, "", "fill color of newly created square annotations; unset means no fill").ver("3.7"),
+  field("SquareInteriorOpacity", Int, 100, "fill opacity of newly created square annotations, from 0 to 100 percent").ver("3.7"),
   field(
     "CircleColor",
     Color,
     "",
     "color of newly created circle annotations. If not set, the PDF engine's default (red) is used",
   ).ver("3.7"),
+  field("CircleInteriorColor", Color, "", "fill color of newly created circle annotations; unset means no fill").ver("3.7"),
+  field("CircleInteriorOpacity", Int, 100, "fill opacity of newly created circle annotations, from 0 to 100 percent").ver("3.7"),
   field(
     "PolygonColor",
     Color,
     "",
     "color of newly created polygon annotations. If not set, the PDF engine's default (red) is used",
   ).ver("3.7"),
+  field("PolygonInteriorColor", Color, "", "fill color of newly created polygon annotations; unset means no fill").ver("3.7"),
+  field("PolygonInteriorOpacity", Int, 100, "fill opacity of newly created polygon annotations, from 0 to 100 percent").ver("3.7"),
   field(
     "InkColor",
     Color,
@@ -946,7 +956,8 @@ const annotations: Field[] = [
     Str,
     "#000000 #2563eb #dc2626 #facc15 #22c55e #a855f7 #ec4899 #ffffff",
     "colors offered by the ink button's drop-down, separated by space. Use #aarrggbb values: " +
-      "the alpha is the stroke's opacity. The color ink currently draws in is added when it is missing",
+      "the alpha is the stroke's opacity. Use the palette add button or right-click a swatch " +
+      "to remove or pin a color",
   ).ver("3.7"),
   field("InkBorderWidth", Float, 2, "width of the stroke of new ink annotations, in points").ver("3.7"),
   field(
@@ -1781,6 +1792,8 @@ const globalPrefs: Field[] = [
       "| is a separator and PageInfo is the page number box. Empty (the default) means " +
       "the standard layout. Buttons you added yourself (see Shortcuts) still come last",
   ).ver("3.7"),
+  field("ToolbarOrder", Str, "", "saved order of toolbar command icons").internal(),
+  field("ToolbarAnnotationOrder", Str, "", "saved order of annotation toolbar command icons").internal(),
   field(
     "ToolbarHiddenItems",
     Str,
@@ -1816,6 +1829,18 @@ const globalPrefs: Field[] = [
     "font size for bookmarks and favorites tree views, in pixels; 0 means the Windows default. " +
       "Not scaled by the display scaling",
   ).ver("3.3"),
+  field(
+    "PinIconStyle",
+    Int,
+    10,
+    "pin icon design: 10 = soft outline (default), 3 = solid, 4 = round head; all use the same diagonal angle",
+  ),
+  field(
+    "ColorPickerIconStyle",
+    Int,
+    8,
+    "color picker icon design: 8 = color tiles (default), 1 = classic palette, 2 = soft palette, 6 = palette and dropper, 5 = color wheel",
+  ),
   field("InterfaceScale", Int, 100, "overall interface scale, from 50 to 250 percent; document zoom is independent"),
   field("UIFontFamily", Str, "system", "interface font: system, Manrope, Pretendard Std or Public Sans"),
   field(
@@ -2001,6 +2026,12 @@ const globalPrefs: Field[] = [
   field("PenMaxWidth", Float, 16, "maximum pen width in PDF points"),
   field("PenWidthStep", Float, 0.1, "pen width increment in PDF points"),
   field("LaserLifetimeSeconds", Float, 2, "temporary laser stroke lifetime in seconds (0.1 to 120)"),
+  field(
+    "LaserColors",
+    Str,
+    "#f44336 #ffc107 #4caf50 #2196f3 #9c27b0 #ffffff",
+    "colors offered in the laser pointer palette, separated by spaces",
+  ),
   field("LaserWidth", Float, 8, "laser width in screen pixels at 100% DPI (0.1 to 32), independent of pen width"),
   array(
     "PinnedAnnotationTools",
@@ -2165,9 +2196,12 @@ const globalPrefsLayout = [
   "PenWidthStep",
   "LaserLifetimeSeconds",
   "LaserWidth",
+  "LaserColors",
   "PinnedAnnotationTools",
   "TocDy",
   "ToolbarSize",
+  "PinIconStyle",
+  "ColorPickerIconStyle",
   "TreeFontSize",
   "UIFontSize",
   "UIFontFamily",

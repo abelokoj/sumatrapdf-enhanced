@@ -12,6 +12,8 @@ extern "C" {
 #include <mupdf/fitz.h>
 }
 
+#include "Settings.h"
+#include "AppSettings.h"
 #include "ImageReader.h"
 #include "EmbeddedResources.h"
 #include "Theme.h"
@@ -341,15 +343,57 @@ const char* gIconHomeThumbnails =
   <rect x="14" y="14" width="6" height="6" rx="1" />
 </svg>)";
 
-// https://github.com/tabler/tabler-icons/blob/main/icons/outline/pin.svg
-const char* gIconPin =
-    R"(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
-  <rect x="0" y="0" width="24" height="24" stroke="none"></rect>
-  <path d="M15 4.5l4.5 4.5" />
-  <path d="M14.5 9.5l-5 5" />
-  <path d="M9 15l-4 4" />
-  <path d="M9.5 4l10.5 10.5l-5.5 0.5l-4 4l-1 -4.5l-4.5 -1l4 -4z" />
-</svg>)";
+static const char* gIconPinSolid =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(38 12 12)"><path fill="currentColor" stroke="none" d="M8 2h8a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-1v4l3.5 3.5a1 1 0 0 1 .3.7V16H13v5l-1 2-1-2v-5H5.2v-1.8a1 1 0 0 1 .3-.7L9 10V6H8a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/></g></svg>)svg";
+
+static const char* gIconPinRound =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(38 12 12)"><circle cx="12" cy="6" r="4"/><path d="M10 10v3l-3 3h10l-3-3v-3M12 16v6"/></g></svg>)svg";
+
+static const char* gIconPinSoft =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(38 12 12)"><rect x="7" y="2" width="10" height="5" rx="2.5"/><path d="M9.5 7v4c0 1-3.5 1.5-3.5 4v1h12v-1c0-2.5-3.5-3-3.5-4V7M12 16v6"/></g></svg>)svg";
+
+const char* GetPinIconSvg() {
+    int style = gSettings ? gSettings->pinIconStyle : (int)PinIconStyle::Soft;
+    switch ((PinIconStyle)style) {
+        case PinIconStyle::Solid:
+            return gIconPinSolid;
+        case PinIconStyle::Round:
+            return gIconPinRound;
+        default:
+            return gIconPinSoft;
+    }
+}
+
+static const char* gIconColorClassic =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.7 10.6c0-5-4.1-8.6-9-8.6C6.4 2 2 6.1 2 11.5c0 5.7 4.1 10 9.4 10h1.3c1.2 0 2-1 1.7-2.1l-.4-1.2c-.4-1.3.5-2.6 1.9-2.6h1.2c2.3 0 3.6-2.1 3.6-5Z"/><circle cx="7" cy="8" r="1.5" fill="#f4515d" stroke="none"/><circle cx="11.5" cy="5.9" r="1.5" fill="#ffc63a" stroke="none"/><circle cx="16.2" cy="8" r="1.5" fill="#38c98b" stroke="none"/><circle cx="6.6" cy="13" r="1.5" fill="#5a9fff" stroke="none"/><circle cx="11.1" cy="15.2" r="1.8"/></svg>)svg";
+
+static const char* gIconColorSoft =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path fill="currentColor" fill-opacity=".08" d="M21 11c0-5-4-9-9-9S3 6 3 11.2C3 17 7 21 12 21c1.5 0 2.4-.9 2.1-2.2l-.4-1.2c-.3-1 .3-2 1.3-2h1.5c2.9 0 4.5-1.5 4.5-4.6Z"/><circle cx="7.4" cy="8" r="1.65" fill="#f4515d" stroke="none"/><circle cx="12" cy="5.8" r="1.65" fill="#ffc63a" stroke="none"/><circle cx="16.8" cy="8.2" r="1.65" fill="#38c98b" stroke="none"/><circle cx="6.9" cy="13" r="1.65" fill="#5a9fff" stroke="none"/><circle cx="11.3" cy="15" r="1.7"/></svg>)svg";
+
+static const char* gIconColorDropper =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3c-5.5-.9-10 2.8-10 8.3 0 5.1 3.6 9.2 8.5 9.2h1c1.2 0 1.9-.8 1.6-1.9l-.3-1c-.3-1.1.5-2.1 1.6-2.1h1.1c2.1 0 3.5-1.4 3.5-3.6"/><circle cx="7.3" cy="8.2" r="1.35" fill="#f4515d" stroke="none"/><circle cx="6.5" cy="13.2" r="1.35" fill="#5a9fff" stroke="none"/><circle cx="11.5" cy="6.5" r="1.35" fill="#ffc63a" stroke="none"/><path d="m12.5 10.5 6.7-6.7 2 2-6.7 6.7-3 .8.8-2.8Zm4.7-5.7 3 3M19.2 3.8l1-1a1.4 1.4 0 0 1 2 2l-1 1"/></svg>)svg";
+
+static const char* gIconColorWheel =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12L12.0000 3.0000A9 9 0 0 1 16.5000 4.2058Z" fill="#f4515d" stroke="none"/><path d="M12 12L16.5000 4.2058A9 9 0 0 1 19.7942 7.5000Z" fill="#fa8552" stroke="none"/><path d="M12 12L19.7942 7.5000A9 9 0 0 1 21.0000 12.0000Z" fill="#ffc63a" stroke="none"/><path d="M12 12L21.0000 12.0000A9 9 0 0 1 19.7942 16.5000Z" fill="#d8de43" stroke="none"/><path d="M12 12L19.7942 16.5000A9 9 0 0 1 16.5000 19.7942Z" fill="#38c98b" stroke="none"/><path d="M12 12L16.5000 19.7942A9 9 0 0 1 12.0000 21.0000Z" fill="#35c5bd" stroke="none"/><path d="M12 12L12.0000 21.0000A9 9 0 0 1 7.5000 19.7942Z" fill="#5a9fff" stroke="none"/><path d="M12 12L7.5000 19.7942A9 9 0 0 1 4.2058 16.5000Z" fill="#747ff6" stroke="none"/><path d="M12 12L4.2058 16.5000A9 9 0 0 1 3.0000 12.0000Z" fill="#ae79f6" stroke="none"/><path d="M12 12L3.0000 12.0000A9 9 0 0 1 4.2058 7.5000Z" fill="#d578d5" stroke="none"/><path d="M12 12L4.2058 7.5000A9 9 0 0 1 7.5000 4.2058Z" fill="#ec77ad" stroke="none"/><path d="M12 12L7.5000 4.2058A9 9 0 0 1 12.0000 3.0000Z" fill="#f06983" stroke="none"/><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.4" fill="currentColor" stroke="none"/></svg>)svg";
+
+static const char* gIconColorTiles =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="19" height="19" rx="4"/><rect x="5" y="5" width="6" height="6" rx="1.4" fill="#f4515d" stroke="none"/><rect x="13" y="5" width="6" height="6" rx="1.4" fill="#ffc63a" stroke="none"/><rect x="5" y="13" width="6" height="6" rx="1.4" fill="#38c98b" stroke="none"/><rect x="13" y="13" width="6" height="6" rx="1.4" fill="#5a9fff" stroke="none"/></svg>)svg";
+
+const char* GetColorPickerIconSvg() {
+    int style = gSettings ? gSettings->colorPickerIconStyle : (int)ColorPickerIconStyle::Tiles;
+    switch ((ColorPickerIconStyle)style) {
+        case ColorPickerIconStyle::Classic:
+            return gIconColorClassic;
+        case ColorPickerIconStyle::Soft:
+            return gIconColorSoft;
+        case ColorPickerIconStyle::Dropper:
+            return gIconColorDropper;
+        case ColorPickerIconStyle::Wheel:
+            return gIconColorWheel;
+        default:
+            return gIconColorTiles;
+    }
+}
 
 // PDF annotation tools, drawn in the same 24px stroke style as the toolbar's
 // Tabler icons.
