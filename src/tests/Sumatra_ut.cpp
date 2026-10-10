@@ -553,7 +553,7 @@ static void PinIconStyles_UnitTests() {
                 utassert(reopened->pinIconStyle == (int)style);
                 DeleteSettings(reopened);
                 str::Free(encoded);
-                Pixmap* px = GetCachedPixmapForSvg(Str(GetPinIconSvg()), size, size, foreground);
+                Pixmap* px = GetCachedPixmapForSvg(Str(GetPinIconSvg()), size, size, foreground, kColWhite);
                 utassert(px && px->width == size && px->height == size);
                 utassert(CountPaintedPixels(px) > 0);
                 if (previous && px) utassert(memcmp(px->data, previous->data, (size_t)px->stride * size) != 0);
@@ -589,7 +589,7 @@ static void ColorPickerIcons_UnitTests() {
                 utassert(reopened->colorPickerIconStyle == (int)style);
                 DeleteSettings(reopened);
                 str::Free(encoded);
-                Pixmap* px = GetCachedPixmapForSvg(Str(GetColorPickerIconSvg()), size, size, fg);
+                Pixmap* px = GetCachedPixmapForSvg(Str(GetColorPickerIconSvg()), size, size, fg, kColWhite);
                 utassert(px && px->width == size && px->height == size && CountPaintedPixels(px) > 0);
                 for (auto* previous : rendered)
                     utassert(memcmp(px->data, previous->data, (size_t)px->stride * size) != 0);
@@ -717,6 +717,14 @@ int RunAppUnitTests(bool forAi) {
     }
     printf("Running unit tests\n");
 #if IS_DEBUG
+    WCHAR iconsOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_ICON_UI_ONLY", iconsOnly, dimof(iconsOnly))) {
+        SvgTextIcon_UnitTests();
+        PinIconStyles_UnitTests();
+        ColorPickerIcons_UnitTests();
+        KeyboardHelpLayout_UnitTests();
+        return utassert_print_results();
+    }
     WCHAR shapeRenderOnly[2]{};
     if (GetEnvironmentVariableW(L"SUMATRA_SHAPE_RENDER_ONLY", shapeRenderOnly, dimof(shapeRenderOnly))) {
         Settings* savedSettings = gSettings;

@@ -23,6 +23,7 @@
 #include "DarkMode.h"
 #if IS_DEBUG
 #include "base/tests/UtAssert.h"
+#include "Theme.h"
 #endif
 
 #include "Commands.h"
@@ -498,6 +499,8 @@ void KeyboardHelpLayout_UnitTests() {
         gSettings = saved;
         RefreshUiFonts();
     };
+    if (!ThemeGetCount()) CreateThemeCommands();
+    SetCurrentThemeFromSettings();
     for (int scale : {100, 200}) {
         gSettings->interfaceScale = scale;
         gSettings->uIFontSize = 22;
