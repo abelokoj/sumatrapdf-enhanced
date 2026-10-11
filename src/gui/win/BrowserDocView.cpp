@@ -100,6 +100,7 @@ function textFromBody(body) {
     acceptNode: function(n) {
       var p = n.parentElement;
       if (!p) { return NodeFilter.FILTER_REJECT; }
+      if (p.closest("#enhanced-markdown-controls")) { return NodeFilter.FILTER_REJECT; }
       var tag = p.tagName;
       if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT" || tag === "TEXTAREA") { return NodeFilter.FILTER_REJECT; }
       return NodeFilter.FILTER_ACCEPT;
@@ -302,6 +303,10 @@ void BrowserWebviewWnd::OnJsNotifyCb(void* ctx, Str method, Str paramsJson) {
     if (!self->cb) {
         return;
     }
+    if (str::Eq(method, StrL("markdownFont"))) {
+        self->cb->OnDisplayFontChanged(st.Int(0));
+        return;
+    }
     if (str::Eq(method, StrL("findResult"))) {
         self->cb->OnFindResult(st.Int(0), st.Int(1), st.Int(2));
         return;
@@ -323,6 +328,8 @@ static TempStr ChmMimeFromPathTemp(Str path, Str data) {
         return ChmMimeFromPathTemp(trimmed, data);
     }
 
+    if (str::EqI(ext, StrL(".otf"))) return StrL("font/otf");
+    if (str::EqI(ext, StrL(".woff2"))) return StrL("font/woff2");
     TempStr imgExt = GfxFileExtFromDataTemp(data);
     TempStr mime = MimeTypeFromExtTemp(ext, imgExt);
     if (len(mime) == 0) {
@@ -836,7 +843,12 @@ void BrowserDocView::FindClear() {
 
 void BrowserDocView::SelectAll() {
     if (backend == Backend::WebView2 && wv) {
-        wv->Eval(StrL("document.execCommand('selectAll', false, null)"));
+        wv->Eval(
+            StrL("(function(){var content=document.getElementById('enhanced-markdown-content');"
+                 "if(content&&document.getElementById('enhanced-markdown-controls')){"
+                 "var range=document.createRange();range.selectNodeContents(content);"
+                 "var selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);"
+                 "}else{document.execCommand('selectAll',false,null);}})();"));
         return;
     }
     if (backend == Backend::IE && ie) {

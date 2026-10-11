@@ -289,6 +289,7 @@ function sumatrapdf_files()
     "ChmModel.*",
     "MarkdownModel.*",
     "MarkdownToc.*",
+    "MarkdownFonts.*",
     "EmbeddedResources.*",
     "AIChatCommon.*",
     "AIChatPanel.*",

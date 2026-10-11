@@ -85,6 +85,7 @@ void Layout_UnitTests();
 void VirtCtrl_UnitTests();
 bool TableOfContents_UnitTestSnapshotNamedDest();
 bool MarkdownModel_UnitTestBrowserNavigationUrl();
+void MarkdownFonts_UnitTests();
 bool MarkdownToc_UnitTestHtmlLinks();
 bool MarkdownToc_UnitTestHtmlHeadings();
 bool MarkdownToc_UnitTestMermaid();
@@ -717,6 +718,22 @@ int RunAppUnitTests(bool forAi) {
     }
     printf("Running unit tests\n");
 #if IS_DEBUG
+    WCHAR markdownOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_MARKDOWN_FONTS_ONLY", markdownOnly, dimof(markdownOnly))) {
+        Settings* savedSettings = gSettings;
+        gSettings = NewSettings({});
+        if (!ThemeGetCount()) CreateThemeCommands();
+        SetCurrentThemeFromSettings();
+        MarkdownFonts_UnitTests();
+        utassert(MarkdownToc_UnitTestHtmlLinks());
+        utassert(MarkdownToc_UnitTestHtmlHeadings());
+        utassert(MarkdownToc_UnitTestMermaid());
+        utassert(SettingsDialog_UnitTestsSizing());
+        DeleteSettings(gSettings);
+        gSettings = savedSettings;
+        if (gSettings) SetCurrentThemeFromSettings();
+        return utassert_print_results();
+    }
     WCHAR iconsOnly[2]{};
     if (GetEnvironmentVariableW(L"SUMATRA_ICON_UI_ONLY", iconsOnly, dimof(iconsOnly))) {
         SvgTextIcon_UnitTests();
@@ -903,6 +920,7 @@ int RunAppUnitTests(bool forAi) {
     GuessFileTypeTest();
     JsonTest();
     RefHoverTest();
+    MarkdownFonts_UnitTests();
     SettingsUtilTest();
     SimpleLogTest();
     SquareTreeTest();

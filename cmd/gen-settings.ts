@@ -599,6 +599,8 @@ const markdownUI: Field[] = [
     false,
     "if true, use MuPDF (cmark-gfm) to render markdown; if false, use WebView2 browser view when available",
   ),
+  field("FontName", Str, "", "Markdown text font; empty follows the interface font"),
+  field("MathFontName", Str, "", "Markdown MathML font; empty uses the companion of the text font"),
 ];
 
 const htmlUI: Field[] = [

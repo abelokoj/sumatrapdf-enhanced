@@ -312,6 +312,9 @@
     <ClInclude Include="..\src\MainWindow.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\MarkdownFonts.h">
+      <Filter>src</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\MarkdownModel.h">
       <Filter>src</Filter>
     </ClInclude>
@@ -912,6 +915,9 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\MainWindow.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\MarkdownFonts.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\MarkdownModel.cpp">

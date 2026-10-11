@@ -44,6 +44,8 @@
 #include "SvgIcons.h"
 #include "PdfDarkMode.h"
 #include "RefHover.h"
+#include "MarkdownFonts.h"
+#include "MarkdownModel.h"
 #include <commdlg.h>
 
 #if IS_DEBUG
@@ -665,6 +667,8 @@ struct SettingsWnd : WindowBase {
     DropDown* dropZoom = nullptr;
     DropDown* dropInverse = nullptr;
     DropDown* dropUiFamily = nullptr;
+    DropDown* dropMarkdownFamily = nullptr;
+    DropDown* dropMarkdownMath = nullptr;
     DropDown* dropInterfaceScale = nullptr;
     DropDown* dropUiSize = nullptr;
     DropDown* dropTreeSize = nullptr;
@@ -902,13 +906,9 @@ static TempStr SettingsCacheKey(MainWindow* win) {
                        (double)(win ? DpiGetForHwnd(win->hwndFrame) : DpiGet())};
     str::Builder key;
     for (double value : values) key.Append(fmt("%.17g|", value));
-    Str strings[] = {gSettings->defaultDisplayMode,
-                     gSettings->uIFontFamily,
-                     gSettings->uiLanguage,
-                     gSettings->inverseSearchCmdLine,
-                     gSettings->fixedPageUI.selectionColor.s,
-                     GetAppDataDirTemp(),
-                     GetPendingDataDirTemp()};
+    Str strings[] = {gSettings->defaultDisplayMode,           gSettings->uIFontFamily, gSettings->markdownUI.fontName,
+                     gSettings->markdownUI.mathFontName,      gSettings->uiLanguage,   gSettings->inverseSearchCmdLine,
+                     gSettings->fixedPageUI.selectionColor.s, GetAppDataDirTemp(),     GetPendingDataDirTemp()};
     for (Str value : strings) {
         key.Append(fmt("%d:", len(value)));
         key.Append(value);
@@ -927,14 +927,14 @@ static TempStr SettingsCacheKey(MainWindow* win) {
 void SettingsWnd::SaveValues() {
     for (auto& value : savedValues) str::Free(value.text);
     VecReset(savedValues);
-    DropDown* drops[] = {dropLayout,        dropZoom,           dropInverse,
-                         dropUiFamily,      dropInterfaceScale, dropUiSize,
-                         dropTreeSize,      dropThumbnailSize,  dropToolbarSize,
-                         dropRecentCount,   dropTabListCount,   dropScrollbarWidth,
-                         dropMinTabWidth,   dropHoverDelay,     dropPenMin,
-                         dropPenMax,        dropPenStep,        dropPageText,
-                         dropPageBg,        dropPinIconStyle,   dropColorPickerIconStyle,
-                         dropSelectionColor};
+    DropDown* drops[] = {dropLayout,         dropZoom,           dropInverse,
+                         dropUiFamily,       dropInterfaceScale, dropUiSize,
+                         dropTreeSize,       dropThumbnailSize,  dropToolbarSize,
+                         dropRecentCount,    dropTabListCount,   dropScrollbarWidth,
+                         dropMinTabWidth,    dropHoverDelay,     dropPenMin,
+                         dropPenMax,         dropPenStep,        dropPageText,
+                         dropPageBg,         dropPinIconStyle,   dropColorPickerIconStyle,
+                         dropSelectionColor, dropMarkdownFamily, dropMarkdownMath};
     for (auto* drop : drops)
         if (drop)
             VecAppend(savedValues, {drop, str::Dup(drop->GetTextTemp()), CbGetCurrentSelection(drop), false, false});
@@ -1187,6 +1187,12 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     int interfaceScale = (int)SelectedNumber(dropInterfaceScale, gSettings->interfaceScale, 50, 250, StrL("%"));
     bool fontsChanged = interfaceScale != gSettings->interfaceScale || uiSize != gSettings->uIFontSize ||
                         treeSize != gSettings->treeFontSize || !str::EqI(family, gSettings->uIFontFamily);
+    Str markdownFont = MarkdownFontName(MarkdownFontKind::Text, CbGetCurrentSelection(dropMarkdownFamily));
+    Str markdownMath = MarkdownFontName(MarkdownFontKind::Math, CbGetCurrentSelection(dropMarkdownMath));
+    bool markdownFontsChanged = !str::Eq(gSettings->markdownUI.fontName, markdownFont) ||
+                                !str::Eq(gSettings->markdownUI.mathFontName, markdownMath);
+    str::ReplaceWithCopy(&gSettings->markdownUI.fontName, markdownFont);
+    str::ReplaceWithCopy(&gSettings->markdownUI.mathFontName, markdownMath);
     str::ReplaceWithCopy(&gSettings->uIFontFamily, family);
     gSettings->uIFontSize = uiSize;
     gSettings->interfaceScale = interfaceScale;
@@ -1265,6 +1271,14 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     // call SetTabsInTitlebar() for windows that have only one tab, but that's somewhat inconsistent
     for (MainWindow* window : gWindows) window->RedrawAll(true);
     ApplySettingsToOpenWindows();
+    if (markdownFontsChanged && !fontsChanged) {
+        for (MainWindow* window : gWindows) {
+            for (WindowTab* tab : window->Tabs()) {
+                auto* markdown = tab->ctrl ? tab->ctrl->AsMarkdown() : nullptr;
+                if (markdown && !markdown->isHtml) markdown->UpdateTheme();
+            }
+        }
+    }
     ScheduleSaveSettings();
     MaybeRedrawHomePage();
     if (fontsChanged) {
@@ -1809,6 +1823,41 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
             .isRtl = isRtl,
             .padding = Insets{UiScalePx(4), UiScalePx(0), UiScalePx(0), UiScalePx(0)},
         }));
+    }
+
+    {
+        vbox->AddChild(NewSettingsLabel({.s = Tr("Markdown"),
+                                         .font = headingFont,
+                                         .isRtl = isRtl,
+                                         .padding = Insets{UiScalePx(12), 0, UiScalePx(4), 0}}));
+        auto* table = new SettingsForm();
+        table->rtl = isRtl;
+        table->SetSize(2, 2);
+        table->colGap = UiScalePx(20);
+        table->rowGap = UiScalePx(6);
+        VecAppend(forms, table);
+        DropDown** controls[] = {&dropMarkdownFamily, &dropMarkdownMath};
+        Str labels[] = {Tr("Display font:"), Tr("Math font:")};
+        Str values[] = {gSettings->markdownUI.fontName, gSettings->markdownUI.mathFontName};
+        for (int i = 0; i < 2; i++) {
+            MarkdownFontKind kind = i ? MarkdownFontKind::Math : MarkdownFontKind::Text;
+            auto* drop = MakeDropDown(this, font, isRtl, false);
+            *controls[i] = drop;
+            StrVec choices;
+            MarkdownFontChoices(kind, choices);
+            drop->SetItems(choices);
+            CbSetCurrentSelection(drop, MarkdownFontIndex(kind, values[i]));
+            table->SetCell(i, 0, NewSettingsLabel({.s = labels[i], .font = font, .isRtl = isRtl})).alignV =
+                CrossAxisAlign::CrossCenter;
+            table->SetCell(i, 1, drop).alignH = CrossAxisAlign::Stretch;
+        }
+        vbox->AddChild(table);
+        vbox->AddChild(
+            NewSettingsLabel({.s = Tr("Use the Font menu above an open Markdown page to change its display font. "
+                                      "The last choice becomes the default. Math fonts apply to MathML. "
+                                      "These choices use the browser view."),
+                              .font = font,
+                              .isRtl = isRtl}));
     }
 
     {

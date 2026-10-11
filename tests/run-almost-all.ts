@@ -19,6 +19,7 @@
 import { runNamedTests, runSuiteMain, startSuiteProgress, type NamedTest, type SuiteOptions } from "./util.ts";
 import { setTestWindowLayout } from "./winapi.ts";
 import { beginSharedControlledSession, endSharedControlledSession } from "./win-automation.ts";
+import { testit as markdownDisplayFonts } from "./markdown-display-fonts.ts";
 import { testit as themePresets } from "./theme-presets.ts";
 import { testit as lintCommandIds } from "./lint-command-ids.ts";
 import { testit as lintMingwSources } from "./lint-mingw-sources.ts";
@@ -611,6 +612,7 @@ export const tests: NamedTest[] = [
   ["issue-5965", issue5965],
 
   // --- isolated session: -appdata, saveSettings, or own window placement -
+  ["markdown-display-fonts", markdownDisplayFonts],
   ["favorites-menu", favoritesMenu],
   ["favorites-tab-after-document-close", favoritesTabAfterDocumentClose],
   ["issue-6045", issue6045],

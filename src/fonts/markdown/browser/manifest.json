@@ -1,0 +1,175 @@
+{
+  "fonttools": "4.66.1",
+  "brotli": "1.2.0",
+  "changes": "Rename, expand CFF subroutines, remove hinting and editor tables, compress as WOFF2. Keep all glyphs, outlines and layout tables.",
+  "files": [
+    {
+      "file": "EnhancedWebNewCM10-Regular.woff2",
+      "source": "NewCM10-Regular.otf",
+      "glyphs": 4098,
+      "sha256": "500f81394d8c106f143ab23ae18125f08447be1332f6c959ec56f46519cd0afc",
+      "sourceSha256": "328698d764ccdf7acf6bc1088aefd83a237f6a1d8b812de1e77ac5e4483bf3d1"
+    },
+    {
+      "file": "EnhancedWebNewCM10-Italic.woff2",
+      "source": "NewCM10-Italic.otf",
+      "glyphs": 3924,
+      "sha256": "9c51a534b56c5a78bf4d1aae3669e5d3c98110c2e903fe8bc0aa90121d911fda",
+      "sourceSha256": "a55d07607eec48889b6e7e7d51d7703c3beb915a39690f34fe01b4e2a744a9d6"
+    },
+    {
+      "file": "EnhancedWebNewCM10-Bold.woff2",
+      "source": "NewCM10-Bold.otf",
+      "glyphs": 4050,
+      "sha256": "e70507ce7059249d8ff770bc4a0e0134b90e19f5d35bac20664087e24f427f0a",
+      "sourceSha256": "40b0b32b63655fe802679ee4a14adb29c762a4712095d9c84cf7df7852b5152e"
+    },
+    {
+      "file": "EnhancedWebNewCM10-BoldItalic.woff2",
+      "source": "NewCM10-BoldItalic.otf",
+      "glyphs": 3504,
+      "sha256": "887e0ada0299c82dc45ec0ed1c652a72e9365b9863c00129fc1ec04889640c55",
+      "sourceSha256": "fb53f43500c8ffbcc6dfdea5a519961d475543174ea2a0dcbe16c08510299fdf"
+    },
+    {
+      "file": "EnhancedWebNewCM10-Book.woff2",
+      "source": "NewCM10-Book.otf",
+      "glyphs": 4053,
+      "sha256": "b489da918f0affe8b70a2b8926b8b583b118416568349831e399463874d45441",
+      "sourceSha256": "005f9b4e13b2a133df36d4ebfbb8f5fe402854bcb5882deb500b9c0f72b1bb49"
+    },
+    {
+      "file": "EnhancedWebNewCM10-BookItalic.woff2",
+      "source": "NewCM10-BookItalic.otf",
+      "glyphs": 3526,
+      "sha256": "31cd727a9b230233e6805db39c5141d1aa4ab46c6b9a0a9ef484e086daf6a10f",
+      "sourceSha256": "d01f6c7b5bcdee2545823f1cf0a35698b9ccff1891a2f79a8e9938e5b8ea561e"
+    },
+    {
+      "file": "EnhancedWebNewCMSans10-Regular.woff2",
+      "source": "NewCMSans10-Regular.otf",
+      "glyphs": 5359,
+      "sha256": "d28825b83e487dc82aeb95b0d3ccee9c294423b6c40bdb41c5ba643b05f4aa18",
+      "sourceSha256": "ca267604ebd4b51562f263df4206a2ce25f71fb46701a438e145139295f567f0"
+    },
+    {
+      "file": "EnhancedWebNewCMSans10-Oblique.woff2",
+      "source": "NewCMSans10-Oblique.otf",
+      "glyphs": 4665,
+      "sha256": "5bc24bd1854479abe88c58feee6eb03c5f19332d7db358b02db620a472281de5",
+      "sourceSha256": "93a03fce2778d459a14747d576803e82d12f653001a2292ef42aac0cb8e20fc7"
+    },
+    {
+      "file": "EnhancedWebNewCMSans10-Bold.woff2",
+      "source": "NewCMSans10-Bold.otf",
+      "glyphs": 4913,
+      "sha256": "c7c11ba5446245062746db0bb2bf4aaaa660315baf110152c6e65eb0545c83de",
+      "sourceSha256": "e92f716dc6db995a407319520a01225afa3cfba94d36fe2d45ed6ecf6554ab6b"
+    },
+    {
+      "file": "EnhancedWebNewCMSans10-BoldOblique.woff2",
+      "source": "NewCMSans10-BoldOblique.otf",
+      "glyphs": 4852,
+      "sha256": "f6bc2c4d78d4771ff7e32aca55aeed11e39a5af99f7eac15df5206c2f3157ade",
+      "sourceSha256": "618cc0452bbc3d8ea0d7d2a1031cd09f178d216bf9ad675f4daf8659ea1ef26c"
+    },
+    {
+      "file": "EnhancedWebNewCMSans10-Book.woff2",
+      "source": "NewCMSans10-Book.otf",
+      "glyphs": 4444,
+      "sha256": "6e6065f56548c503d21a7830ac39fcab0317c1d0f83ad5064226bfff6443d5a9",
+      "sourceSha256": "0ed20417390dff60e48568ea81851a119e96b6cc86564fe0f1de9ce73002f296"
+    },
+    {
+      "file": "EnhancedWebNewCMSans10-BookOblique.woff2",
+      "source": "NewCMSans10-BookOblique.otf",
+      "glyphs": 4008,
+      "sha256": "b4e4b6f3819f113215f6e3f5f3bcd05cf835225f2f656f82d2e07ae05befb016",
+      "sourceSha256": "378f5065ac20e0b64655a4cc50dd0fa9547a30f374c84a6361218d82a069f874"
+    },
+    {
+      "file": "EnhancedWebNewCMMono10-Regular.woff2",
+      "source": "NewCMMono10-Regular.otf",
+      "glyphs": 3250,
+      "sha256": "b31dfd5e86246534f8da6fd3ca7e74ece86c20848278df3b3bbf790a2757a1d9",
+      "sourceSha256": "1a1582279205c4307407a2da27b646a6ef9381fe35aeecfe783a1bb8e13b5977"
+    },
+    {
+      "file": "EnhancedWebNewCMMono10-Italic.woff2",
+      "source": "NewCMMono10-Italic.otf",
+      "glyphs": 3215,
+      "sha256": "15dec8778ca32d625665c5e5c67a6476406d33986ab8c3c63f04992a8127a298",
+      "sourceSha256": "974de80c47d467cc9e281d7d540321aee0dafb6fc25a03ad6b5831624e7f3d5e"
+    },
+    {
+      "file": "EnhancedWebNewCMMono10-Bold.woff2",
+      "source": "NewCMMono10-Bold.otf",
+      "glyphs": 3169,
+      "sha256": "883d50a5dc353c4c0f2be4ed697fce44e13230b6f2915ec821ca1836ffa72aee",
+      "sourceSha256": "f651c3856b8dd5b8483b855e583e8e831f078ae60d39861c6142ecc9df1f34c4"
+    },
+    {
+      "file": "EnhancedWebNewCMMono10-BoldOblique.woff2",
+      "source": "NewCMMono10-BoldOblique.otf",
+      "glyphs": 3107,
+      "sha256": "f574c7e82b82548d909d9dd1785d3f0444e2b82b4ec0fcfeb999ad4b129962dc",
+      "sourceSha256": "f8a7fed3ac5b7a9840ef003960c18f6d05cd57b76cf72536c93baea5162b51a0"
+    },
+    {
+      "file": "EnhancedWebNewCMMono10-Book.woff2",
+      "source": "NewCMMono10-Book.otf",
+      "glyphs": 3189,
+      "sha256": "69e70e332fe00bb62f3097d7d5ff2a30d8790c42bb78964b3df261be75871f5e",
+      "sourceSha256": "d5f2398e5198ea4112270fc6700130170c42c093c5c6af6fc19fe905def8953c"
+    },
+    {
+      "file": "EnhancedWebNewCMMono10-BookItalic.woff2",
+      "source": "NewCMMono10-BookItalic.otf",
+      "glyphs": 3125,
+      "sha256": "fa9d2bee5d2caf281edd27f2afe80660764e5048d7a59c604d874b08872707e8",
+      "sourceSha256": "f4b7a13365af080896fd09142866ab24d19ce6d3b72aeaf17cdee86beb4cbd8f"
+    },
+    {
+      "file": "EnhancedWebNewCMUncial10-Regular.woff2",
+      "source": "NewCMUncial10-Regular.otf",
+      "glyphs": 171,
+      "sha256": "3e27b9e941bdca87aba1479bbf654e03a41362342777929fd599439a4fc3b01f",
+      "sourceSha256": "9f03ed41d0e2d9b435c981a652142488fb325963c4efc1b13ad752d2cb9a8147"
+    },
+    {
+      "file": "EnhancedWebNewCMUncial10-Bold.woff2",
+      "source": "NewCMUncial10-Bold.otf",
+      "glyphs": 171,
+      "sha256": "67c4521851881f81690045e8efbcc3db68dde71c2bde54e8fe9b6fbdfcb1a9cb",
+      "sourceSha256": "3d6c2196a8e7e5b4450588974e8119a9a32d2503327a4695cc9eb7ed3a15deac"
+    },
+    {
+      "file": "EnhancedWebNewCMMath-Regular.woff2",
+      "source": "NewCMMath-Regular.otf",
+      "glyphs": 8603,
+      "sha256": "f0c5053c0d5b006dcfe91b4762339c58774893d2be4d5d2898448d19a63a2759",
+      "sourceSha256": "d66ac1cc91c55c24d3636ae2df1238076debdff51841f9893fc5419cc2df3df7"
+    },
+    {
+      "file": "EnhancedWebNewCMMath-Bold.woff2",
+      "source": "NewCMMath-Bold.otf",
+      "glyphs": 8582,
+      "sha256": "b0b95987663d55f03a005e03bbe8d59a6d0a4a11910b88afdcd07edd16d05bdf",
+      "sourceSha256": "c6c0e060da57d4f44274705afb956013047231dc62be5a4b02a351ab0dc43f2f"
+    },
+    {
+      "file": "EnhancedWebNewCMMath-Book.woff2",
+      "source": "NewCMMath-Book.otf",
+      "glyphs": 8598,
+      "sha256": "9056b3a789f443faf719b52d55a7a85d3575953b54cbffce1222bff4de7e86bc",
+      "sourceSha256": "2ea09ebc9167b1e1a66f31390dc917f2d4004ecfca72d51b28010e4ad6becd95"
+    },
+    {
+      "file": "EnhancedWebNewCMSansMath-Regular.woff2",
+      "source": "NewCMSansMath-Regular.otf",
+      "glyphs": 8937,
+      "sha256": "03da9dfe4d749e206cebe974f02785b982b9ead0b632bddc1ff0e75b57cdc1dd",
+      "sourceSha256": "2976236474e4e92ea68d9140c5b05fa1b98818a0a4a30cf8881c4c45ca951fd3"
+    }
+  ]
+}

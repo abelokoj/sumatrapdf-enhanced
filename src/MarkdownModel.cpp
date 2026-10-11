@@ -22,6 +22,7 @@
 #include "SumatraPDF.h"
 #include "EmbeddedResources.h"
 #include "MarkdownToc.h"
+#include "MarkdownFonts.h"
 #include "PagePosition.h"
 #include "MarkdownModel.h"
 
@@ -209,6 +210,7 @@ class MarkdownHtmlWindowHandler : public HtmlWindowCallback {
     void DownloadData(Str url, Str data) override { mm->DownloadData(url, data); }
     void OnFindResult(int gen, int current, int total) override { mm->OnFindResult(gen, current, total); }
     void OnFindAllResult(Str payload) override { mm->OnFindAllResult(payload); }
+    void OnDisplayFontChanged(int index) override { mm->SetDisplayFont(index); }
 };
 
 MarkdownModel::MarkdownModel(DocControllerCallback* cb) : DocController(cb) {
@@ -788,6 +790,13 @@ MarkdownCacheEntry* MarkdownModel::FindDataForUrl(Str url) const {
 }
 
 bool MarkdownModel::OnBeforeNavigate(Str url, bool newWindow) {
+    Str choice = url;
+    if (!isHtml && str::TrimPrefix(choice, StrL("sumatra-markdown-font:"))) {
+        for (int i = 0; i < MarkdownFontCount(MarkdownFontKind::Text); i++) {
+            if (str::Eq(choice, fmt("%d", i))) SetDisplayFont(i);
+        }
+        return false;
+    }
     if (skipNextBeforeNavigateScrollSave) {
         skipNextBeforeNavigateScrollSave = false;
     } else {
@@ -864,6 +873,16 @@ void MarkdownModel::OnDocumentComplete(Str url) {
 Str MarkdownModel::GetDataForUrl(Str url) {
     AutoUnlockMutex scope(&docAccess);
     TempStr plainUrl = NormalizeMarkdownUrlTemp(url);
+    if (!isHtml) {
+        Str font = MarkdownFontResource(plainUrl);
+        if (font) return font;
+        for (int i = 0; i < MarkdownFontCount(MarkdownFontKind::Text); i++) {
+            if (str::Eq(plainUrl, fmt("https://sumatrapdf.markdown/_enhanced_fonts/style-%d.css", i))) {
+                return str::Dup(poolAlloc, MarkdownFontCss(MarkdownFontName(MarkdownFontKind::Text, i),
+                                                           gSettings ? gSettings->markdownUI.mathFontName : Str{}));
+            }
+        }
+    }
     MarkdownCacheEntry* e = FindDataForUrl(plainUrl);
     if (e) {
         return e->data;
@@ -906,9 +925,20 @@ Str MarkdownModel::GetDataForUrl(Str url) {
     return e->data;
 }
 
-// theme colors are baked into the generated HTML: drop the cached pages and
-// re-render the current one with the new colors (a hidden tab has no docView;
-// it regenerates when re-selected)
+void MarkdownModel::SetDisplayFont(int index) {
+    if (isHtml || !gSettings || index < 0 || index >= MarkdownFontCount(MarkdownFontKind::Text)) return;
+    Str name = MarkdownFontName(MarkdownFontKind::Text, index);
+    bool changed = !str::Eq(gSettings->markdownUI.fontName, name);
+    if (changed) str::ReplaceWithCopy(&gSettings->markdownUI.fontName, name);
+    {
+        AutoUnlockMutex scope(&docAccess);
+        DeleteVecMembers(urlDataCache);
+        VecReset(urlDataCache);
+    }
+    if (changed) ScheduleSaveSettings();
+}
+
+// Drop generated pages so colors and fonts refresh on the next navigation.
 void MarkdownModel::UpdateTheme() {
     {
         AutoUnlockMutex scope(&docAccess);

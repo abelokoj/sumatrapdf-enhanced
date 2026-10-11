@@ -1,0 +1,445 @@
+{
+  "checkedOn": "2026-10-11",
+  "packages": [
+    {
+      "name": "Libertinus Serif and Math",
+      "version": "7.051",
+      "source": "https://github.com/alerque/libertinus/releases/tag/v7.051",
+      "download": "https://github.com/alerque/libertinus/releases/download/v7.051/Libertinus-7.051.zip",
+      "license": "SIL OFL 1.1",
+      "files": [
+        {
+          "file": "libertinus/OFL.txt",
+          "bytes": 4426,
+          "sha256": "9aeecc8107c489ec1ec0068b0313e531a760edf3493705b32ab8ab8215a8794e"
+        },
+        {
+          "file": "libertinus/LibertinusSerif-SemiboldItalic.otf",
+          "bytes": 343148,
+          "sha256": "397f0d7aba35ae6a988948ae046c14c6b1e0d270fcc6e292b8bc29fd625c6101"
+        },
+        {
+          "file": "libertinus/LibertinusSerif-Semibold.otf",
+          "bytes": 291640,
+          "sha256": "a4b3f28e85881db34695c1f005e4c79233a6caf3a2bd286c9b418c025fb99308"
+        },
+        {
+          "file": "libertinus/LibertinusSerif-Bold.otf",
+          "bytes": 293908,
+          "sha256": "0264914210ed51b3231ebc92ce529e9f2e166ba9eebf0cd4a579558690a27b64"
+        },
+        {
+          "file": "libertinus/LibertinusSerif-Regular.otf",
+          "bytes": 337132,
+          "sha256": "fcf06307a77367394fcb0ccb241e59eea70dba3d732be309647611224679c733"
+        },
+        {
+          "file": "libertinus/LibertinusSerif-Italic.otf",
+          "bytes": 332312,
+          "sha256": "9a393d63d6e05f620d3dc0190dfd35a8ede58c0808cf0fc9de7fcb9c723e4c24"
+        },
+        {
+          "file": "libertinus/LibertinusSerif-BoldItalic.otf",
+          "bytes": 259176,
+          "sha256": "47a665259f09f554f5d133d7718cdad43ff462c6a6b2328f38023465e62d57ce"
+        },
+        {
+          "file": "libertinus/LibertinusMath-Regular.otf",
+          "bytes": 588848,
+          "sha256": "ded714b0d3808af527438ed7a85f16933133f66a12104c4a83db4cc248888011"
+        }
+      ]
+    },
+    {
+      "name": "New Computer Modern",
+      "version": "8.1.1",
+      "source": "https://ctan.org/pkg/newcomputermodern",
+      "download": "https://ctan.math.utah.edu/ctan/tex-archive/fonts/newcomputermodern.zip",
+      "license": "GUST Font License; specified fonts GPL-3.0-or-later with font and distribution exceptions (see License.txt)",
+      "files": [
+        {
+          "file": "new-computer-modern/README",
+          "bytes": 19406,
+          "sha256": "79afcf1df1157ac6f322c2d29f49cffddf52c318ea4caa39c1d5ed5fb891ed2e"
+        },
+        {
+          "file": "new-computer-modern/sfd.txz",
+          "bytes": 19209172,
+          "sha256": "73f140c8fa850b1dc460518227332c71bb69ed0a60ede072860d60d85be49b68"
+        },
+        {
+          "file": "new-computer-modern/NewCM08-Regular.otf",
+          "bytes": 622072,
+          "sha256": "9c4731ddfd7b46143b6833a7658f1cd8bb15ee393fc63213e9a19aadbf730440"
+        },
+        {
+          "file": "new-computer-modern/NewCM10-Bold.otf",
+          "bytes": 629288,
+          "sha256": "40b0b32b63655fe802679ee4a14adb29c762a4712095d9c84cf7df7852b5152e"
+        },
+        {
+          "file": "new-computer-modern/NewCMUncial10-Bold.otf",
+          "bytes": 21220,
+          "sha256": "3d6c2196a8e7e5b4450588974e8119a9a32d2503327a4695cc9eb7ed3a15deac"
+        },
+        {
+          "file": "new-computer-modern/NewCMMono10-Regular.otf",
+          "bytes": 473580,
+          "sha256": "1a1582279205c4307407a2da27b646a6ef9381fe35aeecfe783a1bb8e13b5977"
+        },
+        {
+          "file": "new-computer-modern/NewCMUncial10-Regular.otf",
+          "bytes": 30368,
+          "sha256": "9f03ed41d0e2d9b435c981a652142488fb325963c4efc1b13ad752d2cb9a8147"
+        },
+        {
+          "file": "new-computer-modern/NewCM10Devanagari-Regular.otf",
+          "bytes": 344376,
+          "sha256": "593654057aaf538c5d80d4e82865aed6deed4562a746e83f19c3eaccb6b5fc3c"
+        },
+        {
+          "file": "new-computer-modern/NewCMUncial08-Bold.otf",
+          "bytes": 22504,
+          "sha256": "f31fcb1de052fc3edfa3fecad324e0602a653697521a42549eb4d92e30e93017"
+        },
+        {
+          "file": "new-computer-modern/NewCM08-BookItalic.otf",
+          "bytes": 718356,
+          "sha256": "4a2525457c4949320f1158f1060aeca0fb22c7cafe6dc31944ce4c7f07c77ff2"
+        },
+        {
+          "file": "new-computer-modern/NewCM08Devanagari-Book.otf",
+          "bytes": 336824,
+          "sha256": "6898edb9ad0ace4cb2bb70ce87201bc040c4a59addb82133fde4a69d5bd1c4c1"
+        },
+        {
+          "file": "new-computer-modern/NewCMUncial08-Regular.otf",
+          "bytes": 22620,
+          "sha256": "658cf09f52400522478214df4c6145d0a77af37bf5bde8fc2a6d730bc94ac8aa"
+        },
+        {
+          "file": "new-computer-modern/NewCMSans10-BoldOblique.otf",
+          "bytes": 569884,
+          "sha256": "618cc0452bbc3d8ea0d7d2a1031cd09f178d216bf9ad675f4daf8659ea1ef26c"
+        },
+        {
+          "file": "new-computer-modern/NewCMSans10-BookOblique.otf",
+          "bytes": 554916,
+          "sha256": "378f5065ac20e0b64655a4cc50dd0fa9547a30f374c84a6361218d82a069f874"
+        },
+        {
+          "file": "new-computer-modern/NewCMMono10-Bold.otf",
+          "bytes": 554392,
+          "sha256": "f651c3856b8dd5b8483b855e583e8e831f078ae60d39861c6142ecc9df1f34c4"
+        },
+        {
+          "file": "new-computer-modern/NewCM10-BookItalic.otf",
+          "bytes": 699696,
+          "sha256": "d01f6c7b5bcdee2545823f1cf0a35698b9ccff1891a2f79a8e9938e5b8ea561e"
+        },
+        {
+          "file": "new-computer-modern/NewCM10Devanagari-Bold.otf",
+          "bytes": 325008,
+          "sha256": "d6ca52fb5aec73ae2c1d6801382d5c735d0b028a961eb7b02f754d2bbe1781b9"
+        },
+        {
+          "file": "new-computer-modern/NewCMSans10-Book.otf",
+          "bytes": 578180,
+          "sha256": "0ed20417390dff60e48568ea81851a119e96b6cc86564fe0f1de9ce73002f296"
+        },
+        {
+          "file": "new-computer-modern/NewCM10-Italic.otf",
+          "bytes": 721176,
+          "sha256": "a55d07607eec48889b6e7e7d51d7703c3beb915a39690f34fe01b4e2a744a9d6"
+        },
+        {
+          "file": "new-computer-modern/NewCMSans10-Regular.otf",
+          "bytes": 648436,
+          "sha256": "ca267604ebd4b51562f263df4206a2ce25f71fb46701a438e145139295f567f0"
+        },
+        {
+          "file": "new-computer-modern/NewCM08Devanagari-Regular.otf",
+          "bytes": 326656,
+          "sha256": "87820a052b453149ce222f11a3735df35a5ecbd8714bf62955d474e8dec7db82"
+        },
+        {
+          "file": "new-computer-modern/NewCM08-Book.otf",
+          "bytes": 676440,
+          "sha256": "dd00447c2bf13d1923dccbc0ee90a0faf7e3a893442463255e170fd8599495fb"
+        },
+        {
+          "file": "new-computer-modern/NewCM10-Regular.otf",
+          "bytes": 717588,
+          "sha256": "328698d764ccdf7acf6bc1088aefd83a237f6a1d8b812de1e77ac5e4483bf3d1"
+        },
+        {
+          "file": "new-computer-modern/NewCMMath-Bold.otf",
+          "bytes": 1232148,
+          "sha256": "c6c0e060da57d4f44274705afb956013047231dc62be5a4b02a351ab0dc43f2f"
+        },
+        {
+          "file": "new-computer-modern/NewCMMono10-BookItalic.otf",
+          "bytes": 603736,
+          "sha256": "f4b7a13365af080896fd09142866ab24d19ce6d3b72aeaf17cdee86beb4cbd8f"
+        },
+        {
+          "file": "new-computer-modern/NewCMSansMath-Regular.otf",
+          "bytes": 1183540,
+          "sha256": "2976236474e4e92ea68d9140c5b05fa1b98818a0a4a30cf8881c4c45ca951fd3"
+        },
+        {
+          "file": "new-computer-modern/NewCMSans08-BookOblique.otf",
+          "bytes": 486964,
+          "sha256": "e36ff049d8c05c32c99e172f3629b43153e8bd02b8a7d7b9171b81d2b55c5e83"
+        },
+        {
+          "file": "new-computer-modern/NewCMMath-Book.otf",
+          "bytes": 1432068,
+          "sha256": "2ea09ebc9167b1e1a66f31390dc917f2d4004ecfca72d51b28010e4ad6becd95"
+        },
+        {
+          "file": "new-computer-modern/NewCMMono10-BoldOblique.otf",
+          "bytes": 773356,
+          "sha256": "f8a7fed3ac5b7a9840ef003960c18f6d05cd57b76cf72536c93baea5162b51a0"
+        },
+        {
+          "file": "new-computer-modern/NewCMUncial10-Book.otf",
+          "bytes": 23024,
+          "sha256": "dc20be086f59ddb65ef884cf2487101a0bab4b6451b9c18b8fa5b796472310e1"
+        },
+        {
+          "file": "new-computer-modern/NewCMSans10-Bold.otf",
+          "bytes": 670212,
+          "sha256": "e92f716dc6db995a407319520a01225afa3cfba94d36fe2d45ed6ecf6554ab6b"
+        },
+        {
+          "file": "new-computer-modern/NewCM08-Italic.otf",
+          "bytes": 678768,
+          "sha256": "5153481898a26fb60eff2acb3684290e52df3f521d021f8249ab6ec797bcabc5"
+        },
+        {
+          "file": "new-computer-modern/NewCM10-BoldItalic.otf",
+          "bytes": 609000,
+          "sha256": "fb53f43500c8ffbcc6dfdea5a519961d475543174ea2a0dcbe16c08510299fdf"
+        },
+        {
+          "file": "new-computer-modern/NewCMUncial08-Book.otf",
+          "bytes": 23344,
+          "sha256": "750ee2a4c73b93a6d637c9c18a9c76b272f57ccc2b1b39b3b2510ac479056524"
+        },
+        {
+          "file": "new-computer-modern/NewCMSans08-Oblique.otf",
+          "bytes": 453844,
+          "sha256": "c9566051363232e93fb7a07a19dede35d1eaf00e17393ae9e685b8f26e88dd3f"
+        },
+        {
+          "file": "new-computer-modern/NewCMMath-Regular.otf",
+          "bytes": 1306268,
+          "sha256": "d66ac1cc91c55c24d3636ae2df1238076debdff51841f9893fc5419cc2df3df7"
+        },
+        {
+          "file": "new-computer-modern/NewCM10Devanagari-Book.otf",
+          "bytes": 322460,
+          "sha256": "79d9ff872410c1cfa900a0980cc0949c300690181644a87d7b9cd7faed565a7c"
+        },
+        {
+          "file": "new-computer-modern/NewCMMono10-Italic.otf",
+          "bytes": 547920,
+          "sha256": "974de80c47d467cc9e281d7d540321aee0dafb6fc25a03ad6b5831624e7f3d5e"
+        },
+        {
+          "file": "new-computer-modern/NewCMSans08-Book.otf",
+          "bytes": 568420,
+          "sha256": "01e2a4399325a8e5744612561b73fa04f8f7053904a79b58fe9998e23bac640c"
+        },
+        {
+          "file": "new-computer-modern/NewCMSans10-Oblique.otf",
+          "bytes": 559652,
+          "sha256": "93a03fce2778d459a14747d576803e82d12f653001a2292ef42aac0cb8e20fc7"
+        },
+        {
+          "file": "new-computer-modern/NewCMSans08-Regular.otf",
+          "bytes": 556676,
+          "sha256": "6cb4da400688c0ddbf413e1612833fb49bbcdcbfbce7e41875dec1f9c546184f"
+        },
+        {
+          "file": "new-computer-modern/NewCMMono10-Book.otf",
+          "bytes": 529816,
+          "sha256": "d5f2398e5198ea4112270fc6700130170c42c093c5c6af6fc19fe905def8953c"
+        },
+        {
+          "file": "new-computer-modern/NewCM10-Book.otf",
+          "bytes": 694392,
+          "sha256": "005f9b4e13b2a133df36d4ebfbb8f5fe402854bcb5882deb500b9c0f72b1bb49"
+        },
+        {
+          "file": "new-computer-modern/License.txt",
+          "bytes": 33266,
+          "sha256": "8641346ee391ff97eb66c70f3d5d695792cf9c5b3c5d748c6158d49cf79646e3"
+        }
+      ]
+    },
+    {
+      "name": "Lora",
+      "version": "3.021",
+      "source": "https://github.com/cyrealtype/Lora-Cyrillic/releases/tag/v3.021",
+      "download": "https://github.com/cyrealtype/Lora-Cyrillic/releases/download/v3.021/Lora.zip",
+      "license": "SIL OFL 1.1",
+      "files": [
+        {
+          "file": "lora/ttf/Lora-Italic.ttf",
+          "bytes": 206912,
+          "sha256": "1985f2fa49d675c3d88ca6a0b9161be38f955bec7efb025d2a5b68bc03e471fe"
+        },
+        {
+          "file": "lora/ttf/Lora-Bold.ttf",
+          "bytes": 218640,
+          "sha256": "32baf740eac1bf3f257904a6cf89e4e067ca1566b375bf22f743a26fc88b3791"
+        },
+        {
+          "file": "lora/ttf/Lora-SemiBold.ttf",
+          "bytes": 218792,
+          "sha256": "a9f5bbcebb6b53d53b6d7d571b2076f3db4931026693397200f69801b6701a81"
+        },
+        {
+          "file": "lora/ttf/Lora-SemiBoldItalic.ttf",
+          "bytes": 217352,
+          "sha256": "c6fa1c0f00230cd7e1543a4f9695de93f54a8c3ecb4c07d2d6bea504f9e101e0"
+        },
+        {
+          "file": "lora/ttf/Lora-MediumItalic.ttf",
+          "bytes": 215848,
+          "sha256": "67aca838282f89a4a63b3e0ccc9e15a6b74d68e170f4713865e203c4d1bbc935"
+        },
+        {
+          "file": "lora/ttf/Lora-Medium.ttf",
+          "bytes": 224604,
+          "sha256": "0342ce54e8f3ce352e01cc056e0c355ec6190b6da2eaad815400211eebba1f9a"
+        },
+        {
+          "file": "lora/ttf/Lora-BoldItalic.ttf",
+          "bytes": 213560,
+          "sha256": "f448e41ab0bf529ec7bd4f8aef843eb4d33b5608c7ed0a53128ead588e6ea9e5"
+        },
+        {
+          "file": "lora/ttf/Lora-Regular.ttf",
+          "bytes": 198380,
+          "sha256": "c72a925082ba55885e7b4ead25d34a3c91fa44edda72a16a3a2983fc7fa7cef3"
+        },
+        {
+          "file": "lora/variable/Lora-Italic[wght].ttf",
+          "bytes": 222336,
+          "sha256": "e0517c1d08f5a2d7960c0f8166f70ed79eb33a8a9b9bd5cdf788e70454ebe067"
+        },
+        {
+          "file": "lora/variable/Lora[wght].ttf",
+          "bytes": 208872,
+          "sha256": "01d46508311124b2f7d7986cf914c5a889f0a1a6644e1a90d469aec648aeaa2e"
+        },
+        {
+          "file": "lora/webfonts/Lora-SemiBold.woff2",
+          "bytes": 79156,
+          "sha256": "dfdfaf7165466ec43b74ea36e7333157433082362f55b97279518545e1ce0ee3"
+        },
+        {
+          "file": "lora/webfonts/Lora-BoldItalic.woff2",
+          "bytes": 77772,
+          "sha256": "6b6124bb648735a684748b90869f1dddfd31379761e225d552405b9cb303b810"
+        },
+        {
+          "file": "lora/webfonts/Lora-MediumItalic.woff2",
+          "bytes": 80656,
+          "sha256": "6d15dc31066995317f67c3bb740228fe299ea99fd7d66a6a3ed30ae2f6808f38"
+        },
+        {
+          "file": "lora/webfonts/Lora-Italic.woff2",
+          "bytes": 76112,
+          "sha256": "e7039e1c053501203b46907a3c03c73a18261cbc7644d2663937651538d074d9"
+        },
+        {
+          "file": "lora/webfonts/Lora-Italic[wght].woff2",
+          "bytes": 92248,
+          "sha256": "5b9c73c0ee6be6d1bc32f866cd69f71b9d37604d9b0277938b2cdb26f1f87190"
+        },
+        {
+          "file": "lora/webfonts/Lora-Bold.woff2",
+          "bytes": 76960,
+          "sha256": "c0e23c17a19d9b05d1f5bcc82997ff569b6d1aaa36df66cbf88b56c81cd8a627"
+        },
+        {
+          "file": "lora/webfonts/Lora-SemiBoldItalic.woff2",
+          "bytes": 81464,
+          "sha256": "5ffb85da42339a14aa0f573bd924cb43bea0bb4e24d68f025109f9c4eeea3d7b"
+        },
+        {
+          "file": "lora/webfonts/Lora-Regular.woff2",
+          "bytes": 71292,
+          "sha256": "0904f577a81f7840ea0c6bdfc75ab7c87ee6c4af315476e5fd25c478879f5b00"
+        },
+        {
+          "file": "lora/webfonts/Lora-Medium.woff2",
+          "bytes": 79424,
+          "sha256": "08d8296376f98293d4901c787d514e11f5c49cfdc98c46614ca8b0d168721cff"
+        },
+        {
+          "file": "lora/webfonts/Lora[wght].woff2",
+          "bytes": 84272,
+          "sha256": "e4359fb64060d178a1a2d14e56e6dcba97a79361328e0492b67891e7a454e1e3"
+        },
+        {
+          "file": "lora/otf/Lora-SemiBoldItalic.otf",
+          "bytes": 121388,
+          "sha256": "4d50d35b4bac692d1cc8e70d6060ee03cd4303054d065ddc8b7536ca29d9e4a9"
+        },
+        {
+          "file": "lora/otf/Lora-Bold.otf",
+          "bytes": 103096,
+          "sha256": "612e89ea9b36d4fc3331e649adda76fb554b6ac44c721692f1c9adef692c89db"
+        },
+        {
+          "file": "lora/otf/Lora-SemiBold.otf",
+          "bytes": 110880,
+          "sha256": "fb133296ae7a606e1111721b7d606ebc9eb24892832a43ec5dfde975a94ddfaa"
+        },
+        {
+          "file": "lora/otf/Lora-Italic.otf",
+          "bytes": 107844,
+          "sha256": "1625d70254d72122f831a71774f7a7c5957b88c64ead90b8b00986d6d5ae4aa8"
+        },
+        {
+          "file": "lora/otf/Lora-Regular.otf",
+          "bytes": 100512,
+          "sha256": "ceb776d46e73fbb6d6ca6af6d3130a5d104f0cf2cdcf785bea7ff4e1dec3d024"
+        },
+        {
+          "file": "lora/otf/Lora-BoldItalic.otf",
+          "bytes": 106536,
+          "sha256": "dcd3e89a9c5b9f1972f54ba507b84072df3ac9caacd0e2c866741c1eca694d3a"
+        },
+        {
+          "file": "lora/otf/Lora-Medium.otf",
+          "bytes": 110924,
+          "sha256": "12d17900f9ad5645b78263f87bc9a3fe43d8bc217ad5e40e0f50ec5c5e286237"
+        },
+        {
+          "file": "lora/otf/Lora-MediumItalic.otf",
+          "bytes": 121820,
+          "sha256": "4989466bbe7c1e9279afb63e478bf7ceef8008298b43f99b41b6ab1e899192c9"
+        },
+        {
+          "file": "lora/OFL.txt",
+          "bytes": 4423,
+          "sha256": "1d9a970809ac804b582a6ce7f0ebc4e7fefcbfd7ff6299cad35ee656a21be716"
+        }
+      ]
+    }
+  ],
+  "additionalLicenses": [
+    {
+      "file": "new-computer-modern/GUST-FONT-LICENSE.txt",
+      "source": "https://www.gust.org.pl/projects/e-foundry/licenses/GUST-FONT-LICENSE.txt",
+      "bytes": 1417,
+      "sha256": "5eb61bb836bb1845ef668717cb15b382e997748ce2629e4388cc5e4c3fa4e433"
+    }
+  ]
+}

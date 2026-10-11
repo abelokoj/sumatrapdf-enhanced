@@ -1,0 +1,746 @@
+/* ==========================================================================
+   Global tokens
+   Change --base-font-size and every heading, table, and code block follows,
+   because all derived sizes below are expressed as multiples of the base.
+   ========================================================================== */
+
+:root {
+  --base-font-size: 13pt;
+  --line-height: 1.3;
+
+  --font-serif: "Lora", "Palatino Linotype", "NewComputerModern10", Palatino, Georgia, serif;
+  --font-mono: "Maple Mono NF", "Fira Code", Consolas, "Courier New", monospace;
+
+  --color-text: #f0f0f0;
+  --color-heading: #ffffff;
+  --color-muted: #b4b4b4;
+  --color-link: #6cb6ff;
+  --color-border: #3c3c3c;
+  --color-border-light: #3a3a3a;
+  --color-surface: #252526;
+  --color-table-border: #444444;
+  --color-surface-alt: #2d2d30;
+  --color-bg: #1e1e1e;
+
+  --color-rule: #4a4a4a;
+  --color-quote-bar: #4a4a4a;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  max-width: 90%;
+  width: calc(100% - 50px);
+  margin: 0 auto 30px auto;
+  height: min-content;
+}
+
+body,
+table,
+input,
+button,
+select,
+textarea {
+  font-family: var(--font-serif);
+  font-size: var(--base-font-size);
+  line-height: var(--line-height);
+}
+
+body > *:first-child {
+  margin-top: 0 !important;
+}
+
+body > *:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* ==========================================================================
+   Links
+   ========================================================================== */
+
+a {
+  color: var(--color-link);
+  text-decoration: none;
+}
+
+a.absent {
+  color: #f78166;
+}
+
+a.anchor {
+  display: block;
+  padding-left: 30px;
+  margin-left: -30px;
+  cursor: pointer;
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+}
+
+/* ==========================================================================
+   Headings
+   Sizes are em multiples of the body size so the whole scale moves together.
+   ========================================================================== */
+
+h1, h2, h3, h4, h5, h6 {
+  margin: 0 0 0.75em 0;
+  padding: 0;
+  color: var(--color-heading);
+  font-weight: bold;
+  line-height: 1.25;
+  -webkit-font-smoothing: antialiased;
+  cursor: text;
+  position: relative;
+}
+
+h1 {
+  font-size: 2em;
+  padding-bottom: 0.2275em;
+  margin-bottom: 0.7em !important;
+  border-bottom: 1px solid var(--color-border);
+}
+
+h2 {
+  font-size: 1.5em;
+  margin-top: 1.2em;
+  padding-bottom: 0.3em;
+  margin-bottom: 0.65em !important;
+  border-bottom: 1px solid var(--color-border);
+}
+
+h3 {
+  font-size: 1.15em;
+  margin-top: 1.2em;
+  padding-bottom: 0.28em;
+  margin-bottom: 0.6em !important;
+  border-bottom: 1px solid var(--color-border);
+}
+
+h4 {
+  font-size: 1.05em;
+  margin-top: 1.2em;
+  padding-bottom: 0.25em;
+  margin-bottom: 0.55em !important;
+  border-bottom: 1px solid var(--color-border);
+}
+
+h5 {
+  font-size: 1em;
+  margin-top: 1em;
+  margin-bottom: 0;
+  font-weight: bold;
+}
+
+h6 {
+  font-size: 1em;
+  font-weight: bold;
+  margin-top: 1em;
+  margin-bottom: 0;
+  color: var(--color-muted);
+}
+
+h2:first-child,
+h1:first-child,
+h1:first-child + h2,
+h3:first-child,
+h4:first-child,
+h5:first-child,
+h6:first-child {
+  margin-top: 0;
+  padding-top: 0;
+}
+
+h1:hover a.anchor,
+h2:hover a.anchor,
+h3:hover a.anchor,
+h4:hover a.anchor,
+h5:hover a.anchor,
+h6:hover a.anchor {
+  text-decoration: none;
+}
+
+h1 tt, h1 code,
+h2 tt, h2 code,
+h3 tt, h3 code,
+h4 tt, h4 code,
+h5 tt, h5 code,
+h6 tt, h6 code {
+  font-size: inherit;
+}
+
+body > h1:first-child,
+body > h2:first-child,
+body > h3:first-child,
+body > h4:first-child,
+body > h5:first-child,
+body > h6:first-child,
+body > h1:first-child + h2 {
+  margin-top: 0;
+  padding-top: 0;
+}
+
+a:first-child h1,
+a:first-child h2,
+a:first-child h3,
+a:first-child h4,
+a:first-child h5,
+a:first-child h6 {
+  margin-top: 0;
+  padding-top: 0;
+}
+
+h1 p, h2 p, h3 p, h4 p, h5 p, h6 p {
+  margin-top: 0;
+}
+
+/* ==========================================================================
+   Block content
+   ========================================================================== */
+
+p, blockquote, ul, ol, dl, li, table, pre {
+  margin: 0 0 0.4em 0;
+}
+
+p {
+  text-align: left;
+  /*text-align: justify; # default: */
+}
+
+ul, li {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+li {
+  text-align: justify;
+}
+
+li p.first {
+  display: inline-block;
+}
+
+ul, ol {
+  padding-left: 1.2em;
+}
+
+ul :first-child,
+ol :first-child {
+  margin-top: 0;
+}
+
+ul :last-child,
+ol :last-child {
+  margin-bottom: 0.4em;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  height: 1px;
+  margin: 0.4em 0;
+  padding: 0;
+}
+
+/* ==========================================================================
+   Definition lists
+   ========================================================================== */
+
+dl {
+  padding: 0;
+}
+
+dl dt {
+  font-size: 1em;
+  font-weight: bold;
+  font-style: italic;
+  padding: 0;
+  margin: 0.4em 0;
+}
+
+dl dt:first-child {
+  padding: 0;
+}
+
+dl dt > :first-child {
+  margin-top: 0;
+}
+
+dl dt > :last-child {
+  margin-bottom: 0;
+}
+
+dl dd {
+  margin: 0 0 1.15em;
+  padding: 0 1.15em;
+}
+
+dl dd > :first-child {
+  margin-top: 0;
+}
+
+dl dd > :last-child {
+  margin-bottom: 0;
+}
+
+/* ==========================================================================
+   Blockquotes
+   ========================================================================== */
+
+blockquote {
+  border-left: 4px solid var(--color-quote-bar);
+  padding: 0 1.15em;
+  color: var(--color-muted);
+}
+
+blockquote > :first-child {
+  margin-top: 0;
+}
+
+blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+/* ==========================================================================
+   Tables
+   font: inherit is what keeps table text locked to the body scale; without it
+   the browser default stylesheet takes over and the table drifts out of step.
+   ========================================================================== */
+
+table {
+  font: inherit;
+  padding: 0;
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  table-layout: auto;
+}
+
+/* Wrap a table in <div class="table-wrapper"> when it has too many columns to
+   ever fit; the cells still wrap, and this only scrolls once wrapping alone
+   cannot save it. Plain tables need no wrapper. */
+.table-wrapper {
+  max-width: 100%;
+  overflow-x: auto;
+  margin-bottom: 0.4em;
+}
+
+table tr {
+  border-top: 1px solid var(--color-table-border);
+  background-color: var(--color-bg);
+  margin: 0;
+  padding: 0;
+}
+
+table tr:nth-child(2n) {
+  background-color: var(--color-surface);
+}
+
+table tr th {
+  font-weight: bold;
+  border: 1px solid var(--color-table-border);
+  background-color: var(--color-surface-alt);
+  text-align: left;
+  margin: 0;
+  padding: 0.45em 1em;
+}
+
+table tr td {
+  border: 1px solid var(--color-table-border);
+  text-align: left;
+  margin: 0;
+  padding: 0.45em 1em;
+}
+
+table tr th,
+table tr td {
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: auto;
+  min-width: 0;
+}
+
+table tr th code,
+table tr td code,
+table tr th tt,
+table tr td tt {
+  overflow-wrap: anywhere;
+}
+
+table tr th :first-child,
+table tr td :first-child {
+  margin-top: 0;
+}
+
+table tr th :last-child,
+table tr td :last-child {
+  margin-bottom: 0;
+}
+
+/* ==========================================================================
+   Images
+   ========================================================================== */
+
+img {
+  width: 90%;
+  max-width: 400px;
+  margin-top: 1.15em;
+  margin-bottom: 1.15em;
+}
+
+span.frame {
+  display: block;
+  overflow: hidden;
+}
+
+span.frame > span {
+  border: 1px solid var(--color-rule);
+  display: block;
+  float: left;
+  overflow: hidden;
+  margin: 1em 0 0;
+  padding: 7px;
+  width: auto;
+}
+
+span.frame span img {
+  display: block;
+  float: left;
+}
+
+span.frame span span {
+  clear: both;
+  color: var(--color-text);
+  display: block;
+  padding: 0.4em 0 0;
+}
+
+span.align-center {
+  display: block;
+  overflow: hidden;
+  clear: both;
+}
+
+span.align-center > span {
+  display: block;
+  overflow: hidden;
+  margin: 1em auto 0;
+  text-align: center;
+}
+
+span.align-center span img {
+  margin: 0 auto;
+  text-align: center;
+}
+
+span.align-right {
+  display: block;
+  overflow: hidden;
+  clear: both;
+}
+
+span.align-right > span {
+  display: block;
+  overflow: hidden;
+  margin: 1em 0 0;
+  text-align: right;
+}
+
+span.align-right span img {
+  margin: 0;
+  text-align: right;
+}
+
+span.float-left {
+  display: block;
+  margin-right: 1em;
+  overflow: hidden;
+  float: left;
+}
+
+span.float-left span {
+  margin: 1em 0 0;
+}
+
+span.float-right {
+  display: block;
+  margin-left: 1em;
+  overflow: hidden;
+  float: right;
+}
+
+span.float-right > span {
+  display: block;
+  overflow: hidden;
+  margin: 1em auto 0;
+  text-align: right;
+}
+
+/* ==========================================================================
+   Code
+   ========================================================================== */
+
+code, tt {
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  margin: 0 2px;
+  padding: 0 5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--color-border-light);
+  background-color: var(--color-surface);
+  border-radius: 3px;
+}
+
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  line-height: 1.45;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+  padding: 0.5em 0.8em;
+  border-radius: 3px;
+}
+
+.highlight pre {
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  line-height: 1.45;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+  padding: 0.5em 0.8em;
+  border-radius: 3px;
+}
+
+pre code,
+pre tt {
+  font-size: inherit;
+  margin: 0;
+  padding: 0;
+  white-space: inherit;
+  overflow-wrap: inherit;
+  border: none;
+  background: transparent;
+}
+
+/* ==========================================================================
+   Task lists
+   ========================================================================== */
+
+.contains-task-list {
+  padding-left: 5px;
+}
+
+.task-list-item {
+  list-style-type: none;
+}
+
+/* ==========================================================================
+   Syntax highlighting
+   ========================================================================== */
+
+.plainText {
+  background-color: transparent;
+  color: var(--color-text);
+}
+.htmlServerSideScript {
+  background-color: #4d4d00;
+}
+.htmlComment {
+  color: #85C46B;
+}
+.htmlTagDelimiter {
+  color: #A3A3A3;
+}
+.htmlElementName {
+  color: #7FC1F0;
+}
+.htmlAttributeName {
+  color: #B8E8FF;
+}
+.htmlAttributeValue {
+  color: #E8A98D;
+}
+.htmlOperator {
+  color: #ececec;
+}
+.comment {
+  color: #85C46B;
+}
+.xmlDocTag {
+  color: #7BAE64;
+}
+.xmlDocComment {
+  color: #85C46B;
+}
+.string {
+  color: #E8A98D;
+}
+.stringCSharpVerbatim {
+  color: #E8A98D;
+}
+.keyword {
+  color: #7FC1F0;
+}
+.preprocessorKeyword {
+  color: #DDA0D8;
+}
+.htmlEntity {
+  color: #EBD094;
+}
+.xmlAttribute {
+  color: #B8E8FF;
+}
+.xmlAttributeQuotes {
+  color: #ececec;
+}
+.xmlAttributeValue {
+  color: #E8A98D;
+}
+.xmlCDataSection {
+  color: #b4b4b4;
+}
+.xmlComment {
+  color: #85C46B;
+}
+.xmlDelimiter {
+  color: #A3A3A3;
+}
+.xmlName {
+  color: #7FC1F0;
+}
+.className {
+  color: #6FE3CB;
+}
+.cssSelector {
+  color: #EBD094;
+}
+.cssPropertyName {
+  color: #B8E8FF;
+}
+.cssPropertyValue {
+  color: #E8A98D;
+}
+.sqlSystemFunction {
+  color: #F0F0C0;
+}
+.powershellAttribute {
+  color: #B0E0E6;
+}
+.powershellOperator {
+  color: #ececec;
+}
+.powershellType {
+  color: #6FE3CB;
+}
+.powershellVariable {
+  color: #B8E8FF;
+}
+.type {
+  color: #6FE3CB;
+}
+.typeVariable {
+  color: #6FE3CB;
+  font-style: italic;
+}
+.namespace {
+  color: #6FE3CB;
+}
+.constructor {
+  color: #F0F0C0;
+}
+.predefined {
+  color: #F0F0C0;
+}
+.pseudoKeyword {
+  color: #DDA0D8;
+}
+.stringEscape {
+  color: #EBD094;
+}
+.controlKeyword {
+  color: #DDA0D8;
+}
+.number {
+  color: #CDE6C0;
+}
+.operator {
+  color: #ececec;
+}
+.delimiter {
+  color: #A3A3A3;
+}
+.markdownHeader {
+  font-weight: bold;
+  color: var(--color-heading);
+}
+.markdownCode {
+  color: #6FE3CB;
+}
+.markdownListItem {
+  font-weight: bold;
+}
+.italic {
+  font-style: italic;
+}
+.bold {
+  font-weight: bold;
+}
+
+/* ==========================================================================
+   Paragraph variant carried over from the original -dark stylesheet
+   ========================================================================== */
+
+p.end {
+  text-indent: 0em;
+  margin-bottom: 1.15em;
+}
+
+/* ==========================================================================
+   Narrow displays
+   The gutter and cell padding shrink before the type does, so the text stays
+   legible on a phone instead of scaling down with the viewport.
+   ========================================================================== */
+
+@media (max-width: 700px) {
+  body {
+    width: calc(100% - 24px);
+  }
+
+  table tr th,
+  table tr td {
+    padding: 0.4em 0.5em;
+  }
+
+  pre,
+  .highlight pre {
+    padding: 0.5em 0.6em;
+  }
+
+  img {
+    width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  :root {
+    --base-font-size: 12pt;
+  }
+
+  body {
+    width: calc(100% - 16px);
+  }
+
+  table tr th,
+  table tr td {
+    padding: 0.35em 0.4em;
+  }
+}

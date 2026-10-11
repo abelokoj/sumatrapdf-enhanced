@@ -1463,6 +1463,7 @@
     <ClInclude Include="..\src\LinkFollow.h" />
     <ClInclude Include="..\src\LitDoc.h" />
     <ClInclude Include="..\src\MainWindow.h" />
+    <ClInclude Include="..\src\MarkdownFonts.h" />
     <ClInclude Include="..\src\MarkdownModel.h" />
     <ClInclude Include="..\src\MarkdownToc.h" />
     <ClInclude Include="..\src\Menu.h" />
@@ -1700,6 +1701,7 @@
     <ClCompile Include="..\src\LinkFollow.cpp" />
     <ClCompile Include="..\src\LitDoc.cpp" />
     <ClCompile Include="..\src\MainWindow.cpp" />
+    <ClCompile Include="..\src\MarkdownFonts.cpp" />
     <ClCompile Include="..\src\MarkdownModel.cpp" />
     <ClCompile Include="..\src\MarkdownToc.cpp" />
     <ClCompile Include="..\src\Menu.cpp" />

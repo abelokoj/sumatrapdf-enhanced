@@ -238,13 +238,16 @@ static const StructInfo gChmUIInfo = {
 
 static const FieldInfo gMarkdownUIFields[] = {
     {offsetof(MarkdownUI, useFixedPageUI), SettingType::Bool, false},
+    {offsetof(MarkdownUI, fontName), SettingType::String, (intptr_t)""},
+    {offsetof(MarkdownUI, mathFontName), SettingType::String, (intptr_t)""},
 };
 static const StructInfo gMarkdownUIInfo = {
     sizeof(MarkdownUI),
-    1,
+    3,
     gMarkdownUIFields,
-    "UseFixedPageUI",
-    "if true, use MuPDF (cmark-gfm) to render markdown; if false, use WebView2 browser view when available",
+    "UseFixedPageUI\0FontName\0MathFontName",
+    "if true, use MuPDF (cmark-gfm) to render markdown; if false, use WebView2 browser view when available\0Markdown "
+    "text font; empty follows the interface font\0Markdown MathML font; empty uses the companion of the text font",
     false};
 
 static const FieldInfo gHtmlUIFields[] = {
