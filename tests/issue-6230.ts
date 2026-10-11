@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { ControlCommand, type ControlClient } from "./control.ts";
 import { cmdId, runStandalone, tmpPath } from "./util.ts";
 import { launchControlled, sendCommand, waitForFocusClass, killAndWait, pressKey } from "./win-automation.ts";
-import { sendMessage, VK_RETURN, WM_CHAR } from "./winapi.ts";
+import { getControlText, sendMessage, VK_RETURN, WM_CHAR } from "./winapi.ts";
 
 // "x" matches on page 40 and page 80, "xy" only on page 80. Page filler text
 // avoids the letters x and y so each search moves the view.
@@ -84,6 +84,40 @@ async function expectPage(client: ControlClient, expected: number, what: string)
   }
 }
 
+async function expectSearch(
+  client: ControlClient,
+  edit: number,
+  query: string,
+  expectedPage: number,
+  expectedMatches: number,
+): Promise<void> {
+  const deadline = Date.now() + 8000;
+  let raw = "";
+  while (Date.now() < deadline) {
+    const response = await client.request(ControlCommand.TestFindUiState, ["state"]);
+    raw = String(response[1] ?? "");
+    if (Number(response[0] ?? -1) !== 0) {
+      throw new Error(`issue-6230: can't read search state: ${raw.trim()}`);
+    }
+    const values: Record<string, number> = {};
+    for (const match of raw.matchAll(/(\w+)=(\d+)/g)) {
+      values[match[1]] = Number(match[2]);
+    }
+    // A page change precedes completion of the full-document match count.
+    if (
+      getControlText(edit) === query &&
+      values.busy === 0 &&
+      values.hitPage === expectedPage &&
+      values.page === expectedPage &&
+      values.matches === expectedMatches
+    ) {
+      return;
+    }
+    await Bun.sleep(50);
+  }
+  throw new Error(`issue-6230: search for '${query}' did not finish on page ${expectedPage}: ${raw.trim()}`);
+}
+
 export async function testit(): Promise<void> {
   const dir = tmpPath("issue-6230");
   rmSync(dir, { recursive: true, force: true });
@@ -109,10 +143,10 @@ export async function testit(): Promise<void> {
     // Run both incremental searches so each moves the view.
     sendMessage(edit, WM_CHAR, "x".charCodeAt(0), 0);
     await pressKey(edit, VK_RETURN, 0);
-    await expectPage(client, firstMatchPage, "search for 'x'");
+    await expectSearch(client, edit, "x", firstMatchPage, 2);
     sendMessage(edit, WM_CHAR, "y".charCodeAt(0), 0);
     await pressKey(edit, VK_RETURN, 0);
-    await expectPage(client, secondMatchPage, "search for 'xy'");
+    await expectSearch(client, edit, "xy", secondMatchPage, 1);
 
     sendCommand(frame, cmdId("CmdNavigateBack"));
     await expectPage(client, startPage, "Back after search");

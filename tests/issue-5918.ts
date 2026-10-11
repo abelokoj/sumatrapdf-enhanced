@@ -22,7 +22,15 @@ import {
   TVM_GETCOUNT,
   WM_CLOSE,
 } from "./winapi";
-import { killAndWait, launchSumatra, sendCommand, waitForExit, waitForFrame, waitForTitle } from "./win-automation";
+import {
+  killAndWait,
+  launchSumatra,
+  sendCommand,
+  sendCommandSync,
+  waitForExit,
+  waitForFrame,
+  waitForTitle,
+} from "./win-automation";
 
 const nFiles = 400;
 const headingsPerFile = 3;
@@ -129,7 +137,9 @@ async function testTocAndNextFile(dir: string): Promise<void> {
     }
 
     postMessage(frame, WM_CLOSE, 0, 0);
-    await waitForExit(proc, 5000);
+    if (!(await waitForExit(proc, 5000))) {
+      throw new Error("issue-5918: app did not exit after closing the completed TOC");
+    }
   } finally {
     await killAndWait(proc);
   }
@@ -155,7 +165,8 @@ async function testCloseDuringBuild(dir: string): Promise<void> {
       }
       await sleep(30);
     }
-    sendCommand(frame, cmdId("CmdClose"));
+    // WebView teardown can pump messages; close the document before posting the window close.
+    sendCommandSync(frame, cmdId("CmdClose"));
     postMessage(frame, WM_CLOSE, 0, 0);
     // only that it goes away: a crash would leave the report dialog up and a
     // deadlock would hang here. The exit code isn't asserted because closing
