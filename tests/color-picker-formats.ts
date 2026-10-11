@@ -42,6 +42,7 @@ const ORIGINAL_COLOR = "#1153e5";
 const ORIGINAL_ALPHA = 128;
 const MODELS = ["RGB", "HEX", "CMYK", "HSV", "HSL"] as const;
 type Model = (typeof MODELS)[number];
+type PickerInputs = { color: number[]; opacity: number };
 
 function colorDialog(pid: number): number {
   let dialog = 0;
@@ -59,14 +60,19 @@ function visibleEdits(dialog: number): number[] {
     if (getClassName(hwnd) === "Edit" && isWindowVisible(hwnd)) edits.push(hwnd);
     return true;
   });
-  edits.sort((a, b) => getWindowRect(a).left - getWindowRect(b).left);
+  edits.sort((a, b) => {
+    const ra = getWindowRect(a),
+      rb = getWindowRect(b);
+    return ra.top - rb.top || ra.left - rb.left;
+  });
   return edits;
 }
 
-async function setModel(dialog: number, combo: number, model: Model): Promise<number[]> {
+async function setModel(dialog: number, combo: number, model: Model): Promise<PickerInputs> {
   sendMessage(combo, CB_SETCURSEL, MODELS.indexOf(model), 0);
   sendMessage(dialog, WM_COMMAND, (getWindowLong(combo, GWL_ID) & 0xffff) | (CBN_SELCHANGE << 16), combo);
-  const count = model === "HEX" ? 1 : model === "CMYK" ? 4 : 3;
+  const channels = model === "HEX" ? 1 : model === "CMYK" ? 4 : 3;
+  const count = channels + 1;
   const edits = await pollUntil(
     () => visibleEdits(dialog),
     (controls) => controls.length === count,
@@ -81,18 +87,51 @@ async function setModel(dialog: number, combo: number, model: Model): Promise<nu
     if (
       rect.right <= rect.left ||
       rect.bottom <= rect.top ||
-      (i > 0 && rect.left < getWindowRect(edits[i - 1]!).right)
+      (i > 1 && (rect.top !== getWindowRect(edits[1]!).top || rect.left < getWindowRect(edits[i - 1]!).right))
     ) {
       throw new Error(`color-picker-formats: ${model} inputs overlap or have empty bounds`);
     }
   }
-  return edits;
+  const [opacity, ...color] = edits;
+  if (getWindowRect(opacity!).bottom > getWindowRect(color[0]!).top) {
+    throw new Error(`color-picker-formats: ${model} opacity overlaps the color inputs`);
+  }
+  return { color, opacity: opacity! };
 }
 
-async function assertHex(dialog: number, combo: number, color: string): Promise<void> {
-  const [edit] = await setModel(dialog, combo, "HEX");
-  const actual = getControlText(edit!).toLowerCase();
+function assertOpacity(edit: number, percent: number): void {
+  const actual = getControlText(edit);
+  if (actual !== String(percent)) {
+    throw new Error(`color-picker-formats: opacity is '${actual}', want ${percent}%`);
+  }
+}
+
+async function assertHex(dialog: number, combo: number, color: string, percent: number): Promise<void> {
+  const inputs = await setModel(dialog, combo, "HEX");
+  const actual = getControlText(inputs.color[0]!).toLowerCase();
   if (actual !== color) throw new Error(`color-picker-formats: color is ${actual}, want ${color}`);
+  assertOpacity(inputs.opacity, percent);
+}
+
+async function selectPicker(
+  client: ControlClient,
+  pid: number,
+  edit: number,
+  color: string,
+  alpha: number,
+): Promise<void> {
+  await pressKey(edit, VK_RETURN, 0);
+  await pollUntil(
+    () => colorDialog(pid),
+    (hwnd) => hwnd === 0,
+    { error: "color-picker-formats: Select did not close" },
+  );
+  await client.waitForRenderIdle();
+  const result = String((await client.request(ControlCommand.TestAnnotEditorLayout, [0, 0]))[1] ?? "");
+  const selected = / color=(\S+) interiorColor=\S+ opacity=(\d+)/.exec(result);
+  if (!selected || selected[1] !== color || +selected[2]! !== alpha) {
+    throw new Error(`color-picker-formats: expected ${color}/${alpha}, got: ${result}`);
+  }
 }
 
 async function assertInvalid(dialog: number, edit: number, value: string): Promise<void> {
@@ -181,6 +220,7 @@ async function testAppearance(theme: string, scale: number): Promise<number> {
       throw new Error(`color-picker-formats: fixture color/opacity failed to load: ${before}`);
     }
     const initialAlpha = +loaded[2]!;
+    const initialPercent = Math.round((initialAlpha * 100) / 255);
     console.log(`color-picker-formats: ${theme} ${scale}% loaded ${loaded[1]}/${initialAlpha}`);
     const dialog = await openPicker(client, proc.pid!);
     const combo = findChildWindow(dialog, "ComboBox");
@@ -191,10 +231,11 @@ async function testAppearance(theme: string, scale: number): Promise<number> {
     // Merely changing representation must preserve every selected RGB byte.
     let inputHeight = 0;
     for (const model of MODELS) {
-      const edits = await setModel(dialog, combo, model);
+      const { color: edits, opacity } = await setModel(dialog, combo, model);
       const rect = getWindowRect(edits[0]!);
       inputHeight = rect.bottom - rect.top;
-      await assertHex(dialog, combo, ORIGINAL_COLOR);
+      assertOpacity(opacity, initialPercent);
+      await assertHex(dialog, combo, ORIGINAL_COLOR, initialPercent);
     }
 
     const cases: [Model, string[], string][] = [
@@ -205,7 +246,7 @@ async function testAppearance(theme: string, scale: number): Promise<number> {
       ["HSL", ["240", "100%", "50%"], "#0000ff"],
     ];
     for (const [model, values, expected] of cases) {
-      const edits = await setModel(dialog, combo, model);
+      const { color: edits } = await setModel(dialog, combo, model);
       values.forEach((value, i) => sendText(edits[i]!, value));
       assertButtonVisible(dialog, edits, model);
       if (
@@ -214,29 +255,54 @@ async function testAppearance(theme: string, scale: number): Promise<number> {
       ) {
         captureWindowToPng(dialog, join(dir, `picker-${model.toLowerCase()}.png`));
       }
-      await assertHex(dialog, combo, expected);
-      const invalidEdits = await setModel(dialog, combo, model);
+      await assertHex(dialog, combo, expected, initialPercent);
+      const { color: invalidEdits } = await setModel(dialog, combo, model);
       await assertInvalid(dialog, invalidEdits[0]!, model === "HEX" ? "#12345g" : "-1");
-      await assertHex(dialog, combo, expected);
+      await assertHex(dialog, combo, expected, initialPercent);
     }
-    const [hex] = await setModel(dialog, combo, "HEX");
+    const {
+      color: [hex],
+    } = await setModel(dialog, combo, "HEX");
     sendText(hex!, "#0011aa");
     captureWindowToPng(dialog, join(dir, "picker.png"));
-    await pressKey(hex!, VK_RETURN, 0);
-    await pollUntil(
-      () => colorDialog(proc.pid!),
-      (hwnd) => hwnd === 0,
-      { error: "color-picker-formats: Select did not close" },
-    );
-    await client.waitForRenderIdle();
-    const result = String((await client.request(ControlCommand.TestAnnotEditorLayout, [0, 0]))[1] ?? "");
-    const selected = / color=(\S+) interiorColor=\S+ opacity=(\d+)/.exec(result);
-    if (!selected || selected[1] !== "#0011aa" || +selected[2]! !== initialAlpha) {
-      throw new Error(
-        `color-picker-formats: changed color or opacity incorrectly (initial ${initialAlpha}): ${result}`,
-      );
+    await selectPicker(client, proc.pid!, hex!, "#0011aa", initialAlpha);
+
+    let previousPercent = initialPercent;
+    for (const percent of [0, 100, 37]) {
+      const opacityDialog = await openPicker(client, proc.pid!);
+      const opacityCombo = findChildWindow(opacityDialog, "ComboBox");
+      if (!opacityCombo) throw new Error("color-picker-formats: reopened picker has no color models");
+      const inputs = await setModel(opacityDialog, opacityCombo, "HEX");
+      assertOpacity(inputs.opacity, previousPercent);
+      sendText(inputs.opacity, String(percent));
+      for (const model of MODELS) {
+        const changed = await setModel(opacityDialog, opacityCombo, model);
+        assertOpacity(changed.opacity, percent);
+        assertButtonVisible(opacityDialog, changed.color, model);
+        await assertHex(opacityDialog, opacityCombo, "#0011aa", percent);
+      }
+      if (percent === 37) {
+        for (const invalid of ["", "-1", "101", "12.5", "12x"]) {
+          await assertInvalid(opacityDialog, inputs.opacity, invalid);
+          // Valid color changes must not repair an invalid opacity input.
+          sendText(inputs.color[0]!, "#0011aa");
+          for (const model of MODELS) await setModel(opacityDialog, opacityCombo, model);
+          if (getControlText(inputs.opacity) !== invalid) {
+            throw new Error(`color-picker-formats: model change replaced invalid opacity '${invalid}'`);
+          }
+          await pressKey(inputs.opacity, VK_RETURN, 80);
+          if (!isWindowVisible(opacityDialog)) {
+            throw new Error(`color-picker-formats: model change accepted invalid opacity '${invalid}'`);
+          }
+          sendText(inputs.opacity, String(percent));
+          await assertHex(opacityDialog, opacityCombo, "#0011aa", percent);
+        }
+      }
+      await setModel(opacityDialog, opacityCombo, "HEX");
+      await selectPicker(client, proc.pid!, inputs.opacity, "#0011aa", Math.round((percent * 255) / 100));
+      previousPercent = percent;
     }
-    console.log(`color-picker-formats: ${theme} ${scale}% modes editable; opacity ${initialAlpha} preserved`);
+    console.log(`color-picker-formats: ${theme} ${scale}% modes editable; opacity preserved and 0/100/37% committed`);
     return inputHeight;
   } finally {
     client.close();

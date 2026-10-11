@@ -3949,6 +3949,9 @@ TempStr AnnotEditorLayoutResultTemp(int, int, int* exitCodeOut, int) {
         out.Append(fmt(" resizeOutline=%d,%d,%d,%d", outline.x, outline.y, outline.dx, outline.dy));
         out.Append(fmt(" color=%s interiorColor=%s opacity=%d", ColorDumpTemp(GetColor(annot)),
                        ColorDumpTemp(InteriorColor(annot)), Opacity(annot)));
+        if (AnnotationSupportsFillOpacity(Type(annot))) {
+            out.Append(fmt(" fillOpacity=%d", InteriorOpacity(annot)));
+        }
         // last on the line: the contents can hold anything, including spaces
         out.Append(fmt(" contents=%s", Contents(annot)));
     }

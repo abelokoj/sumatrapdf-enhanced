@@ -23,7 +23,7 @@ type Button = { present: boolean; idx: number };
 const DEFAULT_LAYOUT =
   "CmdOpenFile CmdFindFirst | CmdGoToPrevPage PageInfo CmdGoToNextPage | " +
   "CmdZoomOut CmdZoomIn CmdZoomFitWidthAndContinuous CmdSinglePageView | CmdRotateLeft CmdRotateRight | " +
-  "CmdToggleEditPDF CmdHandTool CmdAnnotationLasso CmdCreateAnnotInk CmdAnnotationHighlightBrush " +
+  "CmdToggleEditPDF CmdHandTool CmdTextSelectTool CmdAnnotationLasso CmdCreateAnnotInk CmdAnnotationHighlightBrush " +
   "CmdCreateAnnotUnderline CmdCreateAnnotStrikeOut CmdInkEraser CmdToggleLaserPointer | " +
   "CmdToggleBookmarks CmdCommandPaletteFavorites CmdCommandPalette CmdPrint | " +
   "CmdOptions CmdThemeLight CmdThemeDark CmdChangeTheme CmdInvertColors " +
@@ -105,7 +105,7 @@ export async function testit(): Promise<void> {
   rmSync(appdata, { recursive: true, force: true });
   mkdirSync(appdata, { recursive: true });
 
-  const cmds = ["CmdOpenFile", "CmdPrint", "CmdGoToPrevPage", "CmdGoToNextPage", "CmdFindFirst", "CmdToggleEditPDF"];
+  const cmds = DEFAULT_LAYOUT.split(" ").filter((name) => name.startsWith("Cmd"));
 
   // the standard layout: everything is there, Open comes before Find
   writeSettings(appdata, "");

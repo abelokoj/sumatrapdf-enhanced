@@ -2114,3 +2114,6 @@ EXPORTS
 	pdf_annot_request_resynthesis
 
 	fz_process_opened_pages
+	fz_save_pixmap_as_png
+	pdf_dict_get_real
+	pdf_new_pixmap_from_annot

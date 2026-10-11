@@ -4621,7 +4621,7 @@ static void ShowAnnotColorsDialog(MainWindow* win, Color current, const Func1<Co
     args->title = Tr("Annotation Colors");
     args->color = current;
     args->withOpacity = true;
-    if (current != kColorUnset) args->opacityPercent = (GetAlpha(current) * 100 + 127) / 255;
+    if (current != kColorUnset && GetAlpha(current) == 0) args->opacityPercent = 0;
     AnnotPresetColors(0, args->colors);
     args->onClose = MkFunc1(AnnotColorsPicked, target);
     ShowChangeColorsDialog(args);
@@ -4671,6 +4671,8 @@ static void AnnotColorPopupNativeMsg(AnnotColorPopup* p, VirtHostNativeMsg* ev) 
         case WM_CAPTURECHANGED:
             if (p->menuActive) break;
             if ((HWND)ev->lp == p->host->native) {
+                // Reclaiming the same HWND keeps the slider's virtual capture.
+                ev->didHandle = true;
                 break;
             }
             // the slider lets go of the mouse when its drag ends; the popup

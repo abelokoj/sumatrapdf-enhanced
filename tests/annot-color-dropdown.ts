@@ -53,6 +53,9 @@ const HOVER_MENU_CLASS = "SumatraToolbarHoverMenu";
 const POPUP_CLASS = "SumatraAnnotColorPopup";
 // the two preset colors the test picks from: translucent red, opaque green
 const PRESETS = "#80ff0000 #00ff00";
+const EXPECTED_PRESETS = "#80ff0000 #ff00ff00";
+const TOOLBAR_PRESETS = `${PRESETS} #ff0000 #000000 #ffff00 #0000ff`;
+const EXPECTED_TOOLBAR_PRESETS = `${EXPECTED_PRESETS} #ffff0000 #ff000000 #ffffff00 #ff0000ff`;
 // ink's own colors, with the alpha it paints them at
 const INK_PRESETS = "#66ff0000 #4000ff00";
 // Explicit legacy palette and Ballpoint profile keep opacity checks stable.
@@ -70,7 +73,7 @@ function parseRect(m: RegExpExecArray | null): Rect {
   return { x: +m[1]!, y: +m[2]!, dx: +m[3]!, dy: +m[4]! };
 }
 
-function writeSettings(appdata: string): void {
+function writeSettings(appdata: string, presets = PRESETS): void {
   const nl = String.fromCharCode(10);
   writeFileSync(
     join(appdata, "SumatraPDFEnhanced-settings.txt"),
@@ -80,7 +83,7 @@ function writeSettings(appdata: string): void {
       "ShowStartPage = false",
       "CheckForUpdates = false",
       "Annotations [",
-      `\tPresetColors = ${PRESETS}`,
+      `\tPresetColors = ${presets}`,
       "\tTextIconColor =",
       `\tInkColors = ${INK_DEFAULT_PRESETS.replace("*", "")}`,
       "\tInkBallpoint [",
@@ -112,14 +115,17 @@ async function toolbarDump(client: ControlClient): Promise<string> {
 }
 
 // the selected annotation's colors and opacity
-async function selectedColor(client: ControlClient): Promise<{ color: string; interior: string; opacity: number }> {
+async function selectedColor(
+  client: ControlClient,
+): Promise<{ color: string; interior: string; opacity: number; fillOpacity?: number }> {
   const res = await client.request(ControlCommand.TestAnnotEditorLayout, [0, 0]);
   const raw = String(res[1] ?? "").trim();
   const m = / color=(\S+) interiorColor=(\S+) opacity=(\d+)/.exec(raw);
   if (res[0] !== 0 || !m) {
     throw new Error(`annot-color-dropdown: could not read annotation colors: ${raw}`);
   }
-  return { color: m[1]!, interior: m[2]!, opacity: +m[3]! };
+  const fill = / fillOpacity=(\d+)/.exec(raw);
+  return { color: m[1]!, interior: m[2]!, opacity: +m[3]!, fillOpacity: fill ? +fill[1]! : undefined };
 }
 
 function chipNames(dump: string): string[] {
@@ -188,6 +194,7 @@ function findColorDialog(pid: number): number {
 // it, and the drop-down has to be gone.
 async function checkEditColors(client: ControlClient, pid: number, frame: number): Promise<void> {
   const popup = findTopWindow(pid, POPUP_CLASS);
+  // The popup dump offsets client layout from the outer window origin.
   const r = getWindowRect(popup);
   const raw = await markupDump(client);
   const edit = parseRect(/annotColorPopup .* edit=(-?\d+),(-?\d+),(\d+),(\d+)/.exec(raw));
@@ -325,6 +332,7 @@ async function testShape(): Promise<void> {
     await pollUntil(
       () => toolbarDump(client),
       (s) => chipNames(s).includes("interiorColor"),
+      { error: (s) => `annot-color-dropdown: selecting the square did not show its fill chip\n${s}` },
     );
     await client.waitForRenderIdle();
 
@@ -345,13 +353,16 @@ async function testShape(): Promise<void> {
     }
     await pickSwatch(client, proc.pid!, swatches, 1);
     let got = await selectedColor(client);
-    if (got.interior !== PICKED_COLOR || got.opacity !== PICKED_OPACITY) {
+    const fillPercent = Math.round((PICKED_OPACITY * 100) / 255);
+    if (got.interior !== PICKED_COLOR || got.fillOpacity !== fillPercent) {
       throw new Error(
-        `annot-color-dropdown: interior is ${got.interior}/${got.opacity}, want ${PICKED_COLOR}/${PICKED_OPACITY}`,
+        `annot-color-dropdown: interior is ${got.interior}/${got.fillOpacity}%, want ${PICKED_COLOR}/${fillPercent}%`,
       );
     }
-    if (got.color !== "#0000ff") {
-      throw new Error(`annot-color-dropdown: picking an interior color changed the stroke to ${got.color}`);
+    if (got.color !== "#0000ff" || got.opacity !== 255) {
+      throw new Error(
+        `annot-color-dropdown: picking an interior color changed the stroke to ${got.color}/${got.opacity}`,
+      );
     }
 
     // and the first swatch takes it away again
@@ -366,8 +377,10 @@ async function testShape(): Promise<void> {
     swatches = await openChipDropdown(client, proc.pid!, "color");
     await pickSwatch(client, proc.pid!, swatches, 2);
     got = await selectedColor(client);
-    if (got.color !== "#00ff00" || got.interior !== "none") {
-      throw new Error(`annot-color-dropdown: the square is ${got.color}/${got.interior}, want #00ff00/none`);
+    if (got.color !== "#00ff00" || got.opacity !== 255 || got.interior !== "none" || got.fillOpacity !== fillPercent) {
+      throw new Error(
+        `annot-color-dropdown: the square is ${JSON.stringify(got)}, want opaque green with no fill at ${fillPercent}%`,
+      );
     }
   } finally {
     client.close();
@@ -392,16 +405,16 @@ const COLOR_BUTTONS = [
 // what each of them makes annotations in when no color is set: the defaults
 // Acrobat, PDF-XChange and Foxit use
 const DEFAULT_COLORS: Record<string, string> = {
-  CmdCreateAnnotText: "#ffff00",
-  CmdCreateAnnotFreeText: "#000000",
-  CmdCreateAnnotLine: "#ff0000",
-  CmdCreateAnnotPolyLine: "#ff0000",
-  CmdCreateAnnotSquare: "#ff0000",
-  CmdCreateAnnotCircle: "#ff0000",
-  CmdCreateAnnotPolygon: "#ff0000",
-  CmdCreateAnnotStamp: "#ff0000",
-  CmdCreateAnnotCaret: "#0000ff",
-  CmdCreateAnnotFileAttachment: "#ffff00",
+  CmdCreateAnnotText: "#ffffff00",
+  CmdCreateAnnotFreeText: "#ff000000",
+  CmdCreateAnnotLine: "#ffff0000",
+  CmdCreateAnnotPolyLine: "#ffff0000",
+  CmdCreateAnnotSquare: "#ffff0000",
+  CmdCreateAnnotCircle: "#ffff0000",
+  CmdCreateAnnotPolygon: "#ffff0000",
+  CmdCreateAnnotStamp: "#ffff0000",
+  CmdCreateAnnotCaret: "#ff0000ff",
+  CmdCreateAnnotFileAttachment: "#ffffff00",
 };
 
 // the visible annotation button for a command, in toolbar client coords
@@ -481,7 +494,7 @@ async function testToolbarButtons(): Promise<void> {
   rmSync(dir, { recursive: true, force: true });
   const appdata = join(dir, "appdata");
   mkdirSync(appdata, { recursive: true });
-  writeSettings(appdata);
+  writeSettings(appdata, TOOLBAR_PRESETS);
 
   const pdf = join(dir, "blank.pdf");
   writeFileSync(
@@ -503,9 +516,8 @@ async function testToolbarButtons(): Promise<void> {
     sendCommandSync(frame, cmdId("CmdToggleEditPDF"));
     const toolbar = findChildByClass(frame, MAIN_TOOLBAR_CLASS);
 
-    // none of them has a color set, so each one's default is marked as the one
-    // in use, and joins the presets when it is not one of them yet
-    const presets = PRESETS.split(" ");
+    // Explicit presets offer every tool's default without changing the palette.
+    const presets = EXPECTED_TOOLBAR_PRESETS.split(" ");
     for (const name of COLOR_BUTTONS) {
       const b = await annotButtonRect(client, frame, cmdId(name));
       if (!b) {
@@ -513,9 +525,6 @@ async function testToolbarButtons(): Promise<void> {
       }
       await openToolbarPalette(client, toolbar, cmdId(name), b);
       const def = DEFAULT_COLORS[name]!;
-      if (!presets.includes(def)) {
-        presets.push(def);
-      }
       const want = presets.map((c) => (c === def ? `${c}*` : c)).join(" ");
       let colors: string[];
       try {
@@ -558,19 +567,21 @@ async function testToolbarButtons(): Promise<void> {
     const raw = await pollUntil(
       async () => String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? ""),
       (s) => /^dropdown-item idx=1 /m.test(s),
+      { error: (s) => `annot-color-dropdown: the Square palette did not offer its second swatch\n${s}` },
     );
     const item = /^dropdown-item idx=1 cmd=\d+ current=\d rect=(-?\d+),(-?\d+),(-?\d+),(-?\d+)/m.exec(raw);
     if (!item) {
       throw new Error(`annot-color-dropdown: the Square drop-down has no second swatch\n${raw}`);
     }
     const menu = findTopWindow(pid, HOVER_MENU_CLASS);
-    const mr = getWindowRect(menu);
+    const origin = clientToScreen(menu, 0, 0);
     const cx = (+item[1]! + +item[3]!) >> 1;
     const cy = (+item[2]! + +item[4]!) >> 1;
-    await clickAt(menu, cx - mr.left, cy - mr.top, 0);
+    await clickAt(menu, cx - origin.x, cy - origin.y, 0);
     await pollUntil(
       () => findTopWindow(pid, HOVER_MENU_CLASS),
       (hwnd) => hwnd === 0 || !isWindowVisible(hwnd),
+      { error: "annot-color-dropdown: the Square palette stayed open after picking green" },
     );
 
     sendMessage(frame, WM_COMMAND, cmdId("CmdCreateAnnotSquare"), packCoords(300, 300));
@@ -610,9 +621,8 @@ async function testToolbarButtons(): Promise<void> {
   }
 }
 
-// A button's color that is not one of the presets (set in the settings file by
-// hand, say) is added to them, so its drop-down always shows the color in use.
-async function testCurrentColorAdded(): Promise<void> {
+// Saved colors absent from a palette remain in use without undoing removal.
+async function testSavedColorAbsent(): Promise<void> {
   const dir = tmpPath("annot-color-dropdown-current");
   rmSync(dir, { recursive: true, force: true });
   const appdata = join(dir, "appdata");
@@ -659,14 +669,10 @@ async function testCurrentColorAdded(): Promise<void> {
     const toolbar = findChildByClass(frame, MAIN_TOOLBAR_CLASS);
 
     for (const [name, want] of [
-      ["CmdCreateAnnotLine", `${PRESETS} #123456*`],
-      // it stays in the presets, for every button; a square has no color set,
-      // so its default joins them too
-      ["CmdCreateAnnotSquare", `${PRESETS} #123456 #ff0000*`],
-      // the highlighter makes highlights, in HighlightColor (yellow)
-      ["CmdAnnotationHighlightBrush", `${PRESETS} #123456 #ff0000 #ffff00*`],
-      // ink has colors of its own, translucent; its default 40% yellow joins them
-      ["CmdCreateAnnotInk", `${INK_PRESETS} #66ffff00*`],
+      ["CmdCreateAnnotLine", EXPECTED_PRESETS],
+      ["CmdCreateAnnotSquare", EXPECTED_PRESETS],
+      ["CmdAnnotationHighlightBrush", EXPECTED_PRESETS],
+      ["CmdCreateAnnotInk", INK_PRESETS],
     ] as const) {
       const b = (await annotButtonRect(client, frame, cmdId(name)))!;
       await openToolbarPalette(client, toolbar, cmdId(name), b);
@@ -675,6 +681,13 @@ async function testCurrentColorAdded(): Promise<void> {
         throw new Error(`annot-color-dropdown: ${name} offers "${colors}", want "${want}"`);
       }
       await closeHoverMenu(pid, frame);
+    }
+
+    sendMessage(frame, WM_COMMAND, cmdId("CmdCreateAnnotLine"), packCoords(300, 300));
+    await client.waitForRenderIdle();
+    const got = await selectedColor(client);
+    if (got.color !== "#123456" || got.opacity !== 255) {
+      throw new Error(`annot-color-dropdown: the saved line color is ${got.color}/${got.opacity}, want #123456/255`);
     }
   } finally {
     client.close();
@@ -686,7 +699,7 @@ export async function testit(): Promise<void> {
   await testMarkup();
   await testShape();
   await testToolbarButtons();
-  await testCurrentColorAdded();
+  await testSavedColorAbsent();
   console.log("annot-color-dropdown: OK");
 }
 

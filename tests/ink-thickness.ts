@@ -1,6 +1,6 @@
 // The ink button's drop-down picks the color of the next stroke and how thick
 // it is: a preview of the stroke and a Thickness slider below the colors. The
-// slider is Annotations.InkBorderWidth, and the stroke drawn after it is set
+// slider is Annotations.InkBallpoint.Width, and the stroke drawn after it is set
 // is that many points wide.
 //
 // A selected ink annotation's color chip opens the same drop-down, where the
@@ -164,9 +164,12 @@ export async function testit(): Promise<void> {
       "PenMaxWidth = 16",
       "PenWidthStep = 1",
       "Annotations [",
-      "\tPresetColors = #ff0000 #00ff00",
-      "\tInkColor = #00ff00",
-      "\tInkBorderWidth = 3",
+      "\tInkColors = #ff0000 #00ff00",
+      "\tInkBallpoint [",
+      "\t\tColor = #00ff00",
+      "\t\tWidth = 3",
+      "\t\tOpacity = 100",
+      "\t]",
       "]",
       "",
     ].join("\n"),
@@ -211,9 +214,9 @@ export async function testit(): Promise<void> {
     if (!menu || !isWindowVisible(menu)) {
       throw new Error("ink-thickness: the ink drop-down did not open");
     }
-    const mr = getWindowRect(menu);
+    const origin = clientToScreen(menu, 0, 0);
     const sy = (+item[2]! + +item[4]!) >> 1;
-    await clickAt(menu, +item[3]! - 1 - mr.left, sy - mr.top, 0);
+    await clickAt(menu, +item[3]! - 1 - origin.x, sy - origin.y, 0);
 
     const canvasRect = getClientRect(canvas);
     const cx = Math.floor(canvasRect.right / 2);
@@ -247,6 +250,10 @@ export async function testit(): Promise<void> {
       (line) => /annotEditToolbar visible=1/.test(line),
       { error: "ink-thickness: selecting the stroke did not show its properties" },
     );
+    const stroke = String((await client.request(ControlCommand.TestAnnotEditorLayout, [0, 0]))[1] ?? "");
+    if (!/ color=#00ff00 interiorColor=\S+ opacity=255\b/.test(stroke)) {
+      throw new Error(`ink-thickness: the stroke did not use the opaque green Ballpoint profile\n${stroke}`);
+    }
 
     // its color chip's drop-down has the slider, set to the annotation's own
     // width, and there is no Border Width chip
@@ -282,9 +289,11 @@ export async function testit(): Promise<void> {
     if (!popup || !isWindowVisible(popup)) {
       throw new Error("ink-thickness: the color chip's drop-down did not open");
     }
+    // The popup dump offsets client layout from the outer window origin.
     const pr = getWindowRect(popup);
     const slider = { x: +th[2]!, y: +th[3]!, dx: +th[4]!, dy: +th[5]! };
-    await clickAt(popup, slider.x - pr.left, slider.y + (slider.dy >> 1) - pr.top, 0);
+    const thinPoint = { x: slider.x - pr.left, y: slider.y + (slider.dy >> 1) - pr.top };
+    await clickAt(popup, thinPoint.x, thinPoint.y, 0);
     await client.waitForRenderIdle();
     const thin = await pollUntil(
       () => inkAnnotWidth(client),

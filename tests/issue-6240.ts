@@ -29,6 +29,11 @@ function makePdf(): string {
   return assemblePdf(objs);
 }
 
+async function toggleButton(client: ControlClient, idx: number) {
+  await client.waitForRenderIdle();
+  return client.toggleFormButton(1, idx);
+}
+
 export async function testit(): Promise<void> {
   const pdf = tmpPath("issue-6240.pdf");
   writeFileSync(pdf, makePdf(), "latin1");
@@ -38,29 +43,27 @@ export async function testit(): Promise<void> {
   await withControlledSumatra(
     EXE,
     async (client: ControlClient) => {
-      await client.waitForRenderIdle();
-
       // radio: first click turns button 0 on, second click on button 1 moves
       // the selection, NoToggleToOff keeps a click on the selected one on
-      let r = await client.toggleFormButton(1, 0);
+      let r = await toggleButton(client, 0);
       if (!r.toggled || r.after !== "A") {
         throw new Error(`issue-6240: radio 0 -> ${JSON.stringify(r)}, want after='A'`);
       }
-      r = await client.toggleFormButton(1, 1);
+      r = await toggleButton(client, 1);
       if (!r.toggled || r.after !== "B") {
         throw new Error(`issue-6240: radio 1 -> ${JSON.stringify(r)}, want after='B'`);
       }
-      r = await client.toggleFormButton(1, 1);
+      r = await toggleButton(client, 1);
       if (!r.toggled || r.after !== "B") {
         throw new Error(`issue-6240: radio 1 again -> ${JSON.stringify(r)}, want after='B'`);
       }
 
       // checkbox toggles both ways
-      r = await client.toggleFormButton(1, 2);
+      r = await toggleButton(client, 2);
       if (!r.toggled || r.after !== "Yes") {
         throw new Error(`issue-6240: checkbox on -> ${JSON.stringify(r)}, want after='Yes'`);
       }
-      r = await client.toggleFormButton(1, 2);
+      r = await toggleButton(client, 2);
       if (!r.toggled || r.after !== "Off") {
         throw new Error(`issue-6240: checkbox off -> ${JSON.stringify(r)}, want after='Off'`);
       }
@@ -75,8 +78,7 @@ export async function testit(): Promise<void> {
   await withControlledSumatra(
     EXE,
     async (client: ControlClient) => {
-      await client.waitForRenderIdle();
-      const r = await client.toggleFormButton(1, 1);
+      const r = await toggleButton(client, 1);
       if (r.before !== "B" || r.after !== "B") {
         throw new Error(`issue-6240: saved copy -> ${JSON.stringify(r)}, want before='B'`);
       }
