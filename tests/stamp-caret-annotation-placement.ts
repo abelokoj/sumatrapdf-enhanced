@@ -223,8 +223,13 @@ async function testKind(
 
   const screenPoint = clientToScreen(canvas, pagePoint.x, pagePoint.y);
   setCursorPos(screenPoint.x, screenPoint.y);
-  sendMessage(canvas, WM_MOUSEMOVE, 0, packCoords(pagePoint.x, pagePoint.y));
-  state = await placementState(client, kind);
+  const previewDeadline = Date.now() + 5_000;
+  do {
+    sendMessage(canvas, WM_MOUSEMOVE, 0, packCoords(pagePoint.x, pagePoint.y));
+    state = await placementState(client, kind);
+    if (state.cursor && state.preview) break;
+    await sleep(40);
+  } while (Date.now() < previewDeadline);
   if (!state.cursor || !state.preview) {
     throw new Error(`stamp-caret-annotation-placement: ${kind} preview/cursor was not active\n${state.raw}`);
   }

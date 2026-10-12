@@ -60,9 +60,11 @@ class Page {
   }
   static async connect(port: number): Promise<Page> {
     const deadline = Date.now() + TIMEOUT;
+    let lastState = "No browser response";
     while (Date.now() < deadline) {
       try {
         const targets = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()) as any[];
+        lastState = JSON.stringify(targets.map((t) => ({ type: t.type, url: t.url })));
         const target = targets.find((t) => t.url?.startsWith("https://sumatrapdf.markdown/"));
         if (target?.webSocketDebuggerUrl) {
           const socket = new WebSocket(target.webSocketDebuggerUrl);
@@ -72,10 +74,12 @@ class Page {
           });
           return new Page(socket);
         }
-      } catch {}
+      } catch (error) {
+        lastState = String(error);
+      }
       await Bun.sleep(100);
     }
-    throw new Error("Markdown WebView2 did not become ready");
+    throw new Error(`Markdown WebView2 did not become ready: ${lastState}`);
   }
   command(method: string, params: object = {}): Promise<any> {
     const id = ++this.id;
@@ -136,7 +140,10 @@ export async function testit(): Promise<void> {
     );
     const cleanPort = await port();
     const clean = await launchControlled(["-appdata", dir, markdown], {
-      env: { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cleanPort}` },
+      env: {
+        WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cleanPort}`,
+        WEBVIEW2_USER_DATA_FOLDER: join(dir, requestedFont ? "browser-missing-font" : "browser-interface-font"),
+      },
     });
     let cleanPage: Page | undefined;
     try {
@@ -180,7 +187,10 @@ export async function testit(): Promise<void> {
   const firstPort = await port();
   const app = await launchControlled(["-appdata", dir, markdown], {
     saveSettings: true,
-    env: { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${firstPort}` },
+    env: {
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${firstPort}`,
+      WEBVIEW2_USER_DATA_FOLDER: join(dir, "browser-cached-fonts"),
+    },
   });
   let page: Page | undefined;
   try {
@@ -267,7 +277,10 @@ export async function testit(): Promise<void> {
   );
   const secondPort = await port();
   const reopened = await launchControlled(["-appdata", dir, markdown], {
-    env: { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${secondPort}` },
+    env: {
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${secondPort}`,
+      WEBVIEW2_USER_DATA_FOLDER: join(dir, "browser-dark-fonts"),
+    },
   });
   page = undefined;
   try {
