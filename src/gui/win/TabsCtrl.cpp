@@ -829,7 +829,7 @@ static bool DrawTabListItem(TabListPopup* popup, DRAWITEMSTRUCT* item) {
     }
     if (index == popup->selected) {
         SetTextColor(dc, IsLightColor(bg) ? RGB(0, 112, 64) : RGB(109, 233, 165));
-        DrawTextW(dc, L"\u2713", 1, &glyph, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
+        DrawTextW(dc, L"\u2714", 1, &glyph, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
         SetTextColor(dc, text);
     }
     if (popup->isRtl) {

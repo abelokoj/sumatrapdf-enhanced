@@ -250,6 +250,19 @@ static const StructInfo gMarkdownUIInfo = {
     "text font; empty follows the interface font\0Markdown MathML font; empty uses the companion of the text font",
     false};
 
+static const FieldInfo gDictionaryUIFields[] = {
+    {offsetof(DictionaryUI, fontName), SettingType::String, (intptr_t)""},
+    {offsetof(DictionaryUI, lineSpacing), SettingType::Float, (intptr_t)"1.15"},
+};
+static const StructInfo gDictionaryUIInfo = {
+    sizeof(DictionaryUI),
+    2,
+    gDictionaryUIFields,
+    "FontName\0LineSpacing",
+    "dictionary reading font; empty follows the interface font; accepts any installed Windows font\0dictionary "
+    "line-height multiplier; greater than 0 and at most 100",
+    false};
+
 static const FieldInfo gHtmlUIFields[] = {
     {offsetof(HtmlUI, useFixedPageUI), SettingType::Bool, false},
 };
@@ -1112,6 +1125,8 @@ static const FieldInfo gSettingsFields[] = {
     {(size_t)-1, SettingType::Comment, 0},
     {offsetof(Settings, markdownUI), SettingType::Struct, (intptr_t)&gMarkdownUIInfo},
     {(size_t)-1, SettingType::Comment, 0},
+    {offsetof(Settings, dictionaryUI), SettingType::Struct, (intptr_t)&gDictionaryUIInfo},
+    {(size_t)-1, SettingType::Comment, 0},
     {offsetof(Settings, htmlUI), SettingType::Struct, (intptr_t)&gHtmlUIInfo},
     {(size_t)-1, SettingType::Comment, 0},
     {offsetof(Settings, claudeCode), SettingType::Struct, (intptr_t)&gClaudeCodeInfo},
@@ -1178,7 +1193,7 @@ static const FieldInfo gSettingsFields[] = {
 };
 const StructInfo gSettingsInfo = {
     sizeof(Settings),
-    184,
+    186,
     gSettingsFields,
     "\0\0DefaultDisplayMode\0DefaultZoom\0DisableJavaScript\0AllowExternalImages\0EnableTeXEnhancements\0EscToExit\0Ful"
     "lPathInTitle\0InverseSearchCmdLine\0LazyLoading\0MainWindowBackground\0NoHomeTab\0HomePageSortByFrequentlyRead\0Ho"
@@ -1197,13 +1212,13 @@ const StructInfo gSettingsInfo = {
     "rShowReadAloud\0ToolbarSize\0TreeFontName\0TreeFontSize\0PinIconStyle\0ColorPickerIconStyle\0InterfaceScale\0UIFon"
     "tFamily\0UIFontSize\0DisableAntiAlias\0EngineeringDrawingEnhance\0DisableAutoLinks\0UseSysColors\0UseTabs\0Selecti"
     "onToolbar\0SelectionToolbarLayout\0TabsMru\0CtrlTabSimple\0ZoomLevels\0ZoomIncrement\0\0FixedPageUI\0\0EBookUI\0\0"
-    "ComicBookUI\0\0ImageUI\0\0ChmUI\0\0MarkdownUI\0\0HtmlUI\0\0ClaudeCode\0\0GrokBuild\0\0CodexBuild\0\0AntiGravity\0"
-    "\0AIChatSidebarDx\0\0TranslateToLang\0TranslateFromLang\0TranslateEngine\0\0Annotations\0\0ExternalViewers\0\0Forw"
-    "ardSearch\0\0PrinterDefaults\0\0Fullscreen\0\0SelectionHandlers\0\0TextSnippets\0\0Shortcuts\0\0PenMinWidth\0PenMa"
-    "xWidth\0PenWidthStep\0LaserLifetimeSeconds\0LaserColors\0LaserWidth\0PinnedAnnotationTools\0\0Themes\0\0TabGroups"
-    "\0\0CustomScreenDPI\0\0\0DefaultPasswords\0UiLanguage\0VersionToSkip\0WindowState\0WindowPos\0SearchUIWindowPos\0H"
-    "elpWindowPos\0FileStates\0SessionData\0ReopenOnce\0TimeOfLastUpdateCheck\0OpenCountWeek\0PropWinPos\0CheckForUpdat"
-    "es\0\0",
+    "ComicBookUI\0\0ImageUI\0\0ChmUI\0\0MarkdownUI\0\0DictionaryUI\0\0HtmlUI\0\0ClaudeCode\0\0GrokBuild\0\0CodexBuild\0"
+    "\0AntiGravity\0\0AIChatSidebarDx\0\0TranslateToLang\0TranslateFromLang\0TranslateEngine\0\0Annotations\0\0External"
+    "Viewers\0\0ForwardSearch\0\0PrinterDefaults\0\0Fullscreen\0\0SelectionHandlers\0\0TextSnippets\0\0Shortcuts\0\0Pen"
+    "MinWidth\0PenMaxWidth\0PenWidthStep\0LaserLifetimeSeconds\0LaserColors\0LaserWidth\0PinnedAnnotationTools\0\0Theme"
+    "s\0\0TabGroups\0\0CustomScreenDPI\0\0\0DefaultPasswords\0UiLanguage\0VersionToSkip\0WindowState\0WindowPos\0Search"
+    "UIWindowPos\0HelpWindowPos\0FileStates\0SessionData\0ReopenOnce\0TimeOfLastUpdateCheck\0OpenCountWeek\0PropWinPos"
+    "\0CheckForUpdates\0\0",
     "\0\0default layout of pages. valid values: automatic, single page, facing, book view, continuous, continuous "
     "facing, continuous book view, page aspect. page aspect (3.7+): first open of a PDF, XPS, DjVu or PostScript file "
     "uses page 1 — taller than wide is continuous + fit width, wider than tall is single page + fit page; a remembered "
@@ -1332,14 +1347,15 @@ const StructInfo gSettingsInfo = {
     "(EPUB, MOBI, FB2, PDB and plain text)\0\0customization options for Comic Book UI\0\0customization options for "
     "image files UI\0\0customization options for CHM UI. UseFixedPageUI switches to the PDF-style view; FontName "
     "applies to that view\0\0customization options for Markdown UI. If UseFixedPageUI is true, MuPDF is used; "
-    "otherwise WebView2 browser view is used when available\0\0customization options for HTML UI. If UseFixedPageUI is "
-    "true, MuPDF is used; otherwise WebView2 browser view is used when available\0\0settings for the Claude Code chat "
-    "sidebar\0\0settings for the Grok Build chat sidebar\0\0settings for the OpenAI Codex chat sidebar\0\0settings for "
-    "the Antigravity chat sidebar\0\0width of the AI chat sidebar (0 = use default); shared by Claude Code, Grok "
-    "Build, and OpenAI Codex (internal)\0\0remembered destination language for selection translation; empty uses OS UI "
-    "language\0remembered source language for selection translation; empty means Auto\0remembered engine for Translate "
-    "Selection: Google, DeepL, Grok Build, Claude Code, OpenAI Codex or Antigravity\0\0default values for annotations "
-    "in PDF documents\0\0list of additional external viewers for various file types. See [docs for more "
+    "otherwise WebView2 browser view is used when available\0\0dictionary reading appearance\0\0customization options "
+    "for HTML UI. If UseFixedPageUI is true, MuPDF is used; otherwise WebView2 browser view is used when "
+    "available\0\0settings for the Claude Code chat sidebar\0\0settings for the Grok Build chat sidebar\0\0settings "
+    "for the OpenAI Codex chat sidebar\0\0settings for the Antigravity chat sidebar\0\0width of the AI chat sidebar (0 "
+    "= use default); shared by Claude Code, Grok Build, and OpenAI Codex (internal)\0\0remembered destination language "
+    "for selection translation; empty uses OS UI language\0remembered source language for selection translation; empty "
+    "means Auto\0remembered engine for Translate Selection: Google, DeepL, Grok Build, Claude Code, OpenAI Codex or "
+    "Antigravity\0\0default values for annotations in PDF documents\0\0list of additional external viewers for various "
+    "file types. See [docs for more "
     "information](https://www.sumatrapdfreader.org/docs/Customize-external-viewers)\0\0customization options for how "
     "forward search results are shown (used from LaTeX editors)\0\0these override the default settings in the Print "
     "dialog\0\0options for fullscreen mode\0\0list of handlers for selected text, shown in context menu when text "

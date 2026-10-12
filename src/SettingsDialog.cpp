@@ -437,7 +437,7 @@ struct SettingsCheckbox : Checkbox {
         if (IsChecked()) {
             Color green = IsLightColor(ThemeWindowBackgroundColor()) ? MkRgb(17, 120, 58) : MkRgb(93, 230, 145);
             auto* glyphFont = GetUserGuiFont(StrL("Segoe UI Symbol"), size);
-            gfx.DrawText(StrL("✓"), box, gfxTextCenter | gfxTextVCenter, glyphFont,
+            gfx.DrawText(StrL("✔"), box, gfxTextCenter | gfxTextVCenter, glyphFont,
                          enabled ? green : SysDisabledTextColor());
         }
         int offset = size + UiScalePx(8);
@@ -641,18 +641,20 @@ struct SettingsFontDownload {
     Str cacheRoot;
     Str text;
     Str math;
+    Str dictionary;
     Str error;
     bool success = false;
     ~SettingsFontDownload() {
         str::Free(cacheRoot);
         str::Free(text);
         str::Free(math);
+        str::Free(dictionary);
         str::Free(error);
     }
 };
 static const char* kMarkdownDownloadNotice =
-    "Optional fonts download from GitHub when you click OK and remain available offline. These fonts affect Markdown "
-    "only.";
+    "Optional reading fonts download from GitHub when you click OK and remain available offline. PDF document fonts "
+    "are unchanged.";
 static void RunSettingsFontDownload(SettingsFontDownload*);
 
 struct SettingsWnd : WindowBase {
@@ -691,6 +693,8 @@ struct SettingsWnd : WindowBase {
     DropDown* dropUiFamily = nullptr;
     DropDown* dropMarkdownFamily = nullptr;
     DropDown* dropMarkdownMath = nullptr;
+    DropDown* dropDictionaryFont = nullptr;
+    DropDown* dropDictionarySpacing = nullptr;
     VirtText* fontDownloadStatus = nullptr;
     SettingsFontDownload* fontDownload = nullptr;
     DropDown* dropInterfaceScale = nullptr;
@@ -848,6 +852,32 @@ static bool IsSettingsFont(Str name) {
     return match.found;
 }
 
+static int CALLBACK DictionaryFontEnum(const LOGFONTW* font, const TEXTMETRICW*, DWORD, LPARAM data) {
+    auto* names = (StrVec*)data;
+    Str name = ToUtf8Temp(font->lfFaceName);
+    if (len(name) && name.s[0] != '@' && !names->Contains(name)) names->Append(name);
+    return 1;
+}
+static void DictionaryFontChoices(StrVec& names) {
+    names.Append(Tr("Follow interface font"));
+    for (Str name : {StrL("Manrope"), StrL("Pretendard Std"), StrL("Public Sans")}) names.Append(name);
+    for (auto kind : {MarkdownFontKind::Text, MarkdownFontKind::Math}) {
+        for (int i = 1; i < MarkdownFontCount(kind); i++) names.Append(MarkdownFontName(kind, i));
+    }
+    StrVec installed;
+    HDC dc = GetDC(nullptr);
+    if (dc) {
+        LOGFONTW font{};
+        font.lfCharSet = DEFAULT_CHARSET;
+        EnumFontFamiliesExW(dc, &font, DictionaryFontEnum, (LPARAM)&installed, 0);
+        ReleaseDC(nullptr, dc);
+    }
+    SortNoCase(&installed);
+    for (Str name : installed) {
+        if (!names.Contains(name)) names.Append(name);
+    }
+}
+
 void SettingsWnd::UpdateDataLocation() {
     dataLocation->Reset();
     dataLocation->AddPlainText(fmt("%s %s", Tr("Current folder:"), GetAppDataDirTemp()));
@@ -904,8 +934,10 @@ void SettingsWnd::RestoreDataFolder(VirtMouseEvent*) {
 static SettingsWnd* gSettingsWnd = nullptr;
 
 TempStr SettingsFontStateTemp() {
-    return fmt("busy=%d\nfont=%s\nstatus=%s", gSettingsWnd && gSettingsWnd->fontDownload ? 1 : 0,
-               gSettings ? gSettings->markdownUI.fontName : Str{},
+    return fmt("busy=%d\nfont=%s\ndictionary=%s\nspacing=%g\nstatus=%s",
+               gSettingsWnd && gSettingsWnd->fontDownload ? 1 : 0, gSettings ? gSettings->markdownUI.fontName : Str{},
+               gSettings ? gSettings->dictionaryUI.fontName : Str{},
+               gSettings ? gSettings->dictionaryUI.lineSpacing : 0.0f,
                gSettingsWnd && gSettingsWnd->fontDownloadStatus ? gSettingsWnd->fontDownloadStatus->s : Str{});
 }
 
@@ -926,6 +958,7 @@ static TempStr SettingsCacheKey(MainWindow* win) {
                        gSettings->penMinWidth,
                        gSettings->penMaxWidth,
                        gSettings->penWidthStep,
+                       gSettings->dictionaryUI.lineSpacing,
                        (double)gSettings->showToc,
                        (double)gSettings->rememberStatePerDocument,
                        (double)gSettings->useTabs,
@@ -936,9 +969,16 @@ static TempStr SettingsCacheKey(MainWindow* win) {
                        (double)(win ? DpiGetForHwnd(win->hwndFrame) : DpiGet())};
     str::Builder key;
     for (double value : values) key.Append(fmt("%.17g|", value));
-    Str strings[] = {gSettings->defaultDisplayMode,           gSettings->uIFontFamily, gSettings->markdownUI.fontName,
-                     gSettings->markdownUI.mathFontName,      gSettings->uiLanguage,   gSettings->inverseSearchCmdLine,
-                     gSettings->fixedPageUI.selectionColor.s, GetAppDataDirTemp(),     GetPendingDataDirTemp()};
+    Str strings[] = {gSettings->defaultDisplayMode,
+                     gSettings->uIFontFamily,
+                     gSettings->markdownUI.fontName,
+                     gSettings->markdownUI.mathFontName,
+                     gSettings->dictionaryUI.fontName,
+                     gSettings->uiLanguage,
+                     gSettings->inverseSearchCmdLine,
+                     gSettings->fixedPageUI.selectionColor.s,
+                     GetAppDataDirTemp(),
+                     GetPendingDataDirTemp()};
     for (Str value : strings) {
         key.Append(fmt("%d:", len(value)));
         key.Append(value);
@@ -957,14 +997,32 @@ static TempStr SettingsCacheKey(MainWindow* win) {
 void SettingsWnd::SaveValues() {
     for (auto& value : savedValues) str::Free(value.text);
     VecReset(savedValues);
-    DropDown* drops[] = {dropLayout,         dropZoom,           dropInverse,
-                         dropUiFamily,       dropInterfaceScale, dropUiSize,
-                         dropTreeSize,       dropThumbnailSize,  dropToolbarSize,
-                         dropRecentCount,    dropTabListCount,   dropScrollbarWidth,
-                         dropMinTabWidth,    dropHoverDelay,     dropPenMin,
-                         dropPenMax,         dropPenStep,        dropPageText,
-                         dropPageBg,         dropPinIconStyle,   dropColorPickerIconStyle,
-                         dropSelectionColor, dropMarkdownFamily, dropMarkdownMath};
+    DropDown* drops[] = {dropLayout,
+                         dropZoom,
+                         dropInverse,
+                         dropUiFamily,
+                         dropInterfaceScale,
+                         dropUiSize,
+                         dropTreeSize,
+                         dropThumbnailSize,
+                         dropToolbarSize,
+                         dropRecentCount,
+                         dropTabListCount,
+                         dropScrollbarWidth,
+                         dropMinTabWidth,
+                         dropHoverDelay,
+                         dropPenMin,
+                         dropPenMax,
+                         dropPenStep,
+                         dropPageText,
+                         dropPageBg,
+                         dropPinIconStyle,
+                         dropColorPickerIconStyle,
+                         dropSelectionColor,
+                         dropMarkdownFamily,
+                         dropMarkdownMath,
+                         dropDictionaryFont,
+                         dropDictionarySpacing};
     for (auto* drop : drops)
         if (drop)
             VecAppend(savedValues, {drop, str::Dup(drop->GetTextTemp()), CbGetCurrentSelection(drop), false, false});
@@ -1105,6 +1163,8 @@ void SettingsWnd::OnCancel(VirtMouseEvent*) {
         fontDownload = nullptr;
         dropMarkdownFamily->SetIsEnabled(true);
         dropMarkdownMath->SetIsEnabled(true);
+        dropDictionaryFont->SetIsEnabled(true);
+        dropDictionarySpacing->SetIsEnabled(true);
         btnOk->SetIsEnabled(true);
         fontDownloadStatus->SetText(Tr(Str(kMarkdownDownloadNotice)));
     }
@@ -1211,19 +1271,40 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
         dropPenMax->SetFocus();
         return;
     }
+    Str dictionary = dropDictionaryFont->GetTextTemp();
+    str::TrimWSInPlace(dictionary, str::TrimOpt::Both);
+    if (str::EqI(dictionary, Tr("Follow interface font"))) dictionary = {};
+    bool optional =
+        MarkdownFontIndex(MarkdownFontKind::Text, dictionary) || MarkdownFontIndex(MarkdownFontKind::Math, dictionary);
+    if (len(dictionary) && !optional && !IsSettingsFont(dictionary)) {
+        MessageBoxW(hwnd, CWStrTemp(Tr("Choose an app font or select an installed Windows font.")),
+                    CWStrTemp(Tr("Font unavailable")), MB_OK | MB_ICONWARNING);
+        dropDictionaryFont->SetFocus();
+        return;
+    }
+    double spacing;
+    if (!ReadSettingNumber(dropDictionarySpacing, StrL("x"), spacing) || (float)spacing <= 0 || spacing > 100) {
+        MessageBoxW(hwnd, CWStrTemp(Tr("Enter a positive line spacing up to 100, for example 0.9, 1.15 or 1.5.")),
+                    CWStrTemp(Tr("Check line spacing")), MB_OK | MB_ICONWARNING);
+        dropDictionarySpacing->SetFocus();
+        return;
+    }
     Str selectedText = MarkdownFontName(MarkdownFontKind::Text, CbGetCurrentSelection(dropMarkdownFamily));
     Str selectedMath = MarkdownFontName(MarkdownFontKind::Math, CbGetCurrentSelection(dropMarkdownMath));
-    if (!MarkdownFontsAvailable(selectedText, selectedMath)) {
+    if (!MarkdownFontsAvailable(selectedText, selectedMath) || !ReadingFontAvailable(dictionary)) {
         auto* job = new SettingsFontDownload();
         job->wnd = this;
         job->cacheRoot = str::Dup(MarkdownFontsCacheDir());
         job->text = str::Dup(selectedText);
         job->math = str::Dup(selectedMath);
+        job->dictionary = str::Dup(dictionary);
         fontDownload = job;
         dropMarkdownFamily->SetIsEnabled(false);
         dropMarkdownMath->SetIsEnabled(false);
+        dropDictionaryFont->SetIsEnabled(false);
+        dropDictionarySpacing->SetIsEnabled(false);
         btnOk->SetIsEnabled(false);
-        fontDownloadStatus->SetText(Tr("Downloading the selected Markdown fonts from GitHub…"));
+        fontDownloadStatus->SetText(Tr("Downloading the selected reading fonts from GitHub…"));
         fontDownloadStatus->RequestLayout();
         RunAsync(MkFunc0(RunSettingsFontDownload, job), StrL("DownloadMarkdownFonts"));
         return;
@@ -1247,6 +1328,8 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     Str markdownMath = MarkdownFontName(MarkdownFontKind::Math, CbGetCurrentSelection(dropMarkdownMath));
     bool markdownFontsChanged = !str::Eq(gSettings->markdownUI.fontName, markdownFont) ||
                                 !str::Eq(gSettings->markdownUI.mathFontName, markdownMath);
+    str::ReplaceWithCopy(&gSettings->dictionaryUI.fontName, dictionary);
+    gSettings->dictionaryUI.lineSpacing = (float)spacing;
     str::ReplaceWithCopy(&gSettings->markdownUI.fontName, markdownFont);
     str::ReplaceWithCopy(&gSettings->markdownUI.mathFontName, markdownMath);
     str::ReplaceWithCopy(&gSettings->uIFontFamily, family);
@@ -1351,6 +1434,8 @@ static void FinishSettingsFontDownload(SettingsFontDownload* job) {
         wnd->fontDownload = nullptr;
         wnd->dropMarkdownFamily->SetIsEnabled(true);
         wnd->dropMarkdownMath->SetIsEnabled(true);
+        wnd->dropDictionaryFont->SetIsEnabled(true);
+        wnd->dropDictionarySpacing->SetIsEnabled(true);
         wnd->btnOk->SetIsEnabled(true);
         wnd->fontDownloadStatus->SetText(job->success ? Tr(Str(kMarkdownDownloadNotice)) : job->error);
         wnd->fontDownloadStatus->RequestLayout();
@@ -1359,7 +1444,8 @@ static void FinishSettingsFontDownload(SettingsFontDownload* job) {
     delete job;
 }
 static void RunSettingsFontDownload(SettingsFontDownload* job) {
-    job->success = DownloadMarkdownFonts(job->text, job->math, &job->error, job->cacheRoot);
+    job->success = DownloadMarkdownFonts(job->text, job->math, &job->error, job->cacheRoot) &&
+                   DownloadReadingFont(job->dictionary, &job->error, job->cacheRoot);
     uitask::Post(MkFunc0(FinishSettingsFontDownload, job), "FinishMarkdownFontDownload");
 }
 
@@ -2026,6 +2112,41 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         vbox->AddChild(fontDownloadStatus);
     }
 
+    {
+        vbox->AddChild(NewSettingsLabel({.s = Tr("Dictionary"),
+                                         .font = headingFont,
+                                         .isRtl = isRtl,
+                                         .padding = Insets{UiScalePx(12), 0, UiScalePx(4), 0}}));
+        auto* table = new SettingsForm();
+        table->rtl = isRtl;
+        table->SetSize(2, 2);
+        table->colGap = UiScalePx(20);
+        table->rowGap = UiScalePx(6);
+        VecAppend(forms, table);
+        dropDictionaryFont = MakeDropDown(this, font, isRtl, true);
+        StrVec choices;
+        DictionaryFontChoices(choices);
+        dropDictionaryFont->SetItems(choices);
+        if (len(gSettings->dictionaryUI.fontName))
+            dropDictionaryFont->SetText(gSettings->dictionaryUI.fontName);
+        else
+            CbSetCurrentSelection(dropDictionaryFont, 0);
+        dropDictionarySpacing = MakeDropDown(this, font, isRtl, true);
+        FillNumberChoices(dropDictionarySpacing, StrL("0.8|1|1.15|1.25|1.5|2"), gSettings->dictionaryUI.lineSpacing);
+        DropDown* controls[] = {dropDictionaryFont, dropDictionarySpacing};
+        Str labels[] = {Tr("Reading font:"), Tr("Line spacing:")};
+        for (int i = 0; i < 2; i++) {
+            table->SetCell(i, 0, NewSettingsLabel({.s = labels[i], .font = font, .isRtl = isRtl})).alignV =
+                CrossAxisAlign::CrossCenter;
+            table->SetCell(i, 1, controls[i]).alignH = CrossAxisAlign::Stretch;
+        }
+        vbox->AddChild(table);
+        vbox->AddChild(NewSettingsLabel({.s = Tr("Choose an app font or any installed Windows font. Type a positive "
+                                                 "line-spacing value; 1 is single spacing."),
+                                         .font = font,
+                                         .isRtl = isRtl}));
+    }
+
     chkUseTabs = MakeCheckbox(hwnd, GetFont(), Tr("Use &tabs"), isRtl, gSettings && gSettings->useTabs, 0);
     vbox->AddChild(chkUseTabs);
 
@@ -2353,7 +2474,20 @@ static void SettingsCustomValueTests(SettingsWnd* wnd) {
     utassert(first.foreground == MkRgb(20, 30, 40) && first.pageBackground == MkRgb(230, 240, 250));
     utassert(second.foreground == MkRgb(200, 210, 220) && second.pageBackground == MkRgb(10, 20, 30));
     utassert(first.hash != second.hash && first.hash != theme.hash);
+    StrVec dictionaryFonts;
+    DictionaryFontChoices(dictionaryFonts);
+    for (auto kind : {MarkdownFontKind::Text, MarkdownFontKind::Math}) {
+        for (int i = 1; i < MarkdownFontCount(kind); i++) utassert(dictionaryFonts.Contains(MarkdownFontName(kind, i)));
+    }
+    utassert(dictionaryFonts.Contains(StrL("Segoe UI")) && dictionaryFonts.Contains(StrL("Manrope")));
+    double spacing;
+    for (Str value : {StrL("0.875"), StrL("1.37"), StrL("2.7x")}) {
+        wnd->dropDictionarySpacing->SetText(value);
+        utassert(ReadSettingNumber(wnd->dropDictionarySpacing, StrL("x"), spacing) && spacing > 0);
+    }
     Settings* sample = NewSettings({});
+    str::ReplaceWithCopy(&sample->dictionaryUI.fontName, StrL("Consolas"));
+    sample->dictionaryUI.lineSpacing = 0.875f;
     FileState* state = NewFileState(StrL("reading-colors.pdf"));
     state->useDefaultState = false;
     SetColorText(state->pageTextColor, StrL("#123456"));
@@ -2361,6 +2495,8 @@ static void SettingsCustomValueTests(SettingsWnd* wnd) {
     VecAppend(*sample->fileStates, state);
     Str serialized = SerializeSettings(sample, {});
     Settings* restored = NewSettings(serialized);
+    utassert(str::Eq(restored->dictionaryUI.fontName, StrL("Consolas")));
+    utassert(restored->dictionaryUI.lineSpacing == 0.875f);
     utassert(len(*restored->fileStates) == 1);
     if (len(*restored->fileStates)) {
         utassert(GetParsedColor((*restored->fileStates)[0]->pageTextColor, kColorUnset) == MkRgb(0x12, 0x34, 0x56));

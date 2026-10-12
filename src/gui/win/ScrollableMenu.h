@@ -117,7 +117,7 @@ static void PaintScrollMenuItem(ScrollMenu& popup, DRAWITEMSTRUCT* draw) {
         glyph.right = glyph.left + popup.rowDy;
     if (item.checked) {
         SetTextColor(dc, IsLightColor(bg) ? RGB(0, 112, 64) : RGB(109, 233, 165));
-        DrawTextW(dc, L"\u2713", 1, &glyph, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
+        DrawTextW(dc, L"\u2714", 1, &glyph, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
     }
     if (item.submenu) {
         glyph = draw->rcItem;

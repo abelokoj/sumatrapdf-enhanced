@@ -2,6 +2,14 @@
 
 SumatraPDF Enhanced uses the same offline vocabulary dictionaries as WMKeyboard: eleven English packs built from Wiktionary through kaikki.org, with WordNet definitions where needed. All their bundled definition senses are available offline. Installed WMKeyboard packs take precedence, followed by the bundled WM definitions; Princeton WordNet 3.0 supplies wider English fallback coverage. Definitions come from WordNet, developed by Princeton University; they are not original SumatraPDF content. The full redistribution license accompanies the files at `src/dictionaries/wordnet-en/LICENSE` and must remain in distributed dictionary folders.
 
+## Reading appearance
+
+Open **Settings → Advanced → Dictionary** to change the reading font and line spacing. Choose **Follow interface font**, one of the app's UI or optional Markdown fonts, or any installed Windows font from the list. You can also type an installed font's name.
+
+Line spacing is editable: presets are shortcuts, and custom positive values up to 100 are accepted. For example, enter 0.9 for compact text, 1 for single spacing, or 1.37 for more room. Both choices are saved and update open dictionary results when you click OK. They do not change PDF text or the learning hub's interface font.
+
+Optional reading fonts download from GitHub only when you select them and click OK. They stay cached for offline use and are not bundled in the installer or installed into Windows.
+
 ## Sources and attribution
 
 - [Princeton WordNet](https://wordnet.princeton.edu/) is the authoritative project.

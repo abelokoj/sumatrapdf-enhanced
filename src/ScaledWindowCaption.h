@@ -52,13 +52,7 @@ static Rect AppCaptionButton(HWND hwnd, int hit) {
 }
 
 static Rect AppCaptionButtonContent(HWND hwnd, int hit) {
-    Rect button = AppCaptionButton(hwnd, hit);
-    if (hit != HTCLOSE || !(GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_VSCROLL)) return button;
-    int lane = GetAppScrollbarWidth(DpiGetForHwnd(hwnd));
-    bool rtl = (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) != 0;
-    if (!rtl) button.x = button.Right() - lane;
-    button.dx = lane;
-    return button;
+    return AppCaptionButton(hwnd, hit);
 }
 
 static bool AppCaptionButtonEnabled(HWND hwnd, int hit) {
@@ -147,7 +141,7 @@ static void PaintAppCaption(HWND hwnd, ScaledWindowCaption* state, HDC target = 
         bool closeHot = hit == HTCLOSE && hit == state->hot && AppCaptionButtonEnabled(hwnd, hit);
         if (closeHot) {
             int diameter = std::min(content.dx, content.dy);
-            int inset = std::min(UiScalePxForDpi(dpi, 4), diameter / 6);
+            int inset = std::min(UiScalePxForDpi(dpi, 2), diameter / 8);
             diameter = std::max(1, diameter - inset * 2);
             gfx.FillEllipse(
                 {content.x + (content.dx - diameter) / 2, content.y + (content.dy - diameter) / 2, diameter, diameter},
@@ -156,7 +150,7 @@ static void PaintAppCaption(HWND hwnd, ScaledWindowCaption* state, HDC target = 
             gfx.FillRoundedRect(button, GetAppCornerRadius(dpi, 4), ThemeHotBackgroundColor());
         }
         int glyph = std::max(UiScalePxForDpi(dpi, 10), iconSize / 2);
-        glyph = std::min(glyph, std::max(2, std::min(content.dx, content.dy) / 2));
+        glyph = std::min(glyph, std::max(2, std::min(content.dx, content.dy) - 2 * UiScalePxForDpi(dpi, 1)));
         int x = content.x + (content.dx - glyph) / 2;
         int y = content.y + (content.dy - glyph) / 2;
         int stroke = std::max(1, UiScalePxForDpi(dpi, 1));

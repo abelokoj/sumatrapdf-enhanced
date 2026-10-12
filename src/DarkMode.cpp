@@ -785,8 +785,9 @@ void WindowCorners_UnitTests() {
                 ApplyScaledWindowCaption(dialog.hwnd);
                 Rect caption = AppCaptionRect(dialog.hwnd);
                 Rect content = AppCaptionButtonContent(dialog.hwnd, HTCLOSE);
-                int lane = GetAppScrollbarWidth(dialog.GetDpi());
-                utassert(content.x + content.dx / 2 == caption.Right() - lane + lane / 2);
+                utassert(content.Right() == caption.Right());
+                utassert(content == AppCaptionButton(dialog.hwnd, HTCLOSE));
+                utassert(content.dx >= caption.dy);
                 utassert(content.Right() <= caption.Right());
                 utassert(AppCaptionButton(dialog.hwnd, HTCLOSE)
                              .Contains({content.x + content.dx / 2, content.y + content.dy / 2}));

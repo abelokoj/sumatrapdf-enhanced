@@ -3,6 +3,7 @@
 
 #include "base/Base.h"
 #include "base/Crypto.h"
+#include "base/ByteReaderWriter.h"
 #include "base/File.h"
 #include "base/Http.h"
 #include "Settings.h"
@@ -224,6 +225,54 @@ static const MarkdownFontAsset kMarkdownFontAssets[] = {
      "8641346ee391ff97eb66c70f3d5d695792cf9c5b3c5d748c6158d49cf79646e3"},
     {"new-computer-modern/GUST-FONT-LICENSE.txt", "new-computer-modern/GUST-FONT-LICENSE.txt", 1417,
      "5eb61bb836bb1845ef668717cb15b382e997748ce2629e4388cc5e4c3fa4e433"},
+    {"NewCM10-Bold.otf", "new-computer-modern/NewCM10-Bold.otf", 629288,
+     "40b0b32b63655fe802679ee4a14adb29c762a4712095d9c84cf7df7852b5152e"},
+    {"NewCM10-BoldItalic.otf", "new-computer-modern/NewCM10-BoldItalic.otf", 609000,
+     "fb53f43500c8ffbcc6dfdea5a519961d475543174ea2a0dcbe16c08510299fdf"},
+    {"NewCM10-Book.otf", "new-computer-modern/NewCM10-Book.otf", 694392,
+     "005f9b4e13b2a133df36d4ebfbb8f5fe402854bcb5882deb500b9c0f72b1bb49"},
+    {"NewCM10-BookItalic.otf", "new-computer-modern/NewCM10-BookItalic.otf", 699696,
+     "d01f6c7b5bcdee2545823f1cf0a35698b9ccff1891a2f79a8e9938e5b8ea561e"},
+    {"NewCM10-Italic.otf", "new-computer-modern/NewCM10-Italic.otf", 721176,
+     "a55d07607eec48889b6e7e7d51d7703c3beb915a39690f34fe01b4e2a744a9d6"},
+    {"NewCM10-Regular.otf", "new-computer-modern/NewCM10-Regular.otf", 717588,
+     "328698d764ccdf7acf6bc1088aefd83a237f6a1d8b812de1e77ac5e4483bf3d1"},
+    {"NewCMMath-Bold.otf", "new-computer-modern/NewCMMath-Bold.otf", 1232148,
+     "c6c0e060da57d4f44274705afb956013047231dc62be5a4b02a351ab0dc43f2f"},
+    {"NewCMMath-Book.otf", "new-computer-modern/NewCMMath-Book.otf", 1432068,
+     "2ea09ebc9167b1e1a66f31390dc917f2d4004ecfca72d51b28010e4ad6becd95"},
+    {"NewCMMath-Regular.otf", "new-computer-modern/NewCMMath-Regular.otf", 1306268,
+     "d66ac1cc91c55c24d3636ae2df1238076debdff51841f9893fc5419cc2df3df7"},
+    {"NewCMMono10-Bold.otf", "new-computer-modern/NewCMMono10-Bold.otf", 554392,
+     "f651c3856b8dd5b8483b855e583e8e831f078ae60d39861c6142ecc9df1f34c4"},
+    {"NewCMMono10-BoldOblique.otf", "new-computer-modern/NewCMMono10-BoldOblique.otf", 773356,
+     "f8a7fed3ac5b7a9840ef003960c18f6d05cd57b76cf72536c93baea5162b51a0"},
+    {"NewCMMono10-Book.otf", "new-computer-modern/NewCMMono10-Book.otf", 529816,
+     "d5f2398e5198ea4112270fc6700130170c42c093c5c6af6fc19fe905def8953c"},
+    {"NewCMMono10-BookItalic.otf", "new-computer-modern/NewCMMono10-BookItalic.otf", 603736,
+     "f4b7a13365af080896fd09142866ab24d19ce6d3b72aeaf17cdee86beb4cbd8f"},
+    {"NewCMMono10-Italic.otf", "new-computer-modern/NewCMMono10-Italic.otf", 547920,
+     "974de80c47d467cc9e281d7d540321aee0dafb6fc25a03ad6b5831624e7f3d5e"},
+    {"NewCMMono10-Regular.otf", "new-computer-modern/NewCMMono10-Regular.otf", 473580,
+     "1a1582279205c4307407a2da27b646a6ef9381fe35aeecfe783a1bb8e13b5977"},
+    {"NewCMSans10-Bold.otf", "new-computer-modern/NewCMSans10-Bold.otf", 670212,
+     "e92f716dc6db995a407319520a01225afa3cfba94d36fe2d45ed6ecf6554ab6b"},
+    {"NewCMSans10-BoldOblique.otf", "new-computer-modern/NewCMSans10-BoldOblique.otf", 569884,
+     "618cc0452bbc3d8ea0d7d2a1031cd09f178d216bf9ad675f4daf8659ea1ef26c"},
+    {"NewCMSans10-Book.otf", "new-computer-modern/NewCMSans10-Book.otf", 578180,
+     "0ed20417390dff60e48568ea81851a119e96b6cc86564fe0f1de9ce73002f296"},
+    {"NewCMSans10-BookOblique.otf", "new-computer-modern/NewCMSans10-BookOblique.otf", 554916,
+     "378f5065ac20e0b64655a4cc50dd0fa9547a30f374c84a6361218d82a069f874"},
+    {"NewCMSans10-Oblique.otf", "new-computer-modern/NewCMSans10-Oblique.otf", 559652,
+     "93a03fce2778d459a14747d576803e82d12f653001a2292ef42aac0cb8e20fc7"},
+    {"NewCMSans10-Regular.otf", "new-computer-modern/NewCMSans10-Regular.otf", 648436,
+     "ca267604ebd4b51562f263df4206a2ce25f71fb46701a438e145139295f567f0"},
+    {"NewCMSansMath-Regular.otf", "new-computer-modern/NewCMSansMath-Regular.otf", 1183540,
+     "2976236474e4e92ea68d9140c5b05fa1b98818a0a4a30cf8881c4c45ca951fd3"},
+    {"NewCMUncial10-Bold.otf", "new-computer-modern/NewCMUncial10-Bold.otf", 21220,
+     "3d6c2196a8e7e5b4450588974e8119a9a32d2503327a4695cc9eb7ed3a15deac"},
+    {"NewCMUncial10-Regular.otf", "new-computer-modern/NewCMUncial10-Regular.otf", 30368,
+     "9f03ed41d0e2d9b435c981a652142488fb325963c4efc1b13ad752d2cb9a8147"},
 };
 static Mutex gMarkdownFontInstallLock;
 static Mutex gMarkdownFontVerifyLock;
@@ -421,6 +470,174 @@ bool DownloadMarkdownFonts(Str text, Str math, Str* error, Str cacheRoot) {
         return FontDownloadError(error, StrL("Cannot save the font license notice."));
     return true;
 }
+struct ReadingFontFamily {
+    const char* name;
+    const char* face;
+    const char* files[4];
+};
+static const ReadingFontFamily kReadingFonts[] = {
+    {"Lora", "Lora", {"Lora-Regular.otf", "Lora-Italic.otf", "Lora-Bold.otf", "Lora-BoldItalic.otf"}},
+    {"Libertinus Serif",
+     "Libertinus Serif",
+     {"LibertinusSerif-Regular.otf", "LibertinusSerif-Italic.otf", "LibertinusSerif-Bold.otf",
+      "LibertinusSerif-BoldItalic.otf"}},
+    {"New Computer Modern",
+     "NewComputerModern10",
+     {"NewCM10-Regular.otf", "NewCM10-Italic.otf", "NewCM10-Bold.otf", "NewCM10-BoldItalic.otf"}},
+    {"New Computer Modern Book",
+     "EDictCMBook",
+     {"NewCM10-Book.otf", "NewCM10-BookItalic.otf", "NewCM10-Bold.otf", "NewCM10-BoldItalic.otf"}},
+    {"New Computer Modern Sans",
+     "NewComputerModernSans10",
+     {"NewCMSans10-Regular.otf", "NewCMSans10-Oblique.otf", "NewCMSans10-Bold.otf", "NewCMSans10-BoldOblique.otf"}},
+    {"New Computer Modern Sans Book",
+     "EDictCMSansBook",
+     {"NewCMSans10-Book.otf", "NewCMSans10-BookOblique.otf", "NewCMSans10-Bold.otf", "NewCMSans10-BoldOblique.otf"}},
+    {"New Computer Modern Mono",
+     "NewComputerModernMono10",
+     {"NewCMMono10-Regular.otf", "NewCMMono10-Italic.otf", "NewCMMono10-Bold.otf", "NewCMMono10-BoldOblique.otf"}},
+    {"New Computer Modern Mono Book",
+     "EDictCMMonoBook",
+     {"NewCMMono10-Book.otf", "NewCMMono10-BookItalic.otf", "NewCMMono10-Bold.otf", "NewCMMono10-BoldOblique.otf"}},
+    {"New Computer Modern Uncial",
+     "NewComputerModernUncial10",
+     {"NewCMUncial10-Regular.otf", "NewCMUncial10-Bold.otf"}},
+    {"Libertinus Math", "Libertinus Math", {"LibertinusMath-Regular.otf"}},
+    {"New Computer Modern Math", "NewComputerModernMath", {"NewCMMath-Regular.otf", "NewCMMath-Bold.otf"}},
+    {"New Computer Modern Math Book", "EDictCMMathBook", {"NewCMMath-Book.otf", "NewCMMath-Bold.otf"}},
+    {"New Computer Modern Sans Math", "NewComputerModernSansMath", {"NewCMSansMath-Regular.otf"}},
+};
+static const ReadingFontFamily* ReadingFamily(Str name) {
+    for (const auto& font : kReadingFonts) {
+        if (str::EqI(name, Str(font.name))) return &font;
+    }
+    return nullptr;
+}
+static void ReadingAssets(const ReadingFontFamily* font, Vec<const MarkdownFontAsset*>& assets) {
+    for (auto* file : font->files) {
+        if (file) VecAppend(assets, FontAsset(Str(file)));
+    }
+    Str path = Str(assets[0]->path);
+    if (str::StartsWith(path, StrL("lora/")))
+        VecAppend(assets, FontAsset(StrL("lora/OFL.txt")));
+    else if (str::StartsWith(path, StrL("libertinus/")))
+        VecAppend(assets, FontAsset(StrL("libertinus/OFL.txt")));
+    else {
+        VecAppend(assets, FontAsset(StrL("new-computer-modern/License.txt")));
+        VecAppend(assets, FontAsset(StrL("new-computer-modern/GUST-FONT-LICENSE.txt")));
+    }
+}
+bool ReadingFontAvailable(Str name) {
+    const auto* font = ReadingFamily(name);
+    if (!font) return true;
+    Vec<const MarkdownFontAsset*> assets;
+    ReadingAssets(font, assets);
+    return CachedFontAssets(assets, MarkdownFontsCacheDir());
+}
+bool DownloadReadingFont(Str name, Str* error, Str cacheRoot) {
+    const auto* font = ReadingFamily(name);
+    if (!font) return true;
+    if (!len(cacheRoot)) cacheRoot = MarkdownFontsCacheDir();
+    Vec<const MarkdownFontAsset*> assets;
+    ReadingAssets(font, assets);
+    if (CachedFontAssets(assets, cacheRoot)) return true;
+    if (!HasPermission(Perm::DiskAccess) || !HasPermission(Perm::InternetAccess))
+        return FontDownloadError(error, StrL("Downloading fonts is disabled in restricted mode."));
+    AutoUnlockMutex lock(&gMarkdownFontInstallLock);
+    for (const auto* asset : assets) {
+        if (!DownloadFontAsset(asset, error, cacheRoot)) return false;
+    }
+    return true;
+}
+static void FontPut16(u8* p, u16 n) {
+    p[0] = (u8)(n >> 8);
+    p[1] = (u8)n;
+}
+static void FontPut32(u8* p, u32 n) {
+    p[0] = (u8)(n >> 24);
+    p[1] = (u8)(n >> 16);
+    p[2] = (u8)(n >> 8);
+    p[3] = (u8)n;
+}
+static u32 FontChecksum(const u8* p, u32 bytes) {
+    u32 sum = 0;
+    for (u32 i = 0; i < bytes; i += 4) {
+        u32 word = 0;
+        for (u32 j = 0; j < 4; j++) word = (word << 8) | (i + j < bytes ? p[i + j] : 0);
+        sum += word;
+    }
+    return sum;
+}
+// Book and regular NewCM have identical GDI family names. Rename only the
+// process-private name table; the verified download and glyph data stay intact.
+static bool AliasReadingFont(Str bytes, Str alias) {
+    auto* data = (u8*)bytes.s;
+    u32 size = (u32)len(bytes);
+    if (size < 12) return false;
+    u32 count = UInt16BE(data + 4), nameOffset = 0, nameSize = 0;
+    u8* nameEntry = nullptr;
+    u8* head = nullptr;
+    if (12 + count * 16 > size) return false;
+    for (u32 i = 0; i < count; i++) {
+        u8* entry = data + 12 + i * 16;
+        u32 offset = UInt32BE(entry + 8), tableSize = UInt32BE(entry + 12);
+        if (offset > size || tableSize > size - offset) return false;
+        if (!memcmp(entry, "name", 4)) {
+            nameEntry = entry;
+            nameOffset = offset;
+            nameSize = tableSize;
+        }
+        if (!memcmp(entry, "head", 4) && tableSize >= 12) head = data + offset;
+    }
+    if (!nameEntry || !head || nameSize < 6) return false;
+    u8* name = data + nameOffset;
+    u32 records = UInt16BE(name + 2), strings = UInt16BE(name + 4);
+    if (6 + records * 12 > nameSize || strings > nameSize) return false;
+    for (u32 i = 0; i < records; i++) {
+        u8* record = name + 6 + i * 12;
+        u16 id = UInt16BE(record + 6), platform = UInt16BE(record);
+        if (id != 1 && id != 4 && id != 16) continue;
+        if (platform > 3 || platform == 2) continue;
+        u32 width = platform == 1 ? 1 : 2, length = UInt16BE(record + 8);
+        u32 offset = strings + UInt16BE(record + 10), needed = (u32)len(alias) * width;
+        if (needed > length || offset > nameSize || length > nameSize - offset) return false;
+        for (int j = 0; j < len(alias); j++) {
+            if (width == 2) name[offset + j * 2] = 0;
+            name[offset + j * width + width - 1] = (u8)alias.s[j];
+        }
+        FontPut16(record + 8, (u16)needed);
+    }
+    FontPut32(nameEntry + 4, FontChecksum(name, nameSize));
+    FontPut32(head + 8, 0);
+    FontPut32(head + 8, 0xb1b0afba - FontChecksum(data, size));
+    return true;
+}
+
+// Registration is private to this app; opening a dictionary never downloads a font.
+TempStr ResolveReadingFont(Str name) {
+    const auto* font = ReadingFamily(name);
+    if (!font) return name;
+    if (!ReadingFontAvailable(name)) return {};
+    static StrVec registered;
+    for (auto* file : font->files) {
+        if (!file) continue;
+        auto* asset = FontAsset(Str(file));
+        TempStr path = FontCachePath(asset);
+        TempStr key = fmt("%s|%s", path, Str(font->face));
+        if (registered.Contains(key)) continue;
+        Str bytes = file::ReadFile(path);
+        defer {
+            str::Free(bytes);
+        };
+        if (!ValidFontAsset(bytes, asset)) return {};
+        if (str::StartsWith(Str(font->face), StrL("EDict")) && !AliasReadingFont(bytes, Str(font->face))) return {};
+        DWORD faces = 0;
+        if (!AddFontMemResourceEx(bytes.s, len(bytes), nullptr, &faces)) return {};
+        registered.Append(key);
+    }
+    return Str(font->face);
+}
+
 static void AppendFontCss(str::Builder& css, const MarkdownFontFamily* font) {
     for (int i = 0; i < font->count; i++) {
         auto& face = font->faces[i];
@@ -455,7 +672,49 @@ TempStr MarkdownFontCss(Str fontName, Str mathFontName) {
     return BuildMarkdownFontCss(fontName, mathFontName);
 }
 #if IS_DEBUG
+static void NativeReadingFontTests() {
+    WCHAR fixtures[1024]{};
+    DWORD length = GetEnvironmentVariableW(L"SUMATRA_READING_FONT_FIXTURES", fixtures, dimof(fixtures));
+    if (!length || length >= dimof(fixtures)) return;
+    Str original = str::Dup(GetAppDataDirTemp());
+    Str profile = str::Dup(GetTempFilePathTemp(StrL("rdf")));
+    file::Delete(profile);
+    SetAppDataDir(profile);
+    defer {
+        SetAppDataDir(original);
+        str::Free(original);
+        str::Free(profile);
+    };
+    for (const auto& font : kReadingFonts) {
+        Vec<const MarkdownFontAsset*> assets;
+        ReadingAssets(&font, assets);
+        for (const auto* asset : assets) {
+            TempStr from = path::JoinTemp(ToUtf8Temp(fixtures), Str(asset->path));
+            TempStr to = FontCachePath(asset);
+            utassert(dir::CreateAll(path::GetDirTemp(to)));
+            if (!file::Exists(to)) utassert(CopyFileW(CWStrTemp(from), CWStrTemp(to), FALSE));
+        }
+        utassert(ReadingFontAvailable(Str(font.name)));
+        Str face = ResolveReadingFont(Str(font.name));
+        utassert(str::Eq(face, Str(font.face)));
+        LOGFONTW lf{};
+        lf.lfHeight = -24;
+        lf.lfCharSet = DEFAULT_CHARSET;
+        wstr::BufSet(WStr(lf.lfFaceName, dimof(lf.lfFaceName)), ToWStrTemp(face));
+        HFONT hfont = CreateFontIndirectW(&lf);
+        HDC dc = GetDC(nullptr);
+        HGDIOBJ old = SelectObject(dc, hfont);
+        WCHAR actual[LF_FACESIZE]{};
+        GetTextFaceW(dc, dimof(actual), actual);
+        utassert(str::EqI(ToUtf8Temp(actual), face));
+        logf("Dictionary native font: %s => %s\n", Str(font.name), ToUtf8Temp(actual));
+        SelectObject(dc, old);
+        ReleaseDC(nullptr, dc);
+        DeleteObject(hfont);
+    }
+}
 void MarkdownFonts_UnitTests() {
+    NativeReadingFontTests();
     StrVec names;
     MarkdownFontChoices(MarkdownFontKind::Text, names);
     utassert(len(names) == MarkdownFontCount(MarkdownFontKind::Text));

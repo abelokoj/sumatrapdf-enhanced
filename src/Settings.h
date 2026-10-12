@@ -873,6 +873,15 @@ struct MarkdownUI {
     Str mathFontName;
 };
 
+// dictionary reading appearance
+struct DictionaryUI {
+    // dictionary reading font; empty follows the interface font; accepts
+    // any installed Windows font
+    Str fontName;
+    // dictionary line-height multiplier; greater than 0 and at most 100
+    float lineSpacing;
+};
+
 // customization options for HTML UI. If UseFixedPageUI is true, MuPDF
 // is used; otherwise WebView2 browser view is used when available
 struct HtmlUI {
@@ -1377,6 +1386,8 @@ struct Settings {
     // MuPDF is used; otherwise WebView2 browser view is used when
     // available
     MarkdownUI markdownUI;
+    // dictionary reading appearance
+    DictionaryUI dictionaryUI;
     // customization options for HTML UI. If UseFixedPageUI is true, MuPDF
     // is used; otherwise WebView2 browser view is used when available
     HtmlUI htmlUI;

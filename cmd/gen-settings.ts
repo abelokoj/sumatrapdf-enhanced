@@ -603,6 +603,16 @@ const markdownUI: Field[] = [
   field("MathFontName", Str, "", "Markdown MathML font; empty uses the companion of the text font"),
 ];
 
+const dictionaryUI: Field[] = [
+  field(
+    "FontName",
+    Str,
+    "",
+    "dictionary reading font; empty follows the interface font; accepts any installed Windows font",
+  ),
+  field("LineSpacing", Float, 1.15, "dictionary line-height multiplier; greater than 0 and at most 100"),
+];
+
 const htmlUI: Field[] = [
   field(
     "UseFixedPageUI",
@@ -1948,6 +1958,8 @@ const globalPrefs: Field[] = [
     "customization options for Markdown UI. If UseFixedPageUI is true, MuPDF is used; otherwise WebView2 browser view is used when available",
   ),
   emptyLine(),
+  struct("DictionaryUI", dictionaryUI, "dictionary reading appearance"),
+  emptyLine(),
   struct(
     "HtmlUI",
     htmlUI,
@@ -2278,6 +2290,7 @@ const globalPrefsLayout = [
   "TabsMru",
   "CtrlTabSimple",
   "MarkdownUI",
+  "DictionaryUI",
   "HtmlUI",
   "CheckForUpdates",
 ];

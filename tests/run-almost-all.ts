@@ -20,6 +20,7 @@ import { runNamedTests, runSuiteMain, startSuiteProgress, type NamedTest, type S
 import { setTestWindowLayout } from "./winapi.ts";
 import { beginSharedControlledSession, endSharedControlledSession } from "./win-automation.ts";
 import { testit as markdownDisplayFonts } from "./markdown-display-fonts.ts";
+import { testit as dictionaryAppearance } from "./dictionary-appearance.ts";
 import { testit as markdownFontDownloads } from "./markdown-font-downloads.ts";
 import { testit as markdownFontPackaging } from "./markdown-font-packaging.ts";
 import { testit as themePresets } from "./theme-presets.ts";
@@ -620,6 +621,7 @@ export const tests: NamedTest[] = [
   // --- isolated session: -appdata, saveSettings, or own window placement -
   ["markdown-display-fonts", markdownDisplayFonts],
   ["markdown-font-downloads", markdownFontDownloads],
+  ["dictionary-appearance", dictionaryAppearance],
   ["markdown-font-packaging", markdownFontPackaging],
   ["favorites-menu", favoritesMenu],
   ["favorites-tab-after-document-close", favoritesTabAfterDocumentClose],

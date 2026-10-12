@@ -3095,13 +3095,11 @@ void MenuCustomDrawItem(HWND hwnd, DRAWITEMSTRUCT* dis) {
             return;
         }
 
-        // draw a checkmark
-        int offX = DpiScale(6); // 6 is chosen experimentally
-        Point p0 = {rc.x + offX, rc.y + (rcDy / 2)};
-        Point p1 = {rc.x + (cxCheckMark / 2), rc.y + rc.dy - (padY * 3)};
-        Point p2 = {rc.x + cxCheckMark - offX, rc.y + (padY * 3)};
-        gfx->DrawLineAA(p0, p1, txtCol, 2);
-        gfx->DrawLineAA(p1, p2, txtCol, 2);
+        int size = std::max(8, std::min(cxCheckMark, rcDy - 2 * padY));
+        auto* checkFont = GetUserGuiFont(StrL("Segoe UI Symbol"), size);
+        Color green = IsLightColor(bgCol) ? MkRgb(17, 120, 58) : MkRgb(93, 230, 145);
+        gfx->DrawText(StrL("✔"), {rc.x, rc.y, cxCheckMark, rc.dy}, gfxTextCenter | gfxTextVCenter, checkFont,
+                      isDisabled ? txtCol : green);
     }
 }
 

@@ -24,6 +24,8 @@
 #include "OfflineDictionary.h"
 #include "Vocabulary.h"
 #include "DictionarySpeech.h"
+#include "MarkdownFonts.h"
+#include "UiFonts.h"
 #include "VocabularyDialog.h"
 #if IS_DEBUG
 #include "EngineBase.h"
@@ -406,15 +408,22 @@ static void FormatDetails(LearningWindow* w) {
     base.yHeight = MulDiv(abs(font.lfHeight), 1440, DpiGet());
     base.crTextColor = ThemeWindowTextColor();
     wcscpy_s(base.szFaceName, font.lfFaceName);
+    if (w->dictionary && gSettings && len(gSettings->dictionaryUI.fontName)) {
+        Str face = ResolveUiFontName(gSettings->dictionaryUI.fontName);
+        face = ResolveReadingFont(face);
+        if (len(face)) wstr::BufSet(WStr(base.szFaceName, dimof(base.szFaceName)), ToWStrTemp(face));
+    }
     SendMessageW(child, WM_SETREDRAW, FALSE, 0);
     SendMessageW(child, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&base);
     SendMessageW(child, EM_SETBKGNDCOLOR, 0, ThemeControlBackgroundColor());
     PARAFORMAT2 paragraph{};
     paragraph.cbSize = sizeof(paragraph);
     paragraph.dwMask = PFM_SPACEAFTER | PFM_LINESPACING;
-    paragraph.dySpaceAfter = base.yHeight / 5;
+    double spacing = w->dictionary && gSettings ? gSettings->dictionaryUI.lineSpacing : 1.15;
+    if (!_finite(spacing) || spacing <= 0 || spacing > 100) spacing = 1.15;
+    paragraph.dySpaceAfter = (LONG)round(base.yHeight * spacing / (5 * 1.15));
     paragraph.bLineSpacingRule = 5;
-    paragraph.dyLineSpacing = 23;
+    paragraph.dyLineSpacing = std::max(1L, (LONG)round(spacing * 20));
     CHARRANGE all{0, -1};
     SendMessageW(child, EM_EXSETSEL, 0, (LPARAM)&all);
     SendMessageW(child, EM_SETPARAFORMAT, 0, (LPARAM)&paragraph);
@@ -551,7 +560,7 @@ static void Feedback(LearningWindow* w, bool correct, Str message) {
     KillTimer(w->hwnd, kFeedbackTimer);
     w->feedbackKind = correct ? 1 : -1;
     w->feedbackStart = GetTickCount64();
-    Text(w, lcFeedback, fmt("%s  %s", correct ? StrL("✓") : StrL("✕"), message));
+    Text(w, lcFeedback, fmt("%s  %s", correct ? StrL("✔") : StrL("✗"), message));
     ShowWindow(Control(w, lcFeedback), SW_SHOW);
     BOOL animate = FALSE;
     SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &animate, 0);
@@ -2288,7 +2297,7 @@ static bool SetLibraryRows(LearningWindow* w, const Vec<VocabularyWord*>& words,
         if (changed) break;
         VocabularyWord* word = words[index++];
         changed = !str::Eq(word->id, *id++) ||
-                  !str::Eq(caption, fmt("%s%s", word->word, word->learned ? StrL("  ✓") : Str{}));
+                  !str::Eq(caption, fmt("%s%s", word->word, word->learned ? StrL("  ✔") : Str{}));
     }
     if (!changed) return false;
 
@@ -2328,7 +2337,7 @@ static bool SetLibraryRows(LearningWindow* w, const Vec<VocabularyWord*>& words,
     StrVec ids, captions;
     Vec<int> heights, measureRows;
     for (VocabularyWord* word : words) {
-        Str caption = fmt("%s%s", word->word, word->learned ? StrL("  ✓") : Str{});
+        Str caption = fmt("%s%s", word->word, word->learned ? StrL("  ✔") : Str{});
         int first = 0, last = len(list->libraryHeights);
         while (first < last) {
             int middle = (first + last) / 2;
@@ -2659,7 +2668,7 @@ static void DrawLearningChoice(DRAWITEMSTRUCT* item) {
     }
     rc.left += labelWidth;
     WStr text = LbGetTextTemp(item->hwndItem, item->itemID);
-    if (item->CtlID == lcLibrary && len(text) >= 3 && text.s[len(text) - 1] == L'✓') {
+    if (item->CtlID == lcLibrary && len(text) >= 3 && text.s[len(text) - 1] == L'✔') {
         text = WStr(text.s, len(text) - 3);
         int size = LearningIconSize();
         RECT check{rc.right - size, rc.top, rc.right, rc.top + size};
@@ -2711,7 +2720,7 @@ static void DrawGreenCheck(HDC dc, RECT rc, Color background) {
     HGDIOBJ font = SelectObject(dc, glyphFont->GetHFont());
     Color ink = SetTextColor(dc, green);
     int mode = SetBkMode(dc, TRANSPARENT);
-    DrawTextW(dc, L"\u2713", 1, &rc, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    DrawTextW(dc, L"\u2714", 1, &rc, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
     SetBkMode(dc, mode);
     SetTextColor(dc, ink);
     SelectObject(dc, font);
@@ -3128,12 +3137,25 @@ static void DrawFeedback(LearningWindow* w, DRAWITEMSTRUCT* item) {
     RECT rc = item->rcItem;
     InflateRect(&rc, -UiScalePx(12), -UiScalePx(6));
     Str message = Read(w, lcFeedback);
-    if (w->feedbackKind > 0 && str::StartsWith(message, StrL("✓"))) {
+    if (w->feedbackKind > 0 && str::StartsWith(message, StrL("✔"))) {
         int size = GetAppFontSizeForDpi(DpiGet());
         RECT check{rc.left, rc.top, rc.left + size, rc.top + size};
         DrawGreenCheck(item->hDC, check, bg);
         rc.left += size + UiScalePx(8);
-        message = Str(message.s + len(StrL("✓")), len(message) - len(StrL("✓")));
+        message = Str(message.s + len(StrL("✔")), len(message) - len(StrL("✔")));
+        str::TrimWSInPlace(message, str::TrimOpt::Left);
+    }
+    if (w->feedbackKind < 0 && str::StartsWith(message, StrL("✗"))) {
+        int size = GetAppFontSizeForDpi(DpiGet());
+        RECT cross{rc.left, rc.top, rc.left + size, rc.top + size};
+        auto* glyphFont = GetBoldPlatformFont(GetUserGuiFont(StrL("Segoe UI Symbol"), size));
+        HGDIOBJ previous = SelectObject(item->hDC, glyphFont->GetHFont());
+        Color oldInk = SetTextColor(item->hDC, dark ? RGB(255, 176, 181) : RGB(185, 32, 43));
+        DrawTextW(item->hDC, L"\u2717", 1, &cross, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SetTextColor(item->hDC, oldInk);
+        SelectObject(item->hDC, previous);
+        rc.left += size + UiScalePx(8);
+        message = Str(message.s + len(StrL("✗")), len(message) - len(StrL("✗")));
         str::TrimWSInPlace(message, str::TrimOpt::Left);
     }
     DrawTextW(item->hDC, CWStrTemp(message), -1, &rc, DT_WORDBREAK | DT_NOPREFIX);
@@ -4021,12 +4043,12 @@ static void GreenCheckGlyphTests() {
         HFONT font = GetUserGuiFont(StrL("Segoe UI Symbol"), size)->GetHFont();
         HGDIOBJ previous = SelectObject(dc, font);
         WORD glyph = 0xffff;
-        GetGlyphIndicesW(dc, L"\u2713", 1, &glyph, GGI_MARK_NONEXISTING_GLYPHS);
+        GetGlyphIndicesW(dc, L"\u2714", 1, &glyph, GGI_MARK_NONEXISTING_GLYPHS);
         utassert(glyph != 0xffff);
         SetTextColor(dc, background == RGB(255, 255, 255) ? RGB(17, 120, 58) : RGB(93, 230, 145));
         SetBkMode(dc, TRANSPARENT);
         RECT reference{size, 0, size * 2, size};
-        DrawTextW(dc, L"\u2713", 1, &reference, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        DrawTextW(dc, L"\u2714", 1, &reference, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
         GdiFlush();
         bool same = true;
         int greenPixels = 0;
@@ -4138,7 +4160,7 @@ static void LibraryRowsTest(HWND parent) {
     SendMessageW(control, LB_SETITEMHEIGHT, 1, firstHeight + 37);
     second.learned = true;
     utassert(SetLibraryRows(&window, words, first.id));
-    utassert(str::Eq(list->strings[0], StrL("Second word  ✓")));
+    utassert(str::Eq(list->strings[0], StrL("Second word  ✔")));
     utassert(list->heights[1] == firstHeight + 37 && list->selected == 1);
     MoveWindow(control, 0, 0, 450, 120, false);
     utassert(list->heights[1] < firstHeight);
@@ -4364,6 +4386,45 @@ static LearningWindow* OpenLearningForTest(bool dictionary) {
     return w;
 }
 
+static void DictionaryAppearanceTests(LearningWindow* w) {
+    auto* prefs = &gSettings->dictionaryUI;
+    Str savedFont = str::Dup(prefs->fontName);
+    float savedSpacing = prefs->lineSpacing;
+    defer {
+        str::ReplaceWithCopy(&prefs->fontName, savedFont);
+        str::Free(savedFont);
+        prefs->lineSpacing = savedSpacing;
+        FormatDetails(w);
+    };
+    Text(w, lcDetails, StrL("Reading appearance\r\nA definition with multiple lines.\r\nAnother definition."));
+    HWND details = Control(w, lcDetails);
+    for (Str face :
+         {StrL("Consolas"), StrL("Manrope"), StrL("Pretendard Std"), StrL("Public Sans"), StrL("Segoe UI")}) {
+        str::ReplaceWithCopy(&prefs->fontName, face);
+        FormatDetails(w);
+        CHARRANGE selected{0, 1};
+        SendMessageW(details, EM_EXSETSEL, 0, (LPARAM)&selected);
+        CHARFORMAT2W format{};
+        format.cbSize = sizeof(format);
+        SendMessageW(details, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&format);
+        utassert(str::EqI(ToUtf8Temp(format.szFaceName), ResolveUiFontName(face)));
+    }
+    for (float spacing : {0.25f, 1.0f, 1.15f, 1.37f, 2.7f, 99.0f, -1.0f, 101.0f}) {
+        prefs->lineSpacing = spacing;
+        CHARRANGE selected{2, 7};
+        SendMessageW(details, EM_EXSETSEL, 0, (LPARAM)&selected);
+        FormatDetails(w);
+        CHARRANGE after{};
+        SendMessageW(details, EM_EXGETSEL, 0, (LPARAM)&after);
+        utassert(after.cpMin == selected.cpMin && after.cpMax == selected.cpMax);
+        PARAFORMAT2 paragraph{};
+        paragraph.cbSize = sizeof(paragraph);
+        SendMessageW(details, EM_GETPARAFORMAT, 0, (LPARAM)&paragraph);
+        float expected = spacing > 0 && spacing <= 100 ? spacing : 1.15f;
+        utassert(paragraph.bLineSpacingRule == 5 && paragraph.dyLineSpacing == (LONG)round(expected * 20));
+    }
+}
+
 void VocabularyDialog_UnitTests() {
     RenderCache* originalCache = gRenderCache;
     if (!originalCache) gRenderCache = new RenderCache();
@@ -4409,6 +4470,7 @@ void VocabularyDialog_UnitTests() {
         if (learning) {
             utassert(HwndWindowRect(Control(learning, lcVoice)).dy ==
                      HwndWindowRect(Control(learning, lcPronounce)).dy);
+            DictionaryAppearanceTests(learning);
             LearningHiddenTests(learning);
             LearningRowTests(learning);
             HWND audio = Control(learning, lcPronounce);
@@ -4790,7 +4852,7 @@ void VocabularyDialog_UnitTests() {
         MakeControl(&footerWindow, lcStatus, L"STATIC", StrL("Review 1 of 10"));
         MakeButton(&footerWindow, lcCheck, StrL("Next word"));
         MakeButton(&footerWindow, lcBack, StrL("Back to library"));
-        MakeControl(&footerWindow, lcFeedback, L"STATIC", StrL("✓ Correct"), SS_OWNERDRAW | SS_NOPREFIX);
+        MakeControl(&footerWindow, lcFeedback, L"STATIC", StrL("✔ Correct"), SS_OWNERDRAW | SS_NOPREFIX);
         footerWindow.ready = footerWindow.practice = true;
         footerWindow.feedbackKind = 1;
         LayoutLearning(&footerWindow);
@@ -4803,7 +4865,7 @@ void VocabularyDialog_UnitTests() {
         for (int width : {640, 360}) {
             MoveWindow(footerParent, 0, 0, width, 800, false);
             footerWindow.feedbackKind = -1;
-            Text(&footerWindow, lcFeedback, StrL("✕ Not quite. Read the correct answer, then choose Next word."));
+            Text(&footerWindow, lcFeedback, StrL("✗ Not quite. Read the correct answer, then choose Next word."));
             LayoutLearning(&footerWindow);
             RECT viewport;
             GetClientRect(footerParent, &viewport);
