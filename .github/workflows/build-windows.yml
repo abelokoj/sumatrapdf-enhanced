@@ -88,6 +88,19 @@ jobs:
         run: bun cmd/build.ts -asan -dbg
       - name: Run native unit tests
         run: bun cmd/run-unit-tests.ts -asan
+      - name: Install WebView2 runtime for Markdown UI checks
+        shell: pwsh
+        run: |
+          $runtimeInstaller = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?LinkId=2099617' -OutFile $runtimeInstaller
+          $signature = Get-AuthenticodeSignature -LiteralPath $runtimeInstaller
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw 'WebView2 installer signature is invalid' }
+          $installerProcess = Start-Process -FilePath $runtimeInstaller -ArgumentList '/silent','/install' -Wait -PassThru -WindowStyle Hidden
+          if ($installerProcess.ExitCode -ne 0) { throw "WebView2 installation failed: $($installerProcess.ExitCode)" }
+          $runtimeKey = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $versions = @('HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients', 'HKCU:\Software\Microsoft\EdgeUpdate\Clients') | ForEach-Object { (Get-ItemProperty -LiteralPath (Join-Path $_ $runtimeKey) -Name pv -ErrorAction SilentlyContinue).pv }
+          if (-not ($versions | Where-Object { $_ -and $_ -ne '0.0.0.0' })) { throw 'WebView2 runtime is unavailable after installation' }
+          Write-Output ('WebView2 runtime: ' + ($versions -join ', '))
       - name: Run all hosted-compatible UI tests
         env:
           SUMATRA_TEST_EXE: ${{ github.workspace }}\out\dbg64_asan\SumatraPDF-static.exe
