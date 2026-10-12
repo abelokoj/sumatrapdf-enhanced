@@ -4,7 +4,7 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { ControlCommand } from "./control.ts";
-import { ROOT, cmdId, runStandalone, tmpPath } from "./util.ts";
+import { ROOT, cmdId, SLOW_BUILD_FACTOR, runStandalone, tmpPath } from "./util.ts";
 import {
   enumWindows,
   findChildWindow,
@@ -54,7 +54,7 @@ function findNewVisibleWindow(pid: number, before: Set<number>, exclude = 0): nu
 }
 
 async function waitForNewVisibleWindow(pid: number, before: Set<number>, exclude = 0): Promise<number> {
-  const deadline = Date.now() + 3000;
+  const deadline = Date.now() + 3000 * SLOW_BUILD_FACTOR;
   while (Date.now() < deadline) {
     const hwnd = findNewVisibleWindow(pid, before, exclude);
     if (hwnd) {
@@ -66,7 +66,7 @@ async function waitForNewVisibleWindow(pid: number, before: Set<number>, exclude
 }
 
 async function waitForClosed(pid: number, hwnd: number): Promise<void> {
-  const deadline = Date.now() + 3000;
+  const deadline = Date.now() + 3000 * SLOW_BUILD_FACTOR;
   while (Date.now() < deadline) {
     if (!topWindows(pid).has(hwnd)) {
       return;
@@ -79,7 +79,7 @@ async function waitForClosed(pid: number, hwnd: number): Promise<void> {
 // the dialog is shown before RunModalWindow disables the owner, and we see it
 // from another process, so poll instead of sampling the instant it appears
 async function waitForEnabled(frame: number, want: boolean): Promise<boolean> {
-  const deadline = Date.now() + 3000;
+  const deadline = Date.now() + 3000 * SLOW_BUILD_FACTOR;
   for (;;) {
     if (isWindowEnabled(frame) === want) {
       return true;
@@ -133,7 +133,7 @@ async function openScreenshotFromPalette(
 
   sendText(edit, "Set Screenshot Hotkey");
   const expected = cmdId("CmdSetScreenshotHotkey");
-  const deadline = Date.now() + 3000;
+  const deadline = Date.now() + 3000 * SLOW_BUILD_FACTOR;
   for (;;) {
     const response = await client.request(ControlCommand.TestCommandPalette, []);
     if (String(response[1] ?? "").includes(`cmd=${expected}`)) {

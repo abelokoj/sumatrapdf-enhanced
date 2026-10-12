@@ -433,6 +433,31 @@ bool RuntimeVersionAndLocation(const WCHAR* id, WCHAR* version, DWORD versionCha
         if (RegReadStr(places[i].root, key, L"location", places[i].flags, location, locationChars)) {
             return true;
         }
+        // Evergreen registration guarantees pv, not an optional location value.
+        if (wcscmp(id, kRuntimeChannels[0].id) != 0) {
+            continue;
+        }
+        const WCHAR* machineFolders[] = {L"ProgramFiles(x86)", L"ProgramFiles"};
+        const WCHAR* userFolders[] = {L"LOCALAPPDATA"};
+        const WCHAR** folders = places[i].root == HKEY_LOCAL_MACHINE ? machineFolders : userFolders;
+        int count = places[i].root == HKEY_LOCAL_MACHINE ? (int)_countof(machineFolders) : (int)_countof(userFolders);
+        for (int folder = 0; folder < count; folder++) {
+            WCHAR* parent = EnvironmentVariableDup(folders[folder]);
+            if (!parent) {
+                continue;
+            }
+            int written = swprintf_s(location, locationChars, L"%s\\Microsoft\\EdgeWebView\\Application", parent);
+            free(parent);
+            if (written < 0) {
+                continue;
+            }
+            WCHAR candidate[MAX_PATH * 2];
+            written = swprintf_s(candidate, L"%s\\%s", location, version);
+            RuntimeInfo probe;
+            if (written >= 0 && SetClientDll(&probe, candidate)) {
+                return true;
+            }
+        }
     }
     return false;
 }
