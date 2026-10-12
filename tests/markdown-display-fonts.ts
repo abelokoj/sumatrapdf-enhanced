@@ -1,6 +1,5 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createServer } from "node:net";
 import { cmdId, runStandalone, SLOW_BUILD_FACTOR, tmpPath } from "./util.ts";
 import { killAndWait, launchControlled, sendCommandSync } from "./win-automation.ts";
 
@@ -33,13 +32,20 @@ function cacheIsEmpty(profile: string): boolean {
 function assert(ok: unknown, message: string): asserts ok {
   if (!ok) throw new Error(`markdown-display-fonts: ${message}`);
 }
-async function port(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const result = (server.address() as { port: number }).port;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return result;
+async function browserPort(profile: string): Promise<number> {
+  const deadline = Date.now() + TIMEOUT;
+  const paths = [join(profile, "EBWebView", "DevToolsActivePort"), join(profile, "DevToolsActivePort")];
+  while (Date.now() < deadline) {
+    for (const path of paths) {
+      if (!existsSync(path)) continue;
+      const port = Number(readFileSync(path, "utf8").split(/\r?\n/)[0]);
+      if (port > 0 && port <= 65535) return port;
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error(`Markdown browser did not report its debug port: ${profile}`);
 }
+
 class Page {
   private id = 0;
   logs: any[] = [];
@@ -138,16 +144,16 @@ export async function testit(): Promise<void> {
         .replace("FontName = Lora", `FontName = ${requestedFont}`)
         .replace("MathFontName = Libertinus Math", "MathFontName ="),
     );
-    const cleanPort = await port();
+    const cleanProfile = join(dir, requestedFont ? "browser-missing-font" : "browser-interface-font");
     const clean = await launchControlled(["-appdata", dir, markdown], {
       env: {
-        WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cleanPort}`,
-        WEBVIEW2_USER_DATA_FOLDER: join(dir, requestedFont ? "browser-missing-font" : "browser-interface-font"),
+        WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=0",
+        WEBVIEW2_USER_DATA_FOLDER: cleanProfile,
       },
     });
     let cleanPage: Page | undefined;
     try {
-      cleanPage = await Page.connect(cleanPort);
+      cleanPage = await Page.connect(await browserPort(cleanProfile));
       await cleanPage.until("document.querySelector('main p') && document.readyState === 'complete'");
       assert(
         await cleanPage.eval("!document.getElementById('enhanced-markdown-font')"),
@@ -184,17 +190,17 @@ export async function testit(): Promise<void> {
   // Only the isolated test profile is seeded; production installs contain no font assets.
   seedFontCache(dir);
   writeFileSync(prefs, fontPrefs);
-  const firstPort = await port();
+  const firstProfile = join(dir, "browser-cached-fonts");
   const app = await launchControlled(["-appdata", dir, markdown], {
     saveSettings: true,
     env: {
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${firstPort}`,
-      WEBVIEW2_USER_DATA_FOLDER: join(dir, "browser-cached-fonts"),
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=0",
+      WEBVIEW2_USER_DATA_FOLDER: firstProfile,
     },
   });
   let page: Page | undefined;
   try {
-    page = await Page.connect(firstPort);
+    page = await Page.connect(await browserPort(firstProfile));
     await page.command("Log.enable");
     await page.until("document.querySelector('main p') && document.readyState === 'complete'");
     assert(
@@ -275,16 +281,16 @@ export async function testit(): Promise<void> {
       .replace(/^Theme\s*=.*$/m, "Theme = Sumatra Dark")
       .replace(/^InterfaceScale\s*=.*$/m, "InterfaceScale = 200"),
   );
-  const secondPort = await port();
+  const secondProfile = join(dir, "browser-dark-fonts");
   const reopened = await launchControlled(["-appdata", dir, markdown], {
     env: {
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${secondPort}`,
-      WEBVIEW2_USER_DATA_FOLDER: join(dir, "browser-dark-fonts"),
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=0",
+      WEBVIEW2_USER_DATA_FOLDER: secondProfile,
     },
   });
   page = undefined;
   try {
-    page = await Page.connect(secondPort);
+    page = await Page.connect(await browserPort(secondProfile));
     await page.until("document.querySelector('main p') && document.readyState === 'complete'");
     await page.until("getComputedStyle(document.querySelector('main p')).fontFamily.includes('EnhancedMDLibertinus')");
     assert(

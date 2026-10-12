@@ -10,7 +10,7 @@
 // in flight doesn't take the app down with it.
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cmdId, runStandalone, tmpPath } from "./util";
+import { cmdId, runStandalone, SLOW_BUILD_FACTOR, tmpPath } from "./util";
 import {
   findChildWindow,
   getWindowText,
@@ -117,9 +117,9 @@ async function testTocAndNextFile(dir: string): Promise<void> {
       throw new Error(`issue-5918: TOC settled at ${settled} items, want ${wantFull} (files plus their headings)`);
     }
 
-    sendCommand(frame, cmdId("CmdOpenNextFileInFolder"));
+    sendCommandSync(frame, cmdId("CmdOpenNextFileInFolder"));
     // TOC must stay complete through the switch (a reload would drop to the flat list)
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + 5000 * SLOW_BUILD_FACTOR;
     let switched = false;
     while (Date.now() < deadline) {
       const n = tocItemCount(frame);
@@ -154,7 +154,7 @@ async function testCloseDuringBuild(dir: string): Promise<void> {
     const frame = await waitForFrame(proc.pid!);
     sendCommand(frame, cmdId("CmdToggleBookmarks"));
     // close once the background build has started, before it finishes
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + 5000 * SLOW_BUILD_FACTOR;
     while (Date.now() < deadline) {
       const n = tocItemCount(frame);
       if (n > 0 && n < wantFull) {

@@ -102,7 +102,13 @@ export async function testit(): Promise<void> {
     const x = Math.floor((rc.right - rc.left) / 2);
     const y = Math.floor((rc.bottom - rc.top) / 3);
     const onLink = clientToScreen(canvas, x, y);
-    const res = await client.request(ControlCommand.TestRefHover, ["show", x, y]);
+    let res = await client.request(ControlCommand.TestRefHover, ["show", x, y]);
+    const showDeadline = Date.now() + 8000;
+    while (res[0] !== 0 && String(res[1]).includes("no-link") && Date.now() < showDeadline) {
+      await client.waitForRenderIdle();
+      await sleep(50);
+      res = await client.request(ControlCommand.TestRefHover, ["show", x, y]);
+    }
     if (res[0] !== 0) {
       throw new Error(`issue-6252: could not show the popup: ${res[1]}`);
     }

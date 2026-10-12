@@ -1,5 +1,5 @@
-// #6112: MuPDF file-attachment icons in the property row / icon menu were
-// drawn upside-down (the paths are Open Iconic y-down, not PDF y-up).
+// #6112: file-attachment icons must render with the head above the tip.
+// Enhanced uses the selected angled pin, so a centered upright-head test is invalid.
 //
 // Run: bun tests/issue-6112.ts [--no-build]
 
@@ -52,34 +52,21 @@ function isInk(cap: { w: number; h: number; data: Uint8Array }, x: number, y: nu
   return cap.data[i]! + cap.data[i + 1]! + cap.data[i + 2]! < 420;
 }
 
-// Point-up star (and a PushPin head): ink in the top band sits near center.
-// Upside-down, the top band is two side points and the center is empty.
-function topBandCenterInk(
+function headAndTipInk(
   cap: { w: number; h: number; data: Uint8Array },
   r: { x: number; y: number; dx: number; dy: number },
-): { center: number; sides: number } {
+): { head: number; tip: number } {
   const pad = Math.max(2, Math.floor(Math.min(r.dx, r.dy) * 0.12));
-  const x0 = r.x + pad;
-  const x1 = r.x + r.dx - pad;
-  const y0 = r.y + pad;
-  const y1 = r.y + Math.floor(r.dy * 0.38);
-  const mid = (x0 + x1) / 2;
-  const half = (x1 - x0) / 2;
-  let center = 0;
-  let sides = 0;
-  for (let y = y0; y < y1; y++) {
-    for (let x = x0; x < x1; x++) {
-      if (!isInk(cap, x, y)) {
-        continue;
-      }
-      if (Math.abs(x + 0.5 - mid) <= half * 0.4) {
-        center++;
-      } else {
-        sides++;
-      }
+  let head = 0;
+  let tip = 0;
+  for (let y = r.y + pad; y < r.y + r.dy - pad; y++) {
+    for (let x = r.x + pad; x < r.x + r.dx - pad; x++) {
+      if (!isInk(cap, x, y)) continue;
+      if (y < r.y + r.dy * 0.38) head++;
+      if (y >= r.y + r.dy * 0.62) tip++;
     }
   }
-  return { center, sides };
+  return { head, tip };
 }
 
 export async function testit(): Promise<void> {
@@ -92,7 +79,7 @@ export async function testit(): Promise<void> {
   writeFileSync(pdf, makeBlankPdf(), "latin1");
   writeFileSync(
     join(appdata, "SumatraPDFEnhanced-settings.txt"),
-    "UiLanguage = en\nRestoreSession = false\nShowStartPage = false\nCheckForUpdates = false\n",
+    "UiLanguage = en\nTheme = Sumatra Light\nPinIconStyle = 10\nRestoreSession = false\nShowStartPage = false\nCheckForUpdates = false\n",
   );
 
   const { proc, client, frame } = await launchControlled([
@@ -132,9 +119,9 @@ export async function testit(): Promise<void> {
       throw new Error("issue-6112: could not capture property row");
     }
     const local = { x: icon.x - placed.x, y: icon.y - placed.y, dx: icon.dx, dy: icon.dy };
-    const { center, sides } = topBandCenterInk(cap, local);
-    if (center <= sides) {
-      throw new Error(`issue-6112: icon looks upside-down (topCenter=${center} topSides=${sides})`);
+    const { head, tip } = headAndTipInk(cap, local);
+    if (head <= tip) {
+      throw new Error(`issue-6112: angled pin head is below its tip (head=${head} tip=${tip})`);
     }
   } finally {
     client.close();
