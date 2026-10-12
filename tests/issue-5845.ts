@@ -6,13 +6,18 @@
 
 import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { cmdId, tmpPath } from "./util.ts";
+import { cmdId, tmpPath, SLOW_BUILD_FACTOR } from "./util.ts";
 import { launchSumatra, sendCommand, waitForFrame, killAndWait } from "./win-automation.ts";
 import { getWindowText, sleep } from "./winapi.ts";
 
 const SRC_PDF = join(import.meta.dir, "issue-3219.pdf");
 
-async function waitForState(frame: number, titlePart: string, deletedPath: string, timeoutMs = 5000): Promise<void> {
+async function waitForState(
+  frame: number,
+  titlePart: string,
+  deletedPath: string,
+  timeoutMs = 5000 * SLOW_BUILD_FACTOR,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let title = "";
   while (Date.now() < deadline) {

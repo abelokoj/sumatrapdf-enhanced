@@ -1,11 +1,47 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { cmdId, runStandalone, SLOW_BUILD_FACTOR, tmpPath } from "./util.ts";
+import { basename, dirname, join } from "node:path";
+import { EXE, cmdId, runStandalone, SLOW_BUILD_FACTOR, tmpPath } from "./util.ts";
 import { killAndWait, launchControlled, sendCommandSync } from "./win-automation.ts";
 
 const TIMEOUT = 20_000 * SLOW_BUILD_FACTOR;
 const FONT_REVISION = "3d7870d8a8cdcd891e352e08f5c4ecc3451680f0";
 const FONT_SOURCE = join(import.meta.dir, "../src/fonts/markdown");
+const policyBase = "HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2";
+let savedBrowserPolicy: { key: string; value?: string }[] = [];
+function browserEnv(profile: string): Record<string, string> {
+  const env = {
+    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=0",
+    WEBVIEW2_USER_DATA_FOLDER: profile,
+  };
+  if (process.env.GITHUB_ACTIONS !== "true") return env;
+  // Elevated WebView2 ignores environment overrides. Scope machine policy to
+  // this test executable on the disposable runner, then restore it on exit.
+  const overrides = [
+    ["AdditionalBrowserArguments", env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS],
+    ["UserDataFolder", profile],
+  ];
+  for (const [setting, value] of overrides) {
+    const key = `${policyBase}\\${setting}`;
+    const previous = Bun.spawnSync(["reg.exe", "query", key, "/v", basename(EXE)]);
+    const match = /REG_SZ\s+([^\r\n]+)/.exec(previous.stdout.toString());
+    if (previous.exitCode === 0 && !match) throw new Error("Preserving unsupported pre-existing browser policy");
+    savedBrowserPolicy.push({ key, value: match?.[1] });
+    const write = Bun.spawnSync(["reg.exe", "add", key, "/v", basename(EXE), "/t", "REG_SZ", "/d", value, "/f"]);
+    if (write.exitCode !== 0) throw new Error(`Cannot configure browser test policy: ${write.stderr.toString()}`);
+  }
+  return env;
+}
+function restoreBrowserPolicy(): void {
+  for (const old of savedBrowserPolicy.reverse()) {
+    const args =
+      old.value === undefined
+        ? ["delete", old.key, "/v", basename(EXE), "/f"]
+        : ["add", old.key, "/v", basename(EXE), "/t", "REG_SZ", "/d", old.value, "/f"];
+    const restored = Bun.spawnSync(["reg.exe", ...args]);
+    if (restored.exitCode !== 0) throw new Error(`Cannot restore browser test policy: ${restored.stderr.toString()}`);
+  }
+  savedBrowserPolicy = [];
+}
 function cacheDir(profile: string): string {
   return join(profile, "markdown-fonts", FONT_REVISION);
 }
@@ -122,7 +158,7 @@ class Page {
   }
 }
 
-export async function testit(): Promise<void> {
+async function runFontTest(): Promise<void> {
   const dir = tmpPath("markdown-display-fonts");
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
@@ -146,10 +182,7 @@ export async function testit(): Promise<void> {
     );
     const cleanProfile = join(dir, requestedFont ? "browser-missing-font" : "browser-interface-font");
     const clean = await launchControlled(["-appdata", dir, markdown], {
-      env: {
-        WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=0",
-        WEBVIEW2_USER_DATA_FOLDER: cleanProfile,
-      },
+      env: browserEnv(cleanProfile),
     });
     let cleanPage: Page | undefined;
     try {
@@ -185,6 +218,7 @@ export async function testit(): Promise<void> {
       cleanPage?.close();
       clean.client.close();
       await killAndWait(clean.proc);
+      restoreBrowserPolicy();
     }
   }
   // Only the isolated test profile is seeded; production installs contain no font assets.
@@ -193,10 +227,7 @@ export async function testit(): Promise<void> {
   const firstProfile = join(dir, "browser-cached-fonts");
   const app = await launchControlled(["-appdata", dir, markdown], {
     saveSettings: true,
-    env: {
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=0",
-      WEBVIEW2_USER_DATA_FOLDER: firstProfile,
-    },
+    env: browserEnv(firstProfile),
   });
   let page: Page | undefined;
   try {
@@ -271,6 +302,7 @@ export async function testit(): Promise<void> {
     await app.client.quit().catch(() => {});
     app.client.close();
     await killAndWait(app.proc);
+    restoreBrowserPolicy();
   }
   const settings = readFileSync(prefs, "utf8");
   assert(settings.includes("FontName = Lora"), "rendering changed the saved font choice");
@@ -283,10 +315,7 @@ export async function testit(): Promise<void> {
   );
   const secondProfile = join(dir, "browser-dark-fonts");
   const reopened = await launchControlled(["-appdata", dir, markdown], {
-    env: {
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=0",
-      WEBVIEW2_USER_DATA_FOLDER: secondProfile,
-    },
+    env: browserEnv(secondProfile),
   });
   page = undefined;
   try {
@@ -307,9 +336,17 @@ export async function testit(): Promise<void> {
     page?.close();
     reopened.client.close();
     await killAndWait(reopened.proc);
+    restoreBrowserPolicy();
   }
   console.log(
     "markdown-display-fonts: optional cache, no implicit downloads, saved fonts, scaling, themes, selection, and narrow layout passed",
   );
+}
+export async function testit(): Promise<void> {
+  try {
+    await runFontTest();
+  } finally {
+    restoreBrowserPolicy();
+  }
 }
 if (import.meta.main) await runStandalone(testit);

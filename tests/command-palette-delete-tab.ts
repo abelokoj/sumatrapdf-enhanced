@@ -4,7 +4,7 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ControlClient, ControlCommand } from "./control.ts";
-import { ROOT, cmdId, runStandalone, tmpPath } from "./util.ts";
+import { ROOT, cmdId, runStandalone, tmpPath, pollUntil, SLOW_BUILD_FACTOR } from "./util.ts";
 import {
   enumWindows,
   getClassName,
@@ -90,13 +90,11 @@ export async function testit(): Promise<void> {
     await client.waitForRenderIdle();
     sendCommandSync(frame, cmdId("CmdDuplicateInNewWindow"));
 
-    const twoDeadline = Date.now() + 8000;
-    while (getFrames(proc.pid!).length < 2 && Date.now() < twoDeadline) {
-      await sleep(50);
-    }
-    if (getFrames(proc.pid!).length !== 2) {
-      throw new Error(`command-palette-delete-tab: expected 2 frames, got ${getFrames(proc.pid!).length}`);
-    }
+    await pollUntil(
+      () => getFrames(proc.pid!),
+      (frames) => frames.length === 2,
+      { timeoutMs: 8000 * SLOW_BUILD_FACTOR, error: (frames) => `expected 2 frames, got ${frames.length}` },
+    );
 
     sendCommand(frame, cmdId("CmdCommandPalette"));
     const openDeadline = Date.now() + 8000;
