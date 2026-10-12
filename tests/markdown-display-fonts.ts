@@ -29,7 +29,7 @@ function browserEnv(profile: string): Record<string, string> {
     const write = Bun.spawnSync(["reg.exe", "add", key, "/v", basename(EXE), "/t", "REG_SZ", "/d", value, "/f"]);
     if (write.exitCode !== 0) throw new Error(`Cannot configure browser test policy: ${write.stderr.toString()}`);
   }
-  return env;
+  return {};
 }
 function restoreBrowserPolicy(): void {
   for (const old of savedBrowserPolicy.reverse()) {
@@ -78,6 +78,17 @@ async function browserPort(profile: string): Promise<number> {
       if (port > 0 && port <= 65535) return port;
     }
     await Bun.sleep(100);
+  }
+  const log = join(profile, "native.log");
+  if (existsSync(log)) console.error(readFileSync(log, "utf8"));
+  if (process.env.GITHUB_ACTIONS === "true") {
+    const processes = Bun.spawnSync([
+      "powershell",
+      "-NoProfile",
+      "-Command",
+      "Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | Select-Object ParentProcessId,ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ]);
+    console.error("Browser processes:", processes.stdout.toString());
   }
   throw new Error(`Markdown browser did not report its debug port: ${profile}`);
 }
@@ -181,9 +192,13 @@ async function runFontTest(): Promise<void> {
         .replace("MathFontName = Libertinus Math", "MathFontName ="),
     );
     const cleanProfile = join(dir, requestedFont ? "browser-missing-font" : "browser-interface-font");
-    const clean = await launchControlled(["-appdata", dir, markdown], {
-      env: browserEnv(cleanProfile),
-    });
+    mkdirSync(cleanProfile, { recursive: true });
+    const clean = await launchControlled(
+      ["-appdata", dir, "-log-to-file", join(cleanProfile, "native.log"), markdown],
+      {
+        env: browserEnv(cleanProfile),
+      },
+    );
     let cleanPage: Page | undefined;
     try {
       cleanPage = await Page.connect(await browserPort(cleanProfile));

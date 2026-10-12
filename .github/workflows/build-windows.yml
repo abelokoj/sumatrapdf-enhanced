@@ -112,6 +112,8 @@ jobs:
           name: validation-x64-asan
           path: |
             tests/tmp
+            .work/tests-tmp/tmp/markdown-display-fonts/**/*.log
+            .work/tests-tmp/tmp/markdown-display-fonts/*.png
             .work/test-times.txt
           if-no-files-found: ignore
           retention-days: 14
