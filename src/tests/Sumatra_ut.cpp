@@ -86,6 +86,9 @@ void VirtCtrl_UnitTests();
 bool TableOfContents_UnitTestSnapshotNamedDest();
 bool MarkdownModel_UnitTestBrowserNavigationUrl();
 void MarkdownFonts_UnitTests();
+#ifdef _MSC_VER
+bool WebViewLoaderArgumentsTest();
+#endif
 bool MarkdownToc_UnitTestHtmlLinks();
 bool MarkdownToc_UnitTestHtmlHeadings();
 bool MarkdownToc_UnitTestMermaid();
@@ -725,6 +728,9 @@ int RunAppUnitTests(bool forAi) {
         if (!ThemeGetCount()) CreateThemeCommands();
         SetCurrentThemeFromSettings();
         MarkdownFonts_UnitTests();
+#ifdef _MSC_VER
+        utassert(WebViewLoaderArgumentsTest());
+#endif
         utassert(MarkdownToc_UnitTestHtmlLinks());
         utassert(MarkdownToc_UnitTestHtmlHeadings());
         utassert(MarkdownToc_UnitTestMermaid());
@@ -921,6 +927,9 @@ int RunAppUnitTests(bool forAi) {
     JsonTest();
     RefHoverTest();
     MarkdownFonts_UnitTests();
+#ifdef _MSC_VER
+    utassert(WebViewLoaderArgumentsTest());
+#endif
     SettingsUtilTest();
     SimpleLogTest();
     SquareTreeTest();

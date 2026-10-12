@@ -11,6 +11,8 @@
 #include <wchar.h>
 
 #include "WebView2.h"
+#include "WebView2EnvironmentOptions.h"
+#include <wrl/client.h>
 
 namespace {
 
@@ -186,6 +188,45 @@ WCHAR* LoaderOverrideDup(const WCHAR* environment, const WCHAR* property) {
         result = nullptr;
     }
     return result;
+}
+
+HRESULT AppendBrowserArguments(ICoreWebView2EnvironmentOptions* options, const WCHAR* arguments) {
+    if (!arguments || !arguments[0]) {
+        return S_OK;
+    }
+    LPWSTR original = nullptr;
+    HRESULT hr = options->get_AdditionalBrowserArguments(&original);
+    if (FAILED(hr)) {
+        CoTaskMemFree(original);
+        return hr;
+    }
+    size_t originalLen = original ? wcslen(original) : 0;
+    size_t cap = originalLen + wcslen(arguments) + 2;
+    WCHAR* combined = (WCHAR*)malloc(cap * sizeof(WCHAR));
+    if (!combined) {
+        CoTaskMemFree(original);
+        return E_OUTOFMEMORY;
+    }
+    swprintf_s(combined, cap, L"%s%s%s", original ? original : L"", originalLen ? L" " : L"", arguments);
+    hr = options->put_AdditionalBrowserArguments(combined);
+    free(combined);
+    CoTaskMemFree(original);
+    return hr;
+}
+
+WCHAR* MachineBrowserArgumentsDup() {
+    WCHAR appId[256];
+    WCHAR exeName[MAX_PATH];
+    const WCHAR* ids[3];
+    int count = LoaderOverrideIds(appId, exeName, ids);
+    const WCHAR* key = L"Software\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments";
+    for (int i = 0; i < count; i++) {
+        WCHAR* value = RegistryValueDup(HKEY_LOCAL_MACHINE, key, ids[i]);
+        if (value) {
+            return value;
+        }
+    }
+    return nullptr;
 }
 
 struct RuntimeChannel {
@@ -713,6 +754,22 @@ STDAPI CreateCoreWebView2EnvironmentWithOptions(PCWSTR browserExecutableFolder, 
         return E_POINTER;
     }
 
+    // The internal runtime entry point doesn't apply machine argument policy.
+    // Pass trusted HKLM options through the API, including for elevated hosts.
+    auto defaultOptions = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+    if (!environmentOptions) {
+        if (!defaultOptions) {
+            return E_OUTOFMEMORY;
+        }
+        environmentOptions = defaultOptions.Get();
+    }
+    WCHAR* machineArguments = MachineBrowserArgumentsDup();
+    HRESULT argumentsResult = AppendBrowserArguments(environmentOptions, machineArguments);
+    free(machineArguments);
+    if (FAILED(argumentsResult)) {
+        return argumentsResult;
+    }
+
     WCHAR* userDataOverride = LoaderOverrideDup(L"WEBVIEW2_USER_DATA_FOLDER", L"UserDataFolder");
     if (userDataOverride) {
         userDataFolder = userDataOverride;
@@ -840,3 +897,29 @@ STDAPI CompareBrowserVersions(PCWSTR version1, PCWSTR version2, int* result) {
     *result = channel1 == channel2 ? 0 : (channel1 > channel2 ? -1 : 1);
     return S_OK;
 }
+
+#ifdef DEBUG
+bool WebViewLoaderArgumentsTest() {
+    const WCHAR* originalArguments[] = {L"", L"--disable-background-networking"};
+    const WCHAR* overrideArguments = L"--remote-debugging-port=0";
+    for (const WCHAR* original : originalArguments) {
+        auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+        if (!options || FAILED(options->put_AdditionalBrowserArguments(original)) ||
+            FAILED(AppendBrowserArguments(options.Get(), overrideArguments))) {
+            return false;
+        }
+        LPWSTR actual = nullptr;
+        HRESULT hr = options->get_AdditionalBrowserArguments(&actual);
+        bool ok = SUCCEEDED(hr) && actual && wcsstr(actual, overrideArguments) &&
+                  (!original[0] || wcsstr(actual, original));
+        CoTaskMemFree(actual);
+        if (!ok) {
+            return false;
+        }
+        if (FAILED(AppendBrowserArguments(options.Get(), nullptr))) {
+            return false;
+        }
+    }
+    return true;
+}
+#endif
