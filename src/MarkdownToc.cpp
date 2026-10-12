@@ -411,14 +411,7 @@ body { box-sizing: border-box; padding-top: 1rem; }
 pre.mermaid { background: transparent; text-align: center; overflow: visible; }
 pre.mermaid svg { max-width: 100%%; height: auto; }
 math { font-family: var(--enhanced-markdown-math-font-family); }
-#enhanced-markdown-controls { user-select: none; display: flex; flex-wrap: wrap; align-items: center; gap: .6rem;
-  padding: .6rem 0; margin-bottom: 1rem; border-bottom: 1px solid var(--color-border);
-  font-family: var(--enhanced-ui-font-family); font-size: var(--enhanced-ui-font-size); }
-#enhanced-markdown-font { max-width: 100%%; padding: .35em .6em; border-radius: .4em;
-  border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text);
-  font: inherit; }
-#enhanced-markdown-font:focus-visible { outline: 2px solid var(--color-link); outline-offset: 2px; }
-@media print { #enhanced-markdown-controls { user-select: none; display: none; } }
+
 )";
 
 static const char* kMarkdownScrollbarCss = R"(
@@ -803,7 +796,6 @@ Str MarkdownToHtmlPage(Str markdown) {
         fmt("</style><link id='enhanced-markdown-font-css' rel='stylesheet' "
             "href='https://sumatrapdf.markdown/_enhanced_fonts/style-%d.css?v=%u'></head><body>",
             fontIndex, GetTickCount()));
-    html.Append(MarkdownFontPickerHtml());
     html.Append(StrL("<main id='enhanced-markdown-content'>"));
     html.Append(ToStr(rewritten));
     html.Append(StrL("</main>"));

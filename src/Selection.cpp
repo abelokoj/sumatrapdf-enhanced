@@ -554,7 +554,7 @@ static void PaintTouchSelHandles(MainWindow* win, Gfx* gfx) {
     gfx->FillEllipse(end, col);
 }
 
-static u8 SelectionColorAlpha(const ParsedColor* parsed) {
+u8 SelectionColorAlpha(const ParsedColor* parsed) {
     u8 alpha = GetAlpha(parsed->col);
     if (alpha != 0) return alpha;
     // A six-digit color uses the historical overlay opacity. An explicit

@@ -13,6 +13,12 @@
 #include "Theme.h"
 #include "DocController.h"
 #include "EngineBase.h"
+#include "TextSelection.h"
+#include "Commands.h"
+#include "Translations.h"
+enum class TouchSelHandle;
+enum class SelectionDragEdge;
+#include "Selection.h"
 #include "RefHover.h"
 #if IS_DEBUG
 #include "base/tests/UtAssert.h"
@@ -32,17 +38,16 @@ static bool PopupClientToPagePt(RefHoverState* s, int clientX, int clientY, Poin
     if (clientX < border || clientY < border) {
         return false;
     }
-    // When a column-wrap continuation is stitched below displayed.region in
-    // the bitmap (see RefHoverRender.cpp's StackPixmapsVertically), a click
-    // there falls outside what displayed.region maps to — the formula below
-    // would silently produce a page point in the wrong place. Reject clicks
-    // past the primary crop's rendered height rather than mis-hit-test.
-    float regionPixH = s->displayed.region.dy * zoom;
-    if ((float)(clientY - border) >= regionPixH || (float)(clientX - border) >= s->displayed.region.dx * zoom) {
-        return false;
+    RectF region = s->displayed.region;
+    float y = (float)(clientY - border) / zoom;
+    if (y >= region.dy) {
+        y -= region.dy;
+        region = s->displayed.continuationRegion;
     }
-    ptOut.x = s->displayed.region.x + ((float)(clientX - border) / zoom);
-    ptOut.y = s->displayed.region.y + ((float)(clientY - border) / zoom);
+    float x = (float)(clientX - border) / zoom;
+    if (region.IsEmpty() || y >= region.dy || x >= region.dx) return false;
+    ptOut.x = region.x + x;
+    ptOut.y = region.y + y;
     return true;
 }
 
@@ -67,6 +72,98 @@ static IPageDestination* LaunchLinkAtPopupPt(RefHoverState* s, int clientX, int 
         return nullptr;
     }
     return LaunchLinkAtPagePt(s, pagePt);
+}
+
+bool RefHoverHasSelection(RefHoverState* s) {
+    return s && s->selection && s->selection->result.len > 0;
+}
+
+void RefHoverClearSelection(RefHoverState* s) {
+    if (!s) return;
+    s->selecting = false;
+    s->selectingWords = false;
+    if (s->hwndPopup && GetCapture() == s->hwndPopup) ReleaseCapture();
+    delete s->selection;
+    s->selection = nullptr;
+}
+
+static bool RefHoverCopySelection(RefHoverState* s) {
+    if (!RefHoverHasSelection(s)) return false;
+    Str text = s->selection->ExtractText(StrL("\r\n"));
+    bool copied = CopyTextToClipboard(text);
+    str::Free(text);
+    return copied;
+}
+
+static void RefHoverSelectVisible(RefHoverState* s) {
+    if (!s || !s->hitEngine || s->displayed.destPage <= 0 || s->renderInFlight) return;
+    int border = DpiScale(kRefHoverBorder);
+    Rect client = HwndClientRect(s->hwndPopup);
+    float zoom = s->displayed.baseZoom * s->displayed.userZoom;
+    if (zoom <= 0.f) return;
+    float visibleDx = std::max(0, client.dx - 2 * border) / zoom;
+    float visibleDy = std::max(0, client.dy - 2 * border) / zoom;
+    RectF primary = s->displayed.region;
+    primary.dx = std::min(primary.dx, visibleDx);
+    primary.dy = std::min(primary.dy, visibleDy);
+    RectF continuation = s->displayed.continuationRegion;
+    continuation.dx = std::min(continuation.dx, visibleDx);
+    continuation.dy = std::min(continuation.dy, std::max(0.f, visibleDy - s->displayed.region.dy));
+    int n = 0;
+    Rect* coords = nullptr;
+    s->hitEngine->GetTextForPage(s->displayed.destPage, &n, &coords);
+    int first = -1, last = -1;
+    for (int i = 0; coords && i < n; i++) {
+        RectF glyph = ToRectF(coords[i]);
+        if (glyph.IsEmpty() || (glyph.Intersect(primary).IsEmpty() && glyph.Intersect(continuation).IsEmpty()))
+            continue;
+        if (first < 0) first = i;
+        last = i;
+    }
+    if (first < 0) return;
+    RefHoverClearSelection(s);
+    s->selection = new TextSelection(s->hitEngine);
+    s->selection->StartAt(s->displayed.destPage, first);
+    s->selection->SelectUpTo(s->displayed.destPage, last + 1);
+    KillTimer(s->hwndCanvas, kRefHoverHideTimerID);
+    HwndInvalidate(s->hwndPopup, false);
+}
+
+static void RefHoverPaintSelection(HDC hdc, RefHoverState* s) {
+    if (!RefHoverHasSelection(s) || s->renderInFlight) return;
+    ParsedColor* color = GetPrefsColor(gSettings->fixedPageUI.selectionColor);
+    Gdiplus::SolidBrush brush(Gdiplus::Color(SelectionColorAlpha(color), GetRValue(color->col), GetGValue(color->col),
+                                             GetBValue(color->col)));
+    Gdiplus::Graphics graphics(hdc);
+    float zoom = s->displayed.baseZoom * s->displayed.userZoom;
+    int border = DpiScale(kRefHoverBorder);
+    Rect client = HwndClientRect(s->hwndPopup);
+    graphics.SetClip(
+        Gdiplus::Rect(border, border, std::max(0, client.dx - 2 * border), std::max(0, client.dy - 2 * border)));
+    auto paint = [&](RectF region, float offsetY) {
+        if (region.IsEmpty()) return;
+        auto& selected = s->selection->result;
+        for (int i = 0; i < selected.len; i++) {
+            if (selected.pages[i] != s->displayed.destPage) continue;
+            RectF clipped = ToRectF(selected.rects[i]).Intersect(region);
+            if (clipped.IsEmpty()) continue;
+            graphics.FillRectangle(&brush, border + (clipped.x - region.x) * zoom,
+                                   border + offsetY + (clipped.y - region.y) * zoom, clipped.dx * zoom,
+                                   clipped.dy * zoom);
+        }
+    };
+    paint(s->displayed.region, 0);
+    paint(s->displayed.continuationRegion, s->displayed.region.dy * zoom);
+}
+
+static void RefHoverExtendSelection(RefHoverState* s, Point point) {
+    PointF page;
+    if (!s->selection || !PopupClientToPagePt(s, point.x, point.y, page)) return;
+    if (s->selectingWords)
+        s->selection->SelectWordsUpTo(s->displayed.destPage, page.x, page.y);
+    else
+        s->selection->SelectUpTo(s->displayed.destPage, page.x, page.y);
+    HwndInvalidate(s->hwndPopup, false);
 }
 
 static void RefHoverRoundPopup(HWND hwnd) {
@@ -111,6 +208,7 @@ static void RefHoverDrawEdge(HDC hdc, HWND hwnd) {
 }
 
 static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    DpiScope dpi(hwnd);
     RefHoverState* state = (RefHoverState*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     if (msg == WM_NCCALCSIZE) {
         return 0;
@@ -139,6 +237,10 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         if (state && state->resizing) RefHoverResizePopup(state);
         return 0;
     }
+    if (msg == WM_ACTIVATE && LOWORD(wp) == WA_INACTIVE && state) {
+        RefHoverHide(state, state->hwndCanvas);
+        return 0;
+    }
     if (msg == WM_SETCURSOR) {
         if (LOWORD(lp) != HTCLIENT) {
             return DefWindowProc(hwnd, msg, wp, lp);
@@ -147,8 +249,14 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         POINT p;
         if (s && GetCursorPos(&p)) {
             ScreenToClient(hwnd, &p);
-            if (LaunchLinkAtPopupPt(s, p.x, p.y)) {
+            if (!s->selecting && LaunchLinkAtPopupPt(s, p.x, p.y)) {
                 SetCursorCached(IDC_HAND);
+                return TRUE;
+            }
+            PointF page;
+            if (PopupClientToPagePt(s, p.x, p.y, page) &&
+                (s->selecting || (s->hitEngine && s->hitEngine->GetTextForPage(s->displayed.destPage).len > 0))) {
+                SetCursorCached(IDC_IBEAM);
                 return TRUE;
             }
         }
@@ -178,6 +286,7 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             }
         }
 
+        RefHoverPaintSelection(hdc, state);
         RefHoverDrawEdge(hdc, hwnd);
         EndPaint(hwnd, &ps);
         return 0;
@@ -193,16 +302,91 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         }
         return 0;
     }
-    if (msg == WM_LBUTTONDOWN) {
-        RefHoverState* s = (RefHoverState*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-        if (s) {
-            int cx = GET_X_LPARAM(lp);
-            int cy = GET_Y_LPARAM(lp);
-            IPageDestination* dest = LaunchLinkAtPopupPt(s, cx, cy);
-            if (dest) {
-                RefHoverHandlePopupClick(s, dest);
-            }
+    if ((msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) && state) {
+        Point point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        PointF page;
+        if (!PopupClientToPagePt(state, point.x, point.y, page)) return 0;
+        bool extend = (wp & MK_SHIFT) && RefHoverHasSelection(state);
+        if (!extend) {
+            RefHoverClearSelection(state);
+            state->selection = new TextSelection(state->hitEngine);
+            state->selection->StartAt(state->displayed.destPage, page.x, page.y);
         }
+        state->selectingWords = msg == WM_LBUTTONDBLCLK;
+        state->selectionDragged = extend || state->selectingWords;
+        if (state->selectingWords)
+            state->selection->SelectWordAt(state->displayed.destPage, page.x, page.y);
+        else
+            state->selection->SelectUpTo(state->displayed.destPage, page.x, page.y);
+        state->selectionPress = point;
+        state->selecting = true;
+        KillTimer(state->hwndCanvas, kRefHoverHideTimerID);
+        SetFocus(hwnd);
+        SetCapture(hwnd);
+        HwndInvalidate(hwnd, false);
+        return 0;
+    }
+    if (msg == WM_MOUSEMOVE && state && state->selecting) {
+        Point point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        if (abs(point.x - state->selectionPress.x) >= DpiGetSystemMetrics(SM_CXDRAG) ||
+            abs(point.y - state->selectionPress.y) >= DpiGetSystemMetrics(SM_CYDRAG)) {
+            state->selectionDragged = true;
+            RefHoverExtendSelection(state, point);
+        }
+        return 0;
+    }
+    if (msg == WM_LBUTTONUP && state && state->selecting) {
+        Point point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        if (state->selectionDragged) RefHoverExtendSelection(state, point);
+        state->selecting = false;
+        if (GetCapture() == hwnd) ReleaseCapture();
+        if (!state->selectionDragged) {
+            IPageDestination* link = LaunchLinkAtPopupPt(state, point.x, point.y);
+            if (link) RefHoverHandlePopupClick(state, link);
+        }
+        if (!RefHoverHasSelection(state)) RefHoverScheduleHide(state, state->hwndCanvas, 300);
+        return 0;
+    }
+    if ((msg == WM_CAPTURECHANGED || msg == WM_CANCELMODE) && state) {
+        state->selecting = false;
+        return 0;
+    }
+    if (msg == WM_COPY && state) {
+        RefHoverCopySelection(state);
+        return 0;
+    }
+    if ((msg == WM_COMMAND || msg == WM_KEYDOWN) && state) {
+        int command = msg == WM_COMMAND ? LOWORD(wp) : 0;
+        if (msg == WM_KEYDOWN) {
+            if (wp == VK_ESCAPE) {
+                RefHoverHide(state, state->hwndCanvas);
+                return 0;
+            }
+            if (IsCtrlPressed() && wp == 'C') command = CmdCopySelection;
+            if (IsCtrlPressed() && wp == 'A') command = CmdSelectAll;
+        }
+        if (command == CmdCopySelection) {
+            RefHoverCopySelection(state);
+            return 0;
+        }
+        if (command == CmdSelectAll) {
+            RefHoverSelectVisible(state);
+            return 0;
+        }
+    }
+    if (msg == WM_CONTEXTMENU && state) {
+        HMENU menu = CreatePopupMenu();
+        AppendMenuW(menu, MF_STRING | (RefHoverHasSelection(state) ? 0 : MF_GRAYED), CmdCopySelection,
+                    CWStrTemp(Tr("Copy")));
+        AppendMenuW(menu, MF_STRING, CmdSelectAll, CWStrTemp(Tr("Select All")));
+        POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        if (point.x == -1 && point.y == -1) {
+            point = {DpiScale(20), DpiScale(20)};
+            ClientToScreen(hwnd, &point);
+        }
+        UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, hwnd, nullptr);
+        DestroyMenu(menu);
+        if (command) SendMessageW(hwnd, WM_COMMAND, command, 0);
         return 0;
     }
     return DefWindowProc(hwnd, msg, wp, lp);
@@ -213,6 +397,7 @@ static bool RegisterClassIfNeeded() {
         return gClassRegistered > 0;
     }
     WNDCLASSW wc{};
+    wc.style = CS_DBLCLKS;
     wc.lpfnWndProc = RefHoverWndProc;
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = kRefHoverClass;
@@ -319,6 +504,7 @@ bool RefHoverRerenderDisplayedRegion(RefHoverState* s, EngineBase* engine, int p
     if (zoom <= 0.f) {
         return false;
     }
+    if (s->displayed.destPage != page) RefHoverClearSelection(s);
     s->displayed.destPage = page;
     s->displayed.region = region;
     s->displayed.continuationRegion = {};

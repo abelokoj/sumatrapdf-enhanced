@@ -52,6 +52,7 @@ void RefHoverOnTimer(RefHoverState* s, HWND hwndCanvas, EngineBase* engine, floa
     if (!s || !engine || s->pending.destPage <= 0) {
         return;
     }
+    RefHoverClearSelection(s);
     if (s->hitEngine != engine) {
         if (s->hitEngine) {
             s->hitEngine->Release();

@@ -72,7 +72,6 @@ struct MarkdownModel : DocController {
     Str GetDataForUrl(Str url);
     void DownloadData(Str url, Str data);
     void UpdateTheme();
-    void SetDisplayFont(int index);
 
     Str fileName;
     Str baseDir;
@@ -106,6 +105,7 @@ struct MarkdownModel : DocController {
     StrVec htmlScrollUrls;
     Vec<PointF> htmlScrollPositions;
     Vec<MarkdownCacheEntry*> urlDataCache;
+    Vec<MarkdownCacheEntry*> fontDataCache;
     Arena* poolAlloc = nullptr;
 
     bool Load(Str fileName);

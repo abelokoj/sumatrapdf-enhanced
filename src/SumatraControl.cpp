@@ -1994,6 +1994,10 @@ static void ExecuteControlRequest(ControlRequest* req) {
                 AppendTestResult(req, 0, StrL("OK"));
                 break;
             }
+            if (str::EqI(name, StrL("settings-font-state"))) {
+                AppendTestResult(req, 0, SettingsFontStateTemp());
+                break;
+            }
             int cmdId = GetCommandIdByName(name);
             if (cmdId <= 0 && str::IndexOfChar(name, ' ') >= 0) {
                 CustomCommand* custom = CreateCommandFromDefinition(name);

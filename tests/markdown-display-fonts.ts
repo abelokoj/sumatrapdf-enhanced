@@ -1,10 +1,35 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { createServer } from "node:net";
 import { cmdId, runStandalone, SLOW_BUILD_FACTOR, tmpPath } from "./util.ts";
 import { killAndWait, launchControlled, sendCommandSync } from "./win-automation.ts";
 
 const TIMEOUT = 20_000 * SLOW_BUILD_FACTOR;
+const FONT_REVISION = "3d7870d8a8cdcd891e352e08f5c4ecc3451680f0";
+const FONT_SOURCE = join(import.meta.dir, "../src/fonts/markdown");
+function cacheDir(profile: string): string {
+  return join(profile, "markdown-fonts", FONT_REVISION);
+}
+function seedFontCache(profile: string): void {
+  const source = JSON.parse(readFileSync(join(FONT_SOURCE, "manifest.json"), "utf8"));
+  const browser = JSON.parse(readFileSync(join(FONT_SOURCE, "browser/manifest.json"), "utf8"));
+  const files = source.packages.flatMap((p: { files: { file: string }[] }) => p.files.map((f) => f.file)) as string[];
+  const paths = files.filter(
+    (f) =>
+      f.startsWith("lora/otf/") || f.startsWith("libertinus/") || f.endsWith("License.txt") || f.endsWith("OFL.txt"),
+  );
+  paths.push("new-computer-modern/GUST-FONT-LICENSE.txt");
+  paths.push(...browser.files.map((f: { file: string }) => `browser/${f.file}`));
+  for (const file of paths) {
+    const dest = join(cacheDir(profile), file);
+    mkdirSync(dirname(dest), { recursive: true });
+    copyFileSync(join(FONT_SOURCE, file), dest);
+  }
+}
+function cacheIsEmpty(profile: string): boolean {
+  const cache = join(profile, "markdown-fonts");
+  return !existsSync(cache) || readdirSync(cache).length === 0;
+}
 function assert(ok: unknown, message: string): asserts ok {
   if (!ok) throw new Error(`markdown-display-fonts: ${message}`);
 }
@@ -94,13 +119,64 @@ export async function testit(): Promise<void> {
   const markdown = join(dir, "font-sample.md");
   writeFileSync(
     markdown,
-    "# Markdown typography\n\nReadable text with **bold**, *italic*, and ***bold italic***.\n\n## Table and code\n\n| Font | Status |\n| --- | --- |\n| Bundled fonts | Available offline |\n\n```cpp\nint answer = 42;\n```\n\n[Jump to notes](#notes)\n\n## Notes\n\nLast paragraph.\n",
+    "# Markdown typography\n\nReadable text with **bold**, *italic*, and ***bold italic***.\n\n## Table and code\n\n| Font | Status |\n| --- | --- |\n| Downloaded fonts | Available offline |\n\n```cpp\nint answer = 42;\n```\n\n[Jump to notes](#notes)\n\n## Numbered steps\n\n1. **Copy two files.** Keep this text on the same line as its number.\n\n2. **Add includes.** Keep this text on the same line too.\n\n   ```cpp\n   int example = 1;\n   ```\n\n   - Nested step.\n\n3. **Build.** Complete the steps.\n\n## Notes\n\nLast paragraph.\n",
   );
   const prefs = join(dir, "SumatraPDFEnhanced-settings.txt");
   writeFileSync(
     prefs,
     "UiLanguage = en\nCheckForUpdates = false\nRestoreSession = false\nReuseInstance = false\nUIFontSize = 16\nInterfaceScale = 100\nTheme = Sumatra Light\nDocumentColorsFollowTheme = smart\nMarkdownUI [\nUseFixedPageUI = false\nFontName = Lora\nMathFontName = Libertinus Math\n]\n",
   );
+  const fontPrefs = readFileSync(prefs, "utf8");
+  for (const requestedFont of ["", "Lora"]) {
+    writeFileSync(
+      prefs,
+      fontPrefs
+        .replace("FontName = Lora", `FontName = ${requestedFont}`)
+        .replace("MathFontName = Libertinus Math", "MathFontName ="),
+    );
+    const cleanPort = await port();
+    const clean = await launchControlled(["-appdata", dir, markdown], {
+      env: { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cleanPort}` },
+    });
+    let cleanPage: Page | undefined;
+    try {
+      cleanPage = await Page.connect(cleanPort);
+      await cleanPage.until("document.querySelector('main p') && document.readyState === 'complete'");
+      assert(
+        await cleanPage.eval("!document.getElementById('enhanced-markdown-font')"),
+        "document still contains a font dropdown",
+      );
+      assert(
+        await cleanPage.eval(`(() => {
+          const items = Array.from(document.querySelectorAll('main > ol > li'));
+          return items.length === 3 && items.every(item => {
+            const paragraph = item.querySelector(':scope > p');
+            if (!paragraph) return false;
+            const range = document.createRange();
+            range.selectNodeContents(paragraph);
+            const firstLine = range.getClientRects()[0];
+            const fontSize = parseFloat(getComputedStyle(item).fontSize);
+            return firstLine && firstLine.top - item.getBoundingClientRect().top < fontSize / 2;
+          });
+        })()`),
+        "light-mode numbered list text starts below its number",
+      );
+      await cleanPage.eval("document.fonts.ready");
+      assert(await cleanPage.eval("Array.from(document.fonts).length===0"), "opening Markdown loaded an optional font");
+      assert(
+        await cleanPage.eval("document.querySelector('main').textContent.includes('Last paragraph.')"),
+        "missing fonts left the Markdown unreadable",
+      );
+      assert(cacheIsEmpty(dir), "opening Markdown downloaded font assets");
+    } finally {
+      cleanPage?.close();
+      clean.client.close();
+      await killAndWait(clean.proc);
+    }
+  }
+  // Only the isolated test profile is seeded; production installs contain no font assets.
+  seedFontCache(dir);
+  writeFileSync(prefs, fontPrefs);
   const firstPort = await port();
   const app = await launchControlled(["-appdata", dir, markdown], {
     saveSettings: true,
@@ -110,21 +186,12 @@ export async function testit(): Promise<void> {
   try {
     page = await Page.connect(firstPort);
     await page.command("Log.enable");
-    await page.until("document.getElementById('enhanced-markdown-font') && document.readyState === 'complete'");
-    const names = await page.eval(
-      "Array.from(document.getElementById('enhanced-markdown-font').options).map(o=>o.text)",
-    );
+    await page.until("document.querySelector('main p') && document.readyState === 'complete'");
     assert(
-      names.length === 10 &&
-        names.includes("Lora") &&
-        names.includes("Libertinus Serif") &&
-        names.includes("New Computer Modern"),
-      `missing font choices: ${names}`,
+      await page.eval("!document.getElementById('enhanced-markdown-font')"),
+      "font controls should be in Advanced Settings",
     );
-    assert(
-      await page.eval("document.getElementById('enhanced-markdown-font').value==='1'"),
-      "Settings default was not used",
-    );
+    await page.until("getComputedStyle(document.querySelector('main p')).fontFamily.includes('EnhancedMDLora')");
     const families = [
       "EnhancedMDLora",
       "EnhancedMDLibertinus",
@@ -138,7 +205,7 @@ export async function testit(): Promise<void> {
     ];
     for (let index = 1; index <= families.length; index++) {
       await page.eval(
-        `(function(){var s=document.getElementById('enhanced-markdown-font');s.value='${index}';s.dispatchEvent(new Event('change'));})();`,
+        `document.getElementById('enhanced-markdown-font-css').href='https://sumatrapdf.markdown/_enhanced_fonts/style-${index}.css?v='+Date.now()`,
       );
       const family = families[index - 1];
       console.log(`Loading ${family}`);
@@ -146,10 +213,10 @@ export async function testit(): Promise<void> {
       const loaded = await page.eval(
         `(async function(){await document.fonts.load('16px ${family}');await document.fonts.load('bold 16px ${family}');await document.fonts.ready;return Array.from(document.fonts).some(f=>f.family==='${family}'&&f.status==='loaded');})();`,
       );
-      assert(loaded, `${family} was not loaded from the embedded font resource`);
+      assert(loaded, `${family} was not loaded from the downloaded font cache`);
     }
     await page.eval(
-      "(function(){var s=document.getElementById('enhanced-markdown-font');s.value='2';s.dispatchEvent(new Event('change'));})();",
+      "document.getElementById('enhanced-markdown-font-css').href='https://sumatrapdf.markdown/_enhanced_fonts/style-2.css?v='+Date.now()",
     );
     await page.until("getComputedStyle(document.querySelector('main p')).fontFamily.includes('EnhancedMDLibertinus')");
     assert(
@@ -169,10 +236,6 @@ export async function testit(): Promise<void> {
     }
     sendCommandSync(app.frame, cmdId("CmdSelectAll"));
     await page.until("window.getSelection().toString().includes('Last paragraph.')");
-    assert(
-      await page.eval("!window.getSelection().toString().includes('Follow interface font')"),
-      "Select all copied the font selector",
-    );
     await page.eval("window.getSelection().removeAllRanges()");
     await page.capture(join(dir, "light.png"));
     await page.command("Emulation.setDeviceMetricsOverride", {
@@ -182,28 +245,10 @@ export async function testit(): Promise<void> {
       mobile: false,
     });
     assert(
-      await page.eval("document.getElementById('enhanced-markdown-font').getBoundingClientRect().right<=innerWidth"),
-      "font dropdown overflows a narrow window",
-    );
-    await page.command("Emulation.setFocusEmulationEnabled", { enabled: true });
-    await page.command("Input.dispatchKeyEvent", {
-      type: "keyDown",
-      key: "Tab",
-      code: "Tab",
-      windowsVirtualKeyCode: 9,
-    });
-    await page.command("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
-    await page.eval("document.getElementById('enhanced-markdown-font').focus()");
-    assert(
-      await page.eval("getComputedStyle(document.getElementById('enhanced-markdown-font')).outlineStyle!=='none'"),
-      "font dropdown has no keyboard focus indicator",
+      await page.eval("document.querySelector('main').getBoundingClientRect().right<=innerWidth"),
+      "Markdown content overflows a narrow window",
     );
     await page.capture(join(dir, "narrow.png"));
-    const deadline = Date.now() + TIMEOUT;
-    while (!readFileSync(prefs, "utf8").includes("FontName = Libertinus Serif")) {
-      assert(Date.now() < deadline, "page font selection was not persisted");
-      await Bun.sleep(100);
-    }
   } finally {
     if (page?.logs.some((entry) => entry.level === "warning")) console.log(JSON.stringify(page.logs));
     page?.close();
@@ -212,10 +257,11 @@ export async function testit(): Promise<void> {
     await killAndWait(app.proc);
   }
   const settings = readFileSync(prefs, "utf8");
-  assert(settings.includes("FontName = Libertinus Serif"), "saved font choice was lost on exit");
+  assert(settings.includes("FontName = Lora"), "rendering changed the saved font choice");
   writeFileSync(
     prefs,
     settings
+      .replace("FontName = Lora", "FontName = Libertinus Serif")
       .replace(/^Theme\s*=.*$/m, "Theme = Sumatra Dark")
       .replace(/^InterfaceScale\s*=.*$/m, "InterfaceScale = 200"),
   );
@@ -226,11 +272,7 @@ export async function testit(): Promise<void> {
   page = undefined;
   try {
     page = await Page.connect(secondPort);
-    await page.until("document.getElementById('enhanced-markdown-font') && document.readyState === 'complete'");
-    assert(
-      await page.eval("document.getElementById('enhanced-markdown-font').value==='2'"),
-      "last font choice was not restored",
-    );
+    await page.until("document.querySelector('main p') && document.readyState === 'complete'");
     await page.until("getComputedStyle(document.querySelector('main p')).fontFamily.includes('EnhancedMDLibertinus')");
     assert(
       await page.eval("getComputedStyle(document.body).backgroundColor==='rgb(30, 30, 30)'"),
@@ -248,7 +290,7 @@ export async function testit(): Promise<void> {
     await killAndWait(reopened.proc);
   }
   console.log(
-    "markdown-display-fonts: bundled fonts, page dropdown, persistence, scaling, themes, selection, and narrow layout passed",
+    "markdown-display-fonts: optional cache, no implicit downloads, saved fonts, scaling, themes, selection, and narrow layout passed",
   );
 }
 if (import.meta.main) await runStandalone(testit);

@@ -6,6 +6,7 @@
 #include "base/AutoWin.h"
 #include "base/File.h"
 #include "base/Timer.h"
+#include "base/UITask.h"
 #include "base/Pixmap.h"
 
 #include "gui/Dpi.h"
@@ -634,8 +635,29 @@ struct SettingsViewport : ScrollBox {
 
 // Section headers, labels and OK/Cancel are VirtCtrl; layout/zoom/command
 // combos and the checkboxes are HWNDs. Same WindowBase layout as Inverse Search.
+// A download may finish after Settings closes; only the UI thread uses wnd.
+struct SettingsFontDownload {
+    SettingsWnd* wnd = nullptr;
+    Str cacheRoot;
+    Str text;
+    Str math;
+    Str error;
+    bool success = false;
+    ~SettingsFontDownload() {
+        str::Free(cacheRoot);
+        str::Free(text);
+        str::Free(math);
+        str::Free(error);
+    }
+};
+static const char* kMarkdownDownloadNotice =
+    "Optional fonts download from GitHub when you click OK and remain available offline. These fonts affect Markdown "
+    "only.";
+static void RunSettingsFontDownload(SettingsFontDownload*);
+
 struct SettingsWnd : WindowBase {
     ~SettingsWnd() override {
+        if (fontDownload) fontDownload->wnd = nullptr;
         str::Free(colorFile);
         str::Free(cacheKey);
         for (auto& value : savedValues) str::Free(value.text);
@@ -669,6 +691,8 @@ struct SettingsWnd : WindowBase {
     DropDown* dropUiFamily = nullptr;
     DropDown* dropMarkdownFamily = nullptr;
     DropDown* dropMarkdownMath = nullptr;
+    VirtText* fontDownloadStatus = nullptr;
+    SettingsFontDownload* fontDownload = nullptr;
     DropDown* dropInterfaceScale = nullptr;
     DropDown* dropUiSize = nullptr;
     DropDown* dropTreeSize = nullptr;
@@ -879,6 +903,12 @@ void SettingsWnd::RestoreDataFolder(VirtMouseEvent*) {
 
 static SettingsWnd* gSettingsWnd = nullptr;
 
+TempStr SettingsFontStateTemp() {
+    return fmt("busy=%d\nfont=%s\nstatus=%s", gSettingsWnd && gSettingsWnd->fontDownload ? 1 : 0,
+               gSettings ? gSettings->markdownUI.fontName : Str{},
+               gSettingsWnd && gSettingsWnd->fontDownloadStatus ? gSettingsWnd->fontDownloadStatus->s : Str{});
+}
+
 static TempStr SettingsCacheKey(MainWindow* win) {
     double values[] = {gSettings->defaultZoomFloat,
                        gSettings->interfaceScale,
@@ -1070,11 +1100,20 @@ void SettingsWnd::OnRememberOpenedChanged() {
 }
 
 void SettingsWnd::OnCancel(VirtMouseEvent*) {
+    if (fontDownload) {
+        fontDownload->wnd = nullptr;
+        fontDownload = nullptr;
+        dropMarkdownFamily->SetIsEnabled(true);
+        dropMarkdownMath->SetIsEnabled(true);
+        btnOk->SetIsEnabled(true);
+        fontDownloadStatus->SetText(Tr(Str(kMarkdownDownloadNotice)));
+    }
     SetIsVisible(false);
     win = nullptr;
 }
 
 void SettingsWnd::OnOk(VirtMouseEvent*) {
+    if (fontDownload) return;
     if (!gSettings) {
         ScheduleDelete();
         return;
@@ -1170,6 +1209,23 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
         MessageBoxW(hwnd, CWStrTemp(Tr("Maximum pen width must be at least the minimum pen width.")),
                     CWStrTemp(Tr("Check setting")), MB_OK | MB_ICONWARNING);
         dropPenMax->SetFocus();
+        return;
+    }
+    Str selectedText = MarkdownFontName(MarkdownFontKind::Text, CbGetCurrentSelection(dropMarkdownFamily));
+    Str selectedMath = MarkdownFontName(MarkdownFontKind::Math, CbGetCurrentSelection(dropMarkdownMath));
+    if (!MarkdownFontsAvailable(selectedText, selectedMath)) {
+        auto* job = new SettingsFontDownload();
+        job->wnd = this;
+        job->cacheRoot = str::Dup(MarkdownFontsCacheDir());
+        job->text = str::Dup(selectedText);
+        job->math = str::Dup(selectedMath);
+        fontDownload = job;
+        dropMarkdownFamily->SetIsEnabled(false);
+        dropMarkdownMath->SetIsEnabled(false);
+        btnOk->SetIsEnabled(false);
+        fontDownloadStatus->SetText(Tr("Downloading the selected Markdown fonts from GitHub…"));
+        fontDownloadStatus->RequestLayout();
+        RunAsync(MkFunc0(RunSettingsFontDownload, job), StrL("DownloadMarkdownFonts"));
         return;
     }
     int layoutIdx = CbGetCurrentSelection(dropLayout);
@@ -1287,6 +1343,24 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
         startZoom = gSettings->defaultZoomFloat;
         OnCancel();
     }
+}
+
+static void FinishSettingsFontDownload(SettingsFontDownload* job) {
+    auto* wnd = job->wnd;
+    if (wnd && wnd == gSettingsWnd && wnd->fontDownload == job) {
+        wnd->fontDownload = nullptr;
+        wnd->dropMarkdownFamily->SetIsEnabled(true);
+        wnd->dropMarkdownMath->SetIsEnabled(true);
+        wnd->btnOk->SetIsEnabled(true);
+        wnd->fontDownloadStatus->SetText(job->success ? Tr(Str(kMarkdownDownloadNotice)) : job->error);
+        wnd->fontDownloadStatus->RequestLayout();
+        if (job->success) wnd->OnOk();
+    }
+    delete job;
+}
+static void RunSettingsFontDownload(SettingsFontDownload* job) {
+    job->success = DownloadMarkdownFonts(job->text, job->math, &job->error, job->cacheRoot);
+    uitask::Post(MkFunc0(FinishSettingsFontDownload, job), "FinishMarkdownFontDownload");
 }
 
 static void SelectionColorPicked(SettingsWnd* wnd, ChangeColorsArgs* args) {
@@ -1826,41 +1900,6 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
     }
 
     {
-        vbox->AddChild(NewSettingsLabel({.s = Tr("Markdown"),
-                                         .font = headingFont,
-                                         .isRtl = isRtl,
-                                         .padding = Insets{UiScalePx(12), 0, UiScalePx(4), 0}}));
-        auto* table = new SettingsForm();
-        table->rtl = isRtl;
-        table->SetSize(2, 2);
-        table->colGap = UiScalePx(20);
-        table->rowGap = UiScalePx(6);
-        VecAppend(forms, table);
-        DropDown** controls[] = {&dropMarkdownFamily, &dropMarkdownMath};
-        Str labels[] = {Tr("Display font:"), Tr("Math font:")};
-        Str values[] = {gSettings->markdownUI.fontName, gSettings->markdownUI.mathFontName};
-        for (int i = 0; i < 2; i++) {
-            MarkdownFontKind kind = i ? MarkdownFontKind::Math : MarkdownFontKind::Text;
-            auto* drop = MakeDropDown(this, font, isRtl, false);
-            *controls[i] = drop;
-            StrVec choices;
-            MarkdownFontChoices(kind, choices);
-            drop->SetItems(choices);
-            CbSetCurrentSelection(drop, MarkdownFontIndex(kind, values[i]));
-            table->SetCell(i, 0, NewSettingsLabel({.s = labels[i], .font = font, .isRtl = isRtl})).alignV =
-                CrossAxisAlign::CrossCenter;
-            table->SetCell(i, 1, drop).alignH = CrossAxisAlign::Stretch;
-        }
-        vbox->AddChild(table);
-        vbox->AddChild(
-            NewSettingsLabel({.s = Tr("Use the Font menu above an open Markdown page to change its display font. "
-                                      "The last choice becomes the default. Math fonts apply to MathML. "
-                                      "These choices use the browser view."),
-                              .font = font,
-                              .isRtl = isRtl}));
-    }
-
-    {
         vbox->AddChild(NewSettingsLabel({.s = Tr("Data storage"),
                                          .font = headingFont,
                                          .isRtl = isRtl,
@@ -1954,6 +1993,37 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         });
         labelAdvanced = c;
         vbox->AddChild(c);
+    }
+
+    {
+        vbox->AddChild(NewSettingsLabel({.s = Tr("Markdown"),
+                                         .font = headingFont,
+                                         .isRtl = isRtl,
+                                         .padding = Insets{UiScalePx(12), 0, UiScalePx(4), 0}}));
+        auto* table = new SettingsForm();
+        table->rtl = isRtl;
+        table->SetSize(2, 2);
+        table->colGap = UiScalePx(20);
+        table->rowGap = UiScalePx(6);
+        VecAppend(forms, table);
+        DropDown** controls[] = {&dropMarkdownFamily, &dropMarkdownMath};
+        Str labels[] = {Tr("Display font:"), Tr("Math font:")};
+        Str values[] = {gSettings->markdownUI.fontName, gSettings->markdownUI.mathFontName};
+        for (int i = 0; i < 2; i++) {
+            MarkdownFontKind kind = i ? MarkdownFontKind::Math : MarkdownFontKind::Text;
+            auto* drop = MakeDropDown(this, font, isRtl, false);
+            *controls[i] = drop;
+            StrVec choices;
+            MarkdownFontChoices(kind, choices);
+            drop->SetItems(choices);
+            CbSetCurrentSelection(drop, MarkdownFontIndex(kind, values[i]));
+            table->SetCell(i, 0, NewSettingsLabel({.s = labels[i], .font = font, .isRtl = isRtl})).alignV =
+                CrossAxisAlign::CrossCenter;
+            table->SetCell(i, 1, drop).alignH = CrossAxisAlign::Stretch;
+        }
+        vbox->AddChild(table);
+        fontDownloadStatus = NewSettingsLabel({.s = Tr(Str(kMarkdownDownloadNotice)), .font = font, .isRtl = isRtl});
+        vbox->AddChild(fontDownloadStatus);
     }
 
     chkUseTabs = MakeCheckbox(hwnd, GetFont(), Tr("Use &tabs"), isRtl, gSettings && gSettings->useTabs, 0);

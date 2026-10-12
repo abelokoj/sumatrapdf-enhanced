@@ -34,6 +34,9 @@ RenderedBitmap* RenderSelectionsAsRenderedBitmap(DisplayModel* dm, const Vec<Sel
 // default opacity of the selection rectangle when SelectionColor has no alpha
 constexpr u8 kSelectionDefaultAlpha = 0x5f;
 
+struct ParsedColor;
+u8 SelectionColorAlpha(const ParsedColor* parsed);
+
 void DeleteOldSelectionInfo(MainWindow* win, bool alsoTextSel = false);
 void RemapSelOnRenumber(MainWindow* win, DisplayModel* dm);
 void RemapTextSelection(DisplayModel* dm);

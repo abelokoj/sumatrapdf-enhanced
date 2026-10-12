@@ -15516,7 +15516,9 @@ static LRESULT CALLBACK WndProcSumatraFrame(HWND hwnd, UINT msg, WPARAM wp, LPAR
             } else if (win) {
                 // hide the topmost citation-hover popup when switching to
                 // another application (no WM_MOUSELEAVE is generated then)
-                RefHoverHide(win->refHover, win->hwndCanvas);
+                if (!win->refHover || win->refHover->hwndPopup != (HWND)lp) {
+                    RefHoverHide(win->refHover, win->hwndCanvas);
+                }
                 // home-page thumbnail tip is topmost track-mode; hide on deactivate
                 HomePageOnWindowActivate(win, false);
             }
@@ -16575,6 +16577,7 @@ static HACCEL FindAcceleratorsForHwnd(HWND hwnd, HWND* hwndAccel, bool* forwardS
     HACCEL accTable = accTables[0];
     HACCEL editAccTable = accTables[1];
     HACCEL treeViewAccTable = accTables[2];
+    if (RefHoverIsPopupHwnd(hwnd)) return nullptr;
     // Only the properties window and its children use the edit table.
     // FindPropertyWindowByHwnd() also matches the owner frame (so we can
     // find the dialog for that document); treating the frame as an edit

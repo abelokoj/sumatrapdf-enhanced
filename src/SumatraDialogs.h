@@ -50,6 +50,7 @@ Str ShowGetPasswordDialog(HWND hwndParent, Str fileName, bool* rememberPassword,
 void ShowGoToPageDialog(MainWindow* win);
 void ShowInverseSearchDialog(MainWindow* win);
 void ShowSettingsDialog(MainWindow* win);
+TempStr SettingsFontStateTemp();
 
 enum class PrintRangeAdv {
     All = 0,

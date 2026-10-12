@@ -29,6 +29,7 @@ void RefHoverDestroy(RefHoverState* s) {
     if (!s) {
         return;
     }
+    RefHoverClearSelection(s);
     RefHoverUnregisterLiveState(s);
     RefHoverDropQueuedRender(s);
     if (s->hwndPopup) {
@@ -80,6 +81,7 @@ void RefHoverHide(RefHoverState* s, HWND hwndCanvas) {
     }
     KillTimer(hwndCanvas, kRefHoverTimerID);
     KillTimer(hwndCanvas, kRefHoverHideTimerID);
+    RefHoverClearSelection(s);
     s->pending.destPage = -1;
     s->renderGen++;
     RefHoverDropQueuedRender(s);
@@ -98,7 +100,7 @@ static constexpr int kRefHoverHideMinMs = 250;
 // alive. Lets the cursor cross the gap between the link and the popup without
 // the popup vanishing. Cancelled by a new RefHoverSchedule / RefHoverHide.
 void RefHoverScheduleHide(RefHoverState* s, HWND hwndCanvas, int delayMs) {
-    if (!s || s->resizing) {
+    if (!s || s->resizing || s->selecting || RefHoverHasSelection(s)) {
         return;
     }
     KillTimer(hwndCanvas, kRefHoverTimerID);
@@ -120,7 +122,7 @@ void RefHoverOnHideTimer(RefHoverState* s, HWND hwndCanvas) {
         return;
     }
     KillTimer(hwndCanvas, kRefHoverHideTimerID);
-    if (!s->hwndPopup || !HwndIsVisible(s->hwndPopup) || s->resizing) {
+    if (!s->hwndPopup || !HwndIsVisible(s->hwndPopup) || s->resizing || s->selecting || RefHoverHasSelection(s)) {
         return;
     }
     POINT pt;

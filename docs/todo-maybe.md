@@ -1,3 +1,8 @@
+# Enhanced feature requests
+
+- [ ] Edit Markdown files directly within the app.
+- [ ] Create PDF notebooks for handwritten college or student notes.
+
 # epub hyphenation
 
 MuPDF can auto-hyphenate HTML-engine docs (EPUB/MOBI/FB2/HTML) when CSS is

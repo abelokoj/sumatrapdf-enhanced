@@ -39,9 +39,17 @@ foreach ($name in @('AUTHORS','COPYING','COPYING.BSD')) { Copy-Item -LiteralPath
 Copy-Item -LiteralPath (Join-Path $repoDir 'src/dictionaries') -Destination (Join-Path $stageDir 'dictionaries') -Recurse
 $docsDir = Join-Path $stageDir 'docs'
 New-Item -ItemType Directory -Force -Path $docsDir | Out-Null
-foreach ($name in @('licenses','dictionaries','font-attribution.md','icon-attribution.md','vocabulary-attribution.md')) {
+foreach ($name in @('dictionaries','font-attribution.md','icon-attribution.md','vocabulary-attribution.md')) {
     Copy-Item -LiteralPath (Join-Path $repoDir "docs/$name") -Destination (Join-Path $docsDir $name) -Recurse
 }
+$licenseDir = Join-Path $docsDir 'licenses'
+New-Item -ItemType Directory -Force -Path $licenseDir | Out-Null
+foreach ($item in Get-ChildItem -LiteralPath (Join-Path $repoDir 'docs/licenses')) {
+    if ($item.Name -eq 'markdown') { continue }
+    Copy-Item -LiteralPath $item.FullName -Destination $licenseDir -Recurse
+}
+$optionalFonts = @(Get-ChildItem -LiteralPath $stageDir -File -Recurse | Where-Object { $_.Name -match '^(Lora|Libertinus|(?:EnhancedWeb)?NewCM).*\.(otf|ttf|woff2)$|^NewCM-sfd\.txz$' })
+if ($optionalFonts.Count) { throw 'Optional Markdown fonts must not be included in application packages' }
 New-Item -ItemType Directory -Force -Path (Join-Path $stageDir 'data') | Out-Null
 Copy-Item -LiteralPath (Join-Path $repoDir 'data/vocabulary') -Destination (Join-Path $stageDir 'data/vocabulary') -Recurse
 $signing = if (@($signatures | Where-Object { $_.status -eq 'NotSigned' }).Count -eq $signatures.Count) { 'unsigned' } elseif (@($signatures | Where-Object { $_.status -eq 'Valid' }).Count -eq $signatures.Count) { 'signed' } else { 'mixed' }
@@ -50,6 +58,7 @@ SumatraPDF Enhanced $Version - Windows $Architecture
 Extract the entire folder and run SumatraPDF.exe. Keep dictionaries beside it.
 Select a word and press Shift+D for offline dictionary lookup.
 The home learning hub opens vocabulary and practice activities.
+Markdown fonts download from GitHub when chosen and remain available offline.
 Release information: https://github.com/abelokoj/sumatrapdf-enhanced/releases/latest
 Source commit: $sourceSha
 Original SumatraPDF: $($upstream.version), $($upstream.commit).

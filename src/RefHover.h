@@ -16,6 +16,7 @@ struct IPageElement;
 struct RenderedBitmap;
 struct Pixmap;
 struct RefLookupCache;
+struct TextSelection;
 
 struct RefHoverState {
     HWND hwndPopup = nullptr;
@@ -31,6 +32,11 @@ struct RefHoverState {
     // popup can hit-test links under the cursor (hand cursor + click-to-open)
     EngineBase* hitEngine = nullptr;
     bool resizing = false;
+    TextSelection* selection = nullptr;
+    bool selecting = false;
+    bool selectingWords = false;
+    bool selectionDragged = false;
+    Point selectionPress;
 
     // cache of plain-text citation lookups (lazy-init on first use)
     RefLookupCache* lookupCache = nullptr;
@@ -235,6 +241,9 @@ constexpr int kRefHoverMaxLiveStates = 32;
 bool RefHoverIsLaunchLink(IPageDestination* dest);
 
 bool RefHoverIsLiveState(RefHoverState* s);
+bool RefHoverIsPopupHwnd(HWND hwnd);
+void RefHoverClearSelection(RefHoverState* s);
+bool RefHoverHasSelection(RefHoverState* s);
 bool RefHoverColorsCurrent(RefHoverState* s);
 void RefHoverRegisterLiveState(RefHoverState* s);
 void RefHoverUnregisterLiveState(RefHoverState* s);

@@ -6,6 +6,7 @@
 #include "base/Pixmap.h"
 #include "base/ByteReaderWriter.h"
 #include "base/Win.h"
+#include "gui/Dpi.h"
 
 extern "C" {
 #include <mupdf/fitz.h>
@@ -2853,8 +2854,10 @@ TempStr RefHoverResultTemp(Str action, int x, int y, int* exitCodeOut) {
         return fmt("OK visible=0");
     }
     auto& d = s->displayed;
-    return fmt("OK visible=1 hwnd=%d page=%d y=%d zoom=%d", (int)(INT_PTR)s->hwndPopup, d.destPage, (int)d.region.y,
-               (int)(d.userZoom * 100));
+    return fmt("OK visible=1 hwnd=%d page=%d y=%d zoom=%d region=%.3f,%.3f,%.3f,%.3f scale=%.3f selected=%d border=%d",
+               (int)(INT_PTR)s->hwndPopup, d.destPage, (int)d.region.y, (int)(d.userZoom * 100), d.region.x, d.region.y,
+               d.region.dx, d.region.dy, d.baseZoom * d.userZoom, RefHoverHasSelection(s) ? 1 : 0,
+               MulDiv(kRefHoverBorder, DpiGetForHwnd(s->hwndPopup), 96));
 }
 
 // The current tab's pages: each page's width, which a test gives a unique value

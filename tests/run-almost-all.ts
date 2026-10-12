@@ -20,6 +20,8 @@ import { runNamedTests, runSuiteMain, startSuiteProgress, type NamedTest, type S
 import { setTestWindowLayout } from "./winapi.ts";
 import { beginSharedControlledSession, endSharedControlledSession } from "./win-automation.ts";
 import { testit as markdownDisplayFonts } from "./markdown-display-fonts.ts";
+import { testit as markdownFontDownloads } from "./markdown-font-downloads.ts";
+import { testit as markdownFontPackaging } from "./markdown-font-packaging.ts";
 import { testit as themePresets } from "./theme-presets.ts";
 import { testit as lintCommandIds } from "./lint-command-ids.ts";
 import { testit as lintMingwSources } from "./lint-mingw-sources.ts";
@@ -114,6 +116,8 @@ import { testit as issue2155 } from "./issue-2155.ts";
 import { testit as issue2254 } from "./issue-2254.ts";
 import { testit as issue1846 } from "./issue-1846.ts";
 import { testit as xmpProperties } from "./xmp-properties.ts";
+import { testit as documentPropertiesCopy } from "./document-properties-copy.ts";
+import { testit as refHoverSelection } from "./ref-hover-selection.ts";
 import { testit as issue5950 } from "./issue-5950.ts";
 import { testit as issue5993 } from "./issue-5993.ts";
 import { testit as issue5845 } from "./issue-5845.ts";
@@ -602,6 +606,8 @@ export const tests: NamedTest[] = [
   ["issue-2254", issue2254],
   ["issue-1846", issue1846],
   ["xmp-properties", xmpProperties],
+  ["document-properties-copy", documentPropertiesCopy],
+  ["ref-hover-selection", refHoverSelection],
   ["issue-5950", issue5950],
   ["issue-3472", issue3472],
   ["pdf-only-menu-items", pdfOnlyMenuItems],
@@ -613,6 +619,8 @@ export const tests: NamedTest[] = [
 
   // --- isolated session: -appdata, saveSettings, or own window placement -
   ["markdown-display-fonts", markdownDisplayFonts],
+  ["markdown-font-downloads", markdownFontDownloads],
+  ["markdown-font-packaging", markdownFontPackaging],
   ["favorites-menu", favoritesMenu],
   ["favorites-tab-after-document-close", favoritesTabAfterDocumentClose],
   ["issue-6045", issue6045],

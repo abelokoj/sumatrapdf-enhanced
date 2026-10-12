@@ -37,6 +37,8 @@
 #include "DocumentProperties.h"
 
 constexpr int kButtonPadding = 8;
+constexpr UINT_PTR kCopyFeedbackTimer = 1;
+constexpr UINT kCopyFeedbackMs = 2000;
 
 struct PropertiesWnd : WindowBase {
     HWND hwndParent = nullptr;
@@ -93,8 +95,9 @@ TempStr PropertiesDialogButtonsTemp(int* exitCodeOut) {
         return finish(StrL("NOTREADY no-properties-window"), 2);
     }
     PropertiesWnd* w = gPropertiesWindows[0];
-    return finish(fmt("copy=%d viewCert=%d updateEutl=%d", w->btnCopyToClipboard ? 1 : 0, w->btnViewCert ? 1 : 0,
-                      w->btnUpdateEutl ? 1 : 0),
+    return finish(fmt("copy=%d viewCert=%d updateEutl=%d copied=%d", w->btnCopyToClipboard ? 1 : 0,
+                      w->btnViewCert ? 1 : 0, w->btnUpdateEutl ? 1 : 0,
+                      w->btnCopyToClipboard && str::Eq(w->btnCopyToClipboard->s, Tr("Copied!")) ? 1 : 0),
                   0);
 }
 
@@ -784,7 +787,12 @@ static void AlignPropertiesText(str::Builder& text) {
 }
 
 void PropertiesWnd::CopyToClipboard(VirtMouseEvent*) {
-    CopyTextToClipboard(ToStr(propsText));
+    bool copied = CopyTextToClipboard(ToStr(propsText));
+    if (btnCopyToClipboard) {
+        btnCopyToClipboard->SetText(copied ? Tr("Copied!") : Tr("Copy failed"));
+        btnCopyToClipboard->Invalidate();
+        SetTimer(hwnd, kCopyFeedbackTimer, kCopyFeedbackMs, nullptr);
+    }
 }
 
 PropertiesWnd::~PropertiesWnd() {
@@ -1122,6 +1130,15 @@ static void OnPropertiesDestroy(WindowBase::DestroyEvent* ev) {
 
 bool PropertiesWnd::Create(HWND parent) {
     hwndParent = parent;
+    onTimer = MkFunc1Void<WindowBase::TimerEvent*>([](WindowBase::TimerEvent* ev) {
+        if (ev->timerId != kCopyFeedbackTimer) return;
+        auto* w = (PropertiesWnd*)ev->w;
+        KillTimer(w->hwnd, kCopyFeedbackTimer);
+        if (w->btnCopyToClipboard) {
+            w->btnCopyToClipboard->SetText(Tr("Copy To Clipboard"));
+            w->btnCopyToClipboard->Invalidate();
+        }
+    });
     DpiSetFromHwnd(parent);
     bool isRtl = IsUIRtl();
     onDpiChanged = MkFunc1Void<WindowBase::DpiChangedEvent*>(

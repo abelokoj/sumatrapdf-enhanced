@@ -210,7 +210,6 @@ class MarkdownHtmlWindowHandler : public HtmlWindowCallback {
     void DownloadData(Str url, Str data) override { mm->DownloadData(url, data); }
     void OnFindResult(int gen, int current, int total) override { mm->OnFindResult(gen, current, total); }
     void OnFindAllResult(Str payload) override { mm->OnFindAllResult(payload); }
-    void OnDisplayFontChanged(int index) override { mm->SetDisplayFont(index); }
 };
 
 MarkdownModel::MarkdownModel(DocControllerCallback* cb) : DocController(cb) {
@@ -234,6 +233,7 @@ MarkdownModel::~MarkdownModel() {
     delete htmlWindowCb;
     DestroyOwnedTocTree(tocTree);
     DeleteVecMembers(urlDataCache);
+    DeleteVecMembers(fontDataCache);
     docAccess.Unlock();
     ArenaDelete(poolAlloc);
     str::Free(fileName);
@@ -790,13 +790,6 @@ MarkdownCacheEntry* MarkdownModel::FindDataForUrl(Str url) const {
 }
 
 bool MarkdownModel::OnBeforeNavigate(Str url, bool newWindow) {
-    Str choice = url;
-    if (!isHtml && str::TrimPrefix(choice, StrL("sumatra-markdown-font:"))) {
-        for (int i = 0; i < MarkdownFontCount(MarkdownFontKind::Text); i++) {
-            if (str::Eq(choice, fmt("%d", i))) SetDisplayFont(i);
-        }
-        return false;
-    }
     if (skipNextBeforeNavigateScrollSave) {
         skipNextBeforeNavigateScrollSave = false;
     } else {
@@ -874,8 +867,17 @@ Str MarkdownModel::GetDataForUrl(Str url) {
     AutoUnlockMutex scope(&docAccess);
     TempStr plainUrl = NormalizeMarkdownUrlTemp(url);
     if (!isHtml) {
+        // Keep validated font bytes across page/theme refreshes without rereading or duplicating them.
+        for (auto* entry : fontDataCache) {
+            if (str::Eq(entry->url, plainUrl)) return entry->data;
+        }
         Str font = MarkdownFontResource(plainUrl);
-        if (font) return font;
+        if (font) {
+            Str copy = str::Dup(poolAlloc, font);
+            str::Free(font);
+            VecAppend(fontDataCache, new MarkdownCacheEntry{str::Dup(poolAlloc, plainUrl), copy});
+            return copy;
+        }
         for (int i = 0; i < MarkdownFontCount(MarkdownFontKind::Text); i++) {
             if (str::Eq(plainUrl, fmt("https://sumatrapdf.markdown/_enhanced_fonts/style-%d.css", i))) {
                 return str::Dup(poolAlloc, MarkdownFontCss(MarkdownFontName(MarkdownFontKind::Text, i),
@@ -923,19 +925,6 @@ Str MarkdownModel::GetDataForUrl(Str url) {
     e = new MarkdownCacheEntry{urlDup, str::Dup(poolAlloc, data)};
     VecAppend(urlDataCache, e);
     return e->data;
-}
-
-void MarkdownModel::SetDisplayFont(int index) {
-    if (isHtml || !gSettings || index < 0 || index >= MarkdownFontCount(MarkdownFontKind::Text)) return;
-    Str name = MarkdownFontName(MarkdownFontKind::Text, index);
-    bool changed = !str::Eq(gSettings->markdownUI.fontName, name);
-    if (changed) str::ReplaceWithCopy(&gSettings->markdownUI.fontName, name);
-    {
-        AutoUnlockMutex scope(&docAccess);
-        DeleteVecMembers(urlDataCache);
-        VecReset(urlDataCache);
-    }
-    if (changed) ScheduleSaveSettings();
 }
 
 // Drop generated pages so colors and fonts refresh on the next navigation.

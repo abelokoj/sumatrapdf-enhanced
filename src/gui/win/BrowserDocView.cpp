@@ -100,7 +100,6 @@ function textFromBody(body) {
     acceptNode: function(n) {
       var p = n.parentElement;
       if (!p) { return NodeFilter.FILTER_REJECT; }
-      if (p.closest("#enhanced-markdown-controls")) { return NodeFilter.FILTER_REJECT; }
       var tag = p.tagName;
       if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT" || tag === "TEXTAREA") { return NodeFilter.FILTER_REJECT; }
       return NodeFilter.FILTER_ACCEPT;
@@ -301,10 +300,6 @@ void BrowserWebviewWnd::OnJsNotifyCb(void* ctx, Str method, Str paramsJson) {
         return;
     }
     if (!self->cb) {
-        return;
-    }
-    if (str::Eq(method, StrL("markdownFont"))) {
-        self->cb->OnDisplayFontChanged(st.Int(0));
         return;
     }
     if (str::Eq(method, StrL("findResult"))) {
@@ -845,7 +840,7 @@ void BrowserDocView::SelectAll() {
     if (backend == Backend::WebView2 && wv) {
         wv->Eval(
             StrL("(function(){var content=document.getElementById('enhanced-markdown-content');"
-                 "if(content&&document.getElementById('enhanced-markdown-controls')){"
+                 "if(content){"
                  "var range=document.createRange();range.selectNodeContents(content);"
                  "var selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);"
                  "}else{document.execCommand('selectAll',false,null);}})();"));

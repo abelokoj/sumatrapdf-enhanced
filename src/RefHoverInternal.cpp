@@ -19,6 +19,13 @@ bool RefHoverIsLaunchLink(IPageDestination* dest) {
 
 static RefHoverState* gLiveStates[kRefHoverMaxLiveStates];
 
+bool RefHoverIsPopupHwnd(HWND hwnd) {
+    for (RefHoverState* state : gLiveStates) {
+        if (state && state->hwndPopup == hwnd) return true;
+    }
+    return false;
+}
+
 bool RefHoverIsLiveState(RefHoverState* s) {
     for (RefHoverState* live : gLiveStates) {
         if (live == s) {
