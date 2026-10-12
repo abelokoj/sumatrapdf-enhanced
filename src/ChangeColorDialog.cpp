@@ -1447,7 +1447,8 @@ bool ChangeColorWnd::Create(MainWindow* mainWin) {
         vbox->AddChild(new Padding(hbox, DpiScaledInsets(4, 0, 0, 0)));
     }
 
-    auto* padding = new Padding(vbox, DpiScaledInsets(4, 8));
+    auto* padding = new Padding(vbox, Insets{UiScalePxForDpi(GetDpi(), 8), UiScalePxForDpi(GetDpi(), 12),
+                                             UiScalePxForDpi(GetDpi(), 8), UiScalePxForDpi(GetDpi(), 12)});
     layout = padding;
 
     RelayoutRadios();
@@ -1457,11 +1458,11 @@ bool ChangeColorWnd::Create(MainWindow* mainWin) {
     UpdateColorModelVis();
     UpdateEditFromColor();
 
+    UpdateTheme();
     int dx = PreferredWidth();
     LayoutAndSizeToContent(layout, dx, 0, hwnd);
     DoLayout(HwndClientRect(hwnd).Size());
     HwndCenterDialog(hwnd, win ? win->hwndFrame : nullptr);
-    UpdateTheme();
 
     SetIsVisible(true);
     FocusColorEdit();

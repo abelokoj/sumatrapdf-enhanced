@@ -1628,7 +1628,7 @@ void HtmlWindow::SetScrollbarToAuto() {
 // the larger value.
 Point HtmlWindow::GetScrollPos() {
     Point res(-1, -1);
-    if (!webBrowser) {
+    if (!webBrowser || len(currentURL) == 0 || IsBlankUrl(currentURL)) {
         return res;
     }
 

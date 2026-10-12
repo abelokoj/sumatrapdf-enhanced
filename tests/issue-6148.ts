@@ -17,7 +17,7 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ControlClient, ControlCommand } from "./control.ts";
-import { runStandalone, tmpPath } from "./util.ts";
+import { runStandalone, SLOW_BUILD_FACTOR, tmpPath } from "./util.ts";
 import { findCanvas, launchControlled, killAndWait, ensureModifierKeysUp } from "./win-automation.ts";
 import { clientToScreen, getClientRect, packCoords, sendMessage, setCursorPos, sleep } from "./winapi.ts";
 
@@ -29,7 +29,7 @@ const WHEEL_DELTA = 120;
 const NOTCHES = 8;
 
 async function scrollY(client: ControlClient): Promise<number> {
-  const deadline = Date.now() + 8000;
+  const deadline = Date.now() + 8000 * SLOW_BUILD_FACTOR;
   let last = "";
   for (;;) {
     const res = await client.request(ControlCommand.TestMarkdownTocNavigate, [0, 0]);
@@ -46,7 +46,7 @@ async function scrollY(client: ControlClient): Promise<number> {
 }
 
 async function scrolledFrom(client: ControlClient, before: number): Promise<number> {
-  const deadline = Date.now() + 4000;
+  const deadline = Date.now() + 4000 * SLOW_BUILD_FACTOR;
   let pos = before;
   while (Date.now() < deadline) {
     pos = await scrollY(client);
