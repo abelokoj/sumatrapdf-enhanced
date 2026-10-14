@@ -1,0 +1,839 @@
+{
+  "version": 1,
+  "badgeOutsidePercent": 20,
+  "defaultStyle": 3,
+  "sizes": [16, 20, 24, 32, 40, 48, 64, 96, 128, 256],
+  "extensions": [
+    "pdf",
+    "xps",
+    "oxps",
+    "cbz",
+    "cbr",
+    "cb7",
+    "cbt",
+    "djvu",
+    "chm",
+    "mobi",
+    "epub",
+    "md",
+    "markdown",
+    "svg",
+    "azw",
+    "azw3",
+    "azw4",
+    "fb2",
+    "fb2z",
+    "prc",
+    "tif",
+    "tiff",
+    "jp2",
+    "png",
+    "jpg",
+    "jpeg",
+    "tga",
+    "gif",
+    "avif",
+    "heic",
+    "heif",
+    "jfif",
+    "webp",
+    "jxl",
+    "bmp",
+    "ico",
+    "jxr",
+    "hdp",
+    "wdp"
+  ],
+  "renderer": {
+    "aom": "3.15.1",
+    "archive": "3.8.9",
+    "cairo": "1.18.6",
+    "cgif": "0.5.4",
+    "exif": "0.6.26",
+    "expat": "2.8.5",
+    "ffi": "3.8.0",
+    "fontconfig": "2.18.3",
+    "freetype": "2.14.3",
+    "fribidi": "1.0.17",
+    "glib": "2.90.0",
+    "harfbuzz": "14.5.0",
+    "heif": "1.23.5",
+    "highway": "1.4.0",
+    "imagequant": "2.4.1",
+    "lcms": "2.19.1",
+    "mozjpeg": "0826579",
+    "pango": "1.58.2",
+    "pixman": "0.46.4",
+    "png": "1.6.58",
+    "proxy-libintl": "0.5",
+    "rsvg": "2.63.2",
+    "tiff": "4.7.2",
+    "uhdr": "2.0.2",
+    "vips": "8.18.7",
+    "webp": "1.6.0",
+    "xml2": "2.15.4",
+    "zlib-ng": "2.3.3",
+    "sharp": "0.35.5"
+  },
+  "defaults": [
+    {
+      "style": 3,
+      "extension": "pdf",
+      "bytes": 34900,
+      "sha256": "50916924804ae3a93c1c4a3e8b816c022749e7a254e682e9b0eadc91f96f0693",
+      "resourceId": 1000
+    },
+    {
+      "style": 3,
+      "extension": "xps",
+      "bytes": 37523,
+      "sha256": "00780330ef361825d3758b5d2b7abdc9b64b80da693586f93f66858c084107df",
+      "resourceId": 1001
+    },
+    {
+      "style": 3,
+      "extension": "oxps",
+      "bytes": 38581,
+      "sha256": "ac5a7ddf917a75c0e9ea4f8438421976712cbd73a7d930a512bea312510a8779",
+      "resourceId": 1002
+    },
+    {
+      "style": 3,
+      "extension": "cbz",
+      "bytes": 37222,
+      "sha256": "81e78ebc4961845b4c5d31aab186a26c53774eaa031d9dfdab1f60fbd405774d",
+      "resourceId": 1003
+    },
+    {
+      "style": 3,
+      "extension": "cbr",
+      "bytes": 37935,
+      "sha256": "c080f73c59b11f06c861ee12dd645e510a7f86b9a172a11f183a6a541af89cc6",
+      "resourceId": 1004
+    },
+    {
+      "style": 3,
+      "extension": "cb7",
+      "bytes": 37201,
+      "sha256": "11682073bb3f4e3feaf4eb26ec8a2f4796cb42a4339e2a62a315890d75cfcc7a",
+      "resourceId": 1005
+    },
+    {
+      "style": 3,
+      "extension": "cbt",
+      "bytes": 36877,
+      "sha256": "be37f05f9444cb31c8bea9f89971686028c29a593d7a528bb0022953e7566dbf",
+      "resourceId": 1006
+    },
+    {
+      "style": 3,
+      "extension": "djvu",
+      "bytes": 35857,
+      "sha256": "c52144576ca33a58f19143e2dc95d873891429fe57dd157ea2a1a5cd271df36a",
+      "resourceId": 1007
+    },
+    {
+      "style": 3,
+      "extension": "chm",
+      "bytes": 37502,
+      "sha256": "4405b6bfdd28ccca7ee45768c9c5d35cef06bb896d717199af0ef595661cfb3f",
+      "resourceId": 1008
+    },
+    {
+      "style": 3,
+      "extension": "mobi",
+      "bytes": 37891,
+      "sha256": "7f9764368fde21f3a4bc5437d4cf8f22fb3c1775ccec979bb9eda020f0fe35fc",
+      "resourceId": 1009
+    },
+    {
+      "style": 3,
+      "extension": "epub",
+      "bytes": 41251,
+      "sha256": "d0c12b0285f915647cf4f6ae011f5b6aad53d0b558066368af7c8fb4e514cd47",
+      "resourceId": 1010
+    },
+    {
+      "style": 3,
+      "extension": "md",
+      "bytes": 35463,
+      "sha256": "fa4c1de8722bf47b2c19e8f16edb594b163ab469a5ea2f30ac0d7fbd8cf96a52",
+      "resourceId": 1011
+    },
+    {
+      "style": 3,
+      "extension": "markdown",
+      "bytes": 35463,
+      "sha256": "fa4c1de8722bf47b2c19e8f16edb594b163ab469a5ea2f30ac0d7fbd8cf96a52",
+      "resourceId": 1012
+    },
+    {
+      "style": 3,
+      "extension": "svg",
+      "bytes": 41711,
+      "sha256": "f3fdef7ba454cd96504bfd94732760b8d9b2a4e0e4e52ef74e2859b2d8590b0e",
+      "resourceId": 1013
+    },
+    {
+      "style": 3,
+      "extension": "azw",
+      "bytes": 39181,
+      "sha256": "81ec4e9f9f7e419fdef7c78b3e6acd867dab0c0c949ad2271e4d2f1c780ae1ea",
+      "resourceId": 1014
+    },
+    {
+      "style": 3,
+      "extension": "azw3",
+      "bytes": 39755,
+      "sha256": "5cf6d802f83785382ec86ed1be66f0d9b1ffcd8d76821fec78c321e4030ec8e3",
+      "resourceId": 1015
+    },
+    {
+      "style": 3,
+      "extension": "azw4",
+      "bytes": 39087,
+      "sha256": "0ddcb36a7f380711d6ce146178c5c74f8fc8bc2b3fe75eaabc371b1f036efa6a",
+      "resourceId": 1016
+    },
+    {
+      "style": 3,
+      "extension": "fb2",
+      "bytes": 40473,
+      "sha256": "9f805b0fded3f577a4395650de4b30cc5600dd8af5e6348ff947898a23ed21e4",
+      "resourceId": 1017
+    },
+    {
+      "style": 3,
+      "extension": "fb2z",
+      "bytes": 41276,
+      "sha256": "2670d33c6adf0e0173adc0adea8a5301cb607800c8ea6bcf3b653158a20d22ed",
+      "resourceId": 1018
+    },
+    {
+      "style": 3,
+      "extension": "prc",
+      "bytes": 38704,
+      "sha256": "f4f749f3f31dadf34f2b5cb83e2cbeccde7dea754f24018dc9fa3564907b8f37",
+      "resourceId": 1019
+    },
+    {
+      "style": 3,
+      "extension": "tif",
+      "bytes": 32874,
+      "sha256": "99a49572e4d680c2ea71ca05795958f837c63c2671267eef67feb08a3dd248c8",
+      "resourceId": 1020
+    },
+    {
+      "style": 3,
+      "extension": "tiff",
+      "bytes": 33362,
+      "sha256": "be696b05864c73d9eecc3e44711a9afce2f0241417dff483dd6c76a3ab3559e0",
+      "resourceId": 1021
+    },
+    {
+      "style": 3,
+      "extension": "jp2",
+      "bytes": 39433,
+      "sha256": "db7b9c8fa2e016a76cad183a13a48b381a3f783f2aff3150b70e8ff8ff74bad6",
+      "resourceId": 1022
+    },
+    {
+      "style": 3,
+      "extension": "png",
+      "bytes": 40787,
+      "sha256": "b50a53b8fa0011186596896e2c4595e8b8ff9834bf45a03c0326864890f63332",
+      "resourceId": 1023
+    },
+    {
+      "style": 3,
+      "extension": "jpg",
+      "bytes": 39162,
+      "sha256": "69abd5a6b5d232613e6e239984c88f2f0399a3bc5830ac53ec476a0feaf74696",
+      "resourceId": 1024
+    },
+    {
+      "style": 3,
+      "extension": "jpeg",
+      "bytes": 38939,
+      "sha256": "01221193d63b61cc3ca4cf998a453b26ebb1b356707ecbdca3de51f24c8e950f",
+      "resourceId": 1025
+    },
+    {
+      "style": 3,
+      "extension": "tga",
+      "bytes": 40066,
+      "sha256": "e7fe6d8344d769d92056a7a593295d9f6486251b9e18bbc7f599370498f1ecef",
+      "resourceId": 1026
+    },
+    {
+      "style": 3,
+      "extension": "gif",
+      "bytes": 35332,
+      "sha256": "c3a177871c549063fa1064eb9cea434e5f020597e30ee46a41b8bd50ba307cec",
+      "resourceId": 1027
+    },
+    {
+      "style": 3,
+      "extension": "avif",
+      "bytes": 38832,
+      "sha256": "d4b0f195925ad72b9834a7e9c1e53af67633c1ec8f80aeacb32aa89f2120a9e6",
+      "resourceId": 1028
+    },
+    {
+      "style": 3,
+      "extension": "heic",
+      "bytes": 38160,
+      "sha256": "ad48502b195baff872171ff1c6425319addbbe5d355286895c3d250e9ace2b29",
+      "resourceId": 1029
+    },
+    {
+      "style": 3,
+      "extension": "heif",
+      "bytes": 36817,
+      "sha256": "7b088dacf7884774e74be939af16c4c02483d2e7039d352be648c83f9a8ae951",
+      "resourceId": 1030
+    },
+    {
+      "style": 3,
+      "extension": "jfif",
+      "bytes": 36574,
+      "sha256": "fff55cfff8b9bee0e8e791d8a1c1ac259b1249ea28e5c53a7c56f329d950f6be",
+      "resourceId": 1031
+    },
+    {
+      "style": 3,
+      "extension": "webp",
+      "bytes": 40944,
+      "sha256": "f4269a1130006053bb71d64319f77a49cee9c7cc7633c6967fe605000ac03cfa",
+      "resourceId": 1032
+    },
+    {
+      "style": 3,
+      "extension": "jxl",
+      "bytes": 38838,
+      "sha256": "9c0eee29decc0770b5adcb6ce5c705e6adbf9606888c269078f98df09caf05b4",
+      "resourceId": 1033
+    },
+    {
+      "style": 3,
+      "extension": "bmp",
+      "bytes": 39888,
+      "sha256": "cc8fb0bcac82e2795189ec8d728af4f793999417ff5a6f0c2f7e9d845b4c1b48",
+      "resourceId": 1034
+    },
+    {
+      "style": 3,
+      "extension": "ico",
+      "bytes": 39728,
+      "sha256": "e3a23fa288b7de579fe2609960d9517a495ccdb50be03970e4e3303dfd4cb978",
+      "resourceId": 1035
+    },
+    {
+      "style": 3,
+      "extension": "jxr",
+      "bytes": 40314,
+      "sha256": "9aabb20a55b09cb64202736e2198e0a21e3193eeded54001ed2623e18e59ef26",
+      "resourceId": 1036
+    },
+    {
+      "style": 3,
+      "extension": "hdp",
+      "bytes": 38678,
+      "sha256": "38f0585c3c9fdaeaeae1e752e983196ea72e73a2f9a7fc9fb8fc669cae92b33f",
+      "resourceId": 1037
+    },
+    {
+      "style": 3,
+      "extension": "wdp",
+      "bytes": 40833,
+      "sha256": "d7fbac5242eb73bdb65e30e21c401e9b5af467eaeefb593ec5ea807dcbff590f",
+      "resourceId": 1038
+    }
+  ],
+  "packs": [
+    {
+      "style": 1,
+      "name": "folded-pages",
+      "bytes": 1324328,
+      "sha256": "2508019534a06e1b0cf8feec2e3929c07b97357d900e984ced7394519cc5f41e",
+      "url": "https://raw.githubusercontent.com/abelokoj/sumatrapdf-enhanced/master/docs/file-icons/packs/folded-pages.sfeicons"
+    },
+    {
+      "style": 2,
+      "name": "color-covers",
+      "bytes": 1613035,
+      "sha256": "5868b0de224d7e685f3a1e132708429ff6661ba00038999a936208dcb77daee1",
+      "url": "https://raw.githubusercontent.com/abelokoj/sumatrapdf-enhanced/master/docs/file-icons/packs/color-covers.sfeicons"
+    }
+  ],
+  "assets": [
+    {
+      "style": 1,
+      "extension": "pdf",
+      "bytes": 29874,
+      "sha256": "17e2940f0aaacf1548464ffb8b3017f3025968aad0d06c1bf10f0805b961454a"
+    },
+    {
+      "style": 1,
+      "extension": "xps",
+      "bytes": 32719,
+      "sha256": "5ca69243d439076a86112a93d804abb66560070252a966571981382086491811"
+    },
+    {
+      "style": 1,
+      "extension": "oxps",
+      "bytes": 33670,
+      "sha256": "03bfc4f5d1e80ace6b5e80cba647f7d5aecb3381e8d6aa7f5e45cf6ffd36b483"
+    },
+    {
+      "style": 1,
+      "extension": "cbz",
+      "bytes": 32840,
+      "sha256": "59e659e51c5f1f5c0ebe0724661349624bbf5d1a7accb1e4d5b439f9a0652ff9"
+    },
+    {
+      "style": 1,
+      "extension": "cbr",
+      "bytes": 33461,
+      "sha256": "8d3e5a432675fd90f0a8628a0b5187e44e8bcd00f5fb923ce97ce2a89bfd7c23"
+    },
+    {
+      "style": 1,
+      "extension": "cb7",
+      "bytes": 32636,
+      "sha256": "7b207206d4c27064f7bfe551bf95af28151efbc37db8881b044b766c60e8e8aa"
+    },
+    {
+      "style": 1,
+      "extension": "cbt",
+      "bytes": 32137,
+      "sha256": "4d08098ae1ff9fa4a4345c4db20d8c493d28c12d9ac657408d0eedfa3b58f21f"
+    },
+    {
+      "style": 1,
+      "extension": "djvu",
+      "bytes": 30788,
+      "sha256": "3b7ecc9a9f7700a5d59c0e21b737552c7958db1bfc608d7e6f760db30adfa774"
+    },
+    {
+      "style": 1,
+      "extension": "chm",
+      "bytes": 32633,
+      "sha256": "94938e7ccf0a5dbcf8b34b3879f733e644e7d6605ad63c6884c0dba27d5493e5"
+    },
+    {
+      "style": 1,
+      "extension": "mobi",
+      "bytes": 33196,
+      "sha256": "2936ba8de0d943352283eeb5031f84c947a35ef8e2999ec76438dd025a65b91b"
+    },
+    {
+      "style": 1,
+      "extension": "epub",
+      "bytes": 37971,
+      "sha256": "3c1db1cfb7a0872c0fb73cb6b72a190c8aedf0a592205b94dc47d66ddadc0aa5"
+    },
+    {
+      "style": 1,
+      "extension": "md",
+      "bytes": 30844,
+      "sha256": "6bfd3054c6336b25aa4a25742d480fe2ea7984bb223cc73467ef3aa8b5d09a93"
+    },
+    {
+      "style": 1,
+      "extension": "markdown",
+      "bytes": 30844,
+      "sha256": "6bfd3054c6336b25aa4a25742d480fe2ea7984bb223cc73467ef3aa8b5d09a93"
+    },
+    {
+      "style": 1,
+      "extension": "svg",
+      "bytes": 37568,
+      "sha256": "edaf226f7b1207ca23841e1c3b92cd8ebb7e3de32eb6ada0809e65b99b4451c0"
+    },
+    {
+      "style": 1,
+      "extension": "azw",
+      "bytes": 34410,
+      "sha256": "126c0007871740b8aff30ab902d906410909ffc1914732e6ebb4594036359f67"
+    },
+    {
+      "style": 1,
+      "extension": "azw3",
+      "bytes": 34923,
+      "sha256": "4537774b193d3cc849ca7da26e01da7dfab57a67e7980d6458ced42f293fa241"
+    },
+    {
+      "style": 1,
+      "extension": "azw4",
+      "bytes": 34301,
+      "sha256": "943ea31319d31dc321159818f301e9fa890b434a3dc07c4b5fef958e52aea34c"
+    },
+    {
+      "style": 1,
+      "extension": "fb2",
+      "bytes": 37216,
+      "sha256": "1b0bd2dac5e0991b76d3f669284915ae8313760166cf09d7cdd73fc1738d68a0"
+    },
+    {
+      "style": 1,
+      "extension": "fb2z",
+      "bytes": 37961,
+      "sha256": "3a203e68a7d7fbb1d613414f45635ec3d73ae2164961862a0c56d18567c47cf2"
+    },
+    {
+      "style": 1,
+      "extension": "prc",
+      "bytes": 33803,
+      "sha256": "2abd53160c2770002934e083960fe6d22e7142769a69cab584a147b3b0ef8254"
+    },
+    {
+      "style": 1,
+      "extension": "tif",
+      "bytes": 27681,
+      "sha256": "3d877fa1ccc5545d6240e9caca35d66dbffe75a8d3e634d7053f9bbd999b9c72"
+    },
+    {
+      "style": 1,
+      "extension": "tiff",
+      "bytes": 28148,
+      "sha256": "f816444571ece21f2479c80b4c444fe07edbd89b27edaa57a683b4ed33038459"
+    },
+    {
+      "style": 1,
+      "extension": "jp2",
+      "bytes": 35454,
+      "sha256": "92de17c45fe702e623b5a97bc05cfd719bded422217c2c44e748f21ddcc3ed61"
+    },
+    {
+      "style": 1,
+      "extension": "png",
+      "bytes": 36826,
+      "sha256": "477508190c288a9834f50c27617c8aafe713d943f9325aac9d2aa04d7d35b8e2"
+    },
+    {
+      "style": 1,
+      "extension": "jpg",
+      "bytes": 34920,
+      "sha256": "63fe66a2a6ba72bf80aea6030faab27712f0a1a9e7f1870545e4d3bf77123ee9"
+    },
+    {
+      "style": 1,
+      "extension": "jpeg",
+      "bytes": 34656,
+      "sha256": "2882c854851e4fe95786e0da60199146914f651b333a96e1eeb1da4a24d2bc46"
+    },
+    {
+      "style": 1,
+      "extension": "tga",
+      "bytes": 36199,
+      "sha256": "f59fe6d7bf717bdf08a4609b94552f9b3601ee8c81c30b2e7fa5b35c1582c83b"
+    },
+    {
+      "style": 1,
+      "extension": "gif",
+      "bytes": 30677,
+      "sha256": "d1dc9b5cc18241d8abf74a45260b473e7f2afc852a615427b20699c2fdfbaef3"
+    },
+    {
+      "style": 1,
+      "extension": "avif",
+      "bytes": 34934,
+      "sha256": "10fc9a974b0c7bcbea49ce2ce375565cd9062f9ab6080737412e4b1aca8fbcd0"
+    },
+    {
+      "style": 1,
+      "extension": "heic",
+      "bytes": 33814,
+      "sha256": "5e2e9afb9d1f345336d67bb72af0174b0eb84ca8205475f042d136cd84079ebb"
+    },
+    {
+      "style": 1,
+      "extension": "heif",
+      "bytes": 32463,
+      "sha256": "5deb210470263a88812125d2bb79fc8e6a4f3a1a05809a6eb551cf63996c8d14"
+    },
+    {
+      "style": 1,
+      "extension": "jfif",
+      "bytes": 32242,
+      "sha256": "96f15d03ea054fe0f67fd7b7a5c82d9da4d135bca0f4e06f2d607eabdf3d9fe2"
+    },
+    {
+      "style": 1,
+      "extension": "webp",
+      "bytes": 37048,
+      "sha256": "97659bc40d13b3a16a420f787a2027ed1f9f3b20166db0d21c16c5eec25df248"
+    },
+    {
+      "style": 1,
+      "extension": "jxl",
+      "bytes": 34954,
+      "sha256": "e5535ce056c6eb3e0b7b1f782e763500a752c839287fc936109b9e8d0f78cd08"
+    },
+    {
+      "style": 1,
+      "extension": "bmp",
+      "bytes": 36027,
+      "sha256": "ffd7b7951935e7e48d5abdfd6b98c0e790f6c6359b8a9dd924d7e1ae3a82314b"
+    },
+    {
+      "style": 1,
+      "extension": "ico",
+      "bytes": 36016,
+      "sha256": "65a55c814af14fd6a5aab9888af54d28955b01a5cb0a56b1ca22d5f39f61dfbf"
+    },
+    {
+      "style": 1,
+      "extension": "jxr",
+      "bytes": 36449,
+      "sha256": "98b618e3c1457987164827b2406af5b4d149341644a58969772060e14da54fc5"
+    },
+    {
+      "style": 1,
+      "extension": "hdp",
+      "bytes": 34749,
+      "sha256": "b56865e03a5a1264038ac57c9044bf22d1a5bfb6d2f071f30b4dd3069d84b08d"
+    },
+    {
+      "style": 1,
+      "extension": "wdp",
+      "bytes": 36895,
+      "sha256": "9df6f179dd61ca0ba7777ca0f4e6bd5622e0c9abd63e8f6256f43c2384fa9121"
+    },
+    {
+      "style": 2,
+      "extension": "pdf",
+      "bytes": 36455,
+      "sha256": "0605c83147bfa8de16f50f05bd7cf6f85e942b1cba3c9f3063e3703a7abc7980"
+    },
+    {
+      "style": 2,
+      "extension": "xps",
+      "bytes": 39840,
+      "sha256": "43a2954e8d374ba553031f04da66896e2edb0fb282d3e6f7bb0b5044e691224a"
+    },
+    {
+      "style": 2,
+      "extension": "oxps",
+      "bytes": 40528,
+      "sha256": "b56f709dcba4699e216ee6b19d2d537d9210ef08e45492df82944475c6eb8507"
+    },
+    {
+      "style": 2,
+      "extension": "cbz",
+      "bytes": 40054,
+      "sha256": "83ef701e67f49e9605ecfc5eb28776221be5196f88ace46091f89e110911e0ea"
+    },
+    {
+      "style": 2,
+      "extension": "cbr",
+      "bytes": 40719,
+      "sha256": "2c08404e33e7b054c283e9055c79bf241f44b16380049c5f0db8ccf47d203a50"
+    },
+    {
+      "style": 2,
+      "extension": "cb7",
+      "bytes": 39930,
+      "sha256": "48e1fb03e3b7e4fd9c4d30e0910289bdfe737e497af457a83e315b5922af2461"
+    },
+    {
+      "style": 2,
+      "extension": "cbt",
+      "bytes": 39240,
+      "sha256": "faefac872f1aef2d1f112c52ff7aa55ea74f7c75a9c756c1f97db9207db5acc3"
+    },
+    {
+      "style": 2,
+      "extension": "djvu",
+      "bytes": 37819,
+      "sha256": "64545b02a2a35d8b62ae8378a8e9fa6cfbfa00562fae998e7f5077ab9d201581"
+    },
+    {
+      "style": 2,
+      "extension": "chm",
+      "bytes": 39583,
+      "sha256": "2fb330630562b9148f92113d64d2e671712a1052b853d52c669934a7e1826856"
+    },
+    {
+      "style": 2,
+      "extension": "mobi",
+      "bytes": 40760,
+      "sha256": "e960bc654389e92cddbbe70283e78fa3abb3cd21fd0ee9d6a7f30797e3f939e4"
+    },
+    {
+      "style": 2,
+      "extension": "epub",
+      "bytes": 44732,
+      "sha256": "6aced302d5e930a2bfa85ee534549201f6918d2bb8c84458686825f76444086d"
+    },
+    {
+      "style": 2,
+      "extension": "md",
+      "bytes": 38553,
+      "sha256": "37140eaeb549a47cd0dd7e928a7fcddf450f6d8fe72566577ce5003ad0a2d6ed"
+    },
+    {
+      "style": 2,
+      "extension": "markdown",
+      "bytes": 38553,
+      "sha256": "37140eaeb549a47cd0dd7e928a7fcddf450f6d8fe72566577ce5003ad0a2d6ed"
+    },
+    {
+      "style": 2,
+      "extension": "svg",
+      "bytes": 45221,
+      "sha256": "01a1396fe5fc233d90c5ce76a769dd0da1199b007e91afcc4883398b269cb03d"
+    },
+    {
+      "style": 2,
+      "extension": "azw",
+      "bytes": 42143,
+      "sha256": "b65be6f010b79710823dc69e3506e86e5e237c569802fa456780d4111f885b53"
+    },
+    {
+      "style": 2,
+      "extension": "azw3",
+      "bytes": 42574,
+      "sha256": "da062c020a3840dd0eef90ca7fdae2a41f387bc600d3d24e6b1a631145810e1d"
+    },
+    {
+      "style": 2,
+      "extension": "azw4",
+      "bytes": 41785,
+      "sha256": "d2fcd3ad8b43feb7b49c7a12c05fdb9b07db1e97f4c6bd35f81afa225f1be879"
+    },
+    {
+      "style": 2,
+      "extension": "fb2",
+      "bytes": 45367,
+      "sha256": "29685b1ab7a71442b26ce4f3b3c2826667549bd2cb7b9dfd1c0dfb380470fc86"
+    },
+    {
+      "style": 2,
+      "extension": "fb2z",
+      "bytes": 45787,
+      "sha256": "89528e54700c59b46131ee9974f9fc71cbddb4999dd51369560d5c69f3803702"
+    },
+    {
+      "style": 2,
+      "extension": "prc",
+      "bytes": 41197,
+      "sha256": "05c17307a0511f17bbdca507579ded91e6ef0442b4c849dd663b8dd630172b9e"
+    },
+    {
+      "style": 2,
+      "extension": "tif",
+      "bytes": 33790,
+      "sha256": "b3ede302600f4c485ddcb1341072ab17747d5f1ebec8a58105c0ce910cf0516d"
+    },
+    {
+      "style": 2,
+      "extension": "tiff",
+      "bytes": 34239,
+      "sha256": "7eae36205dda9ce5e987aa46b7452d93a9c72b3fa5541cea447a428541553b12"
+    },
+    {
+      "style": 2,
+      "extension": "jp2",
+      "bytes": 42845,
+      "sha256": "1c1cdf050fe37ba4089618334a69ddff5d33fe99e736dab26f6d2edddaa1521d"
+    },
+    {
+      "style": 2,
+      "extension": "png",
+      "bytes": 43644,
+      "sha256": "865b44e3b861167e862bd0ed11392be8f67553472d451cf818aaef69cbe2dfbf"
+    },
+    {
+      "style": 2,
+      "extension": "jpg",
+      "bytes": 42218,
+      "sha256": "8c3ecaea100696b48be26d2e0c7545af35f6ae8d3eae9ec924c9561b2a72fa95"
+    },
+    {
+      "style": 2,
+      "extension": "jpeg",
+      "bytes": 41800,
+      "sha256": "e4660891ec8a0f4f8aa3be2049dce2322117352be4cd8d3ec33b7d8c61b69ba1"
+    },
+    {
+      "style": 2,
+      "extension": "tga",
+      "bytes": 44721,
+      "sha256": "62faa9ba97fe5bb5a4e3a21deeba615a5c6bc970580fc8143e18698752583a89"
+    },
+    {
+      "style": 2,
+      "extension": "gif",
+      "bytes": 38784,
+      "sha256": "6c386cd870402995e216d6c6a8e96a8563db476701bb224a8672d3b1af324a69"
+    },
+    {
+      "style": 2,
+      "extension": "avif",
+      "bytes": 43189,
+      "sha256": "ece8b1d76246a12d9421d2952ce3727aff63cbd8560793a4f9eab32b175c72c6"
+    },
+    {
+      "style": 2,
+      "extension": "heic",
+      "bytes": 40660,
+      "sha256": "1879adf69af2029688fe5103514d3d64dcdc85b3a74bf43e6cd223dbf5f56430"
+    },
+    {
+      "style": 2,
+      "extension": "heif",
+      "bytes": 38974,
+      "sha256": "4672fc1628221e4decba75880b1e3f4e45bfdc5c413bef84b145bbad2f55f3b1"
+    },
+    {
+      "style": 2,
+      "extension": "jfif",
+      "bytes": 39017,
+      "sha256": "779e9b23147f4cf56971f138499e0fc3aab2bcb395005b9b380920d3fda4a47d"
+    },
+    {
+      "style": 2,
+      "extension": "webp",
+      "bytes": 44442,
+      "sha256": "f8fb0c6c728a7352bdd1474152fd2093a7b1e4ec8cfa0e34b35cf66f1c992352"
+    },
+    {
+      "style": 2,
+      "extension": "jxl",
+      "bytes": 42983,
+      "sha256": "d6b59cabe7db179a811a04cb55cb45452f8d48ab3cd8f6dcdb7d785646a47354"
+    },
+    {
+      "style": 2,
+      "extension": "bmp",
+      "bytes": 43841,
+      "sha256": "160a5b789ccf8069ac17c4b9e6f6caaa6e56e131ae40fa6d0992dd7724a5ce46"
+    },
+    {
+      "style": 2,
+      "extension": "ico",
+      "bytes": 44702,
+      "sha256": "07237a6ad5dff827dc926bc027e7c944196dbcd1bfd0dd93a4455f4957217b85"
+    },
+    {
+      "style": 2,
+      "extension": "jxr",
+      "bytes": 44506,
+      "sha256": "d352011a29a6d00c5baa03a561c6ff1c7ac614a7110413d62562092791a1b64f"
+    },
+    {
+      "style": 2,
+      "extension": "hdp",
+      "bytes": 42399,
+      "sha256": "ac411d928de23f632c52b90123361b213a4f0b86c9fc8ed65dab58671e3f4402"
+    },
+    {
+      "style": 2,
+      "extension": "wdp",
+      "bytes": 45060,
+      "sha256": "a40b66fa390a17eef56013b372afff4b4e96968f37f7f34a9ddea81b2552d4f0"
+    }
+  ]
+}
