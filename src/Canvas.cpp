@@ -2292,6 +2292,7 @@ void ToggleAnnotationLasso(MainWindow* win) {
     DeleteOldSelectionInfo(win, true);
     SetSelectedAnnotation(win->CurrentTab(), nullptr);
     win->annotationLasso.active = true;
+    win->annotationLasso.rectangular = gSettings->annotations.lassoRectangular;
     win->annotationLasso.tab = win->CurrentTab();
     win->annotationLasso.pageNo = dm->CurrentPageNo();
     HwndInvalidate(win->hwndCanvas);
@@ -2357,7 +2358,7 @@ static Point LassoRotationHandle(MainWindow* win) {
     auto& lasso = win->annotationLasso;
     auto* dm = win->AsFixed();
     Rect r = dm->CvtToScreen(lasso.pageNo, lasso.bounds);
-    Point top{r.x + r.dx / 2, r.y - DpiScale(24)};
+    Point top{r.x + r.dx / 2, r.y - DpiScale(28)};
     PointF p = dm->CvtFromScreen(top, lasso.pageNo);
     return dm->CvtToScreen(lasso.pageNo, RotateLassoPoint(p, lasso.bounds, lasso.rotation));
 }
@@ -2365,7 +2366,7 @@ static Point LassoRotationHandle(MainWindow* win) {
 static bool HitLassoRotation(MainWindow* win, Point pt) {
     if (!CanRotateLasso(win->annotationLasso)) return false;
     Point handle = LassoRotationHandle(win);
-    int radius = DpiScale(8);
+    int radius = DpiScale(16);
     return std::abs(handle.x - pt.x) <= radius && std::abs(handle.y - pt.y) <= radius;
 }
 
@@ -2463,7 +2464,10 @@ static bool LassoOnMove(MainWindow* win, Point pt, WPARAM key) {
         }
         lasso.preview = r;
     }
-    if (lasso.drawing || lasso.transforming) HwndInvalidate(win->hwndCanvas);
+    if (lasso.drawing || lasso.transforming) {
+        HwndInvalidate(win->hwndCanvas);
+        UpdateWindow(win->hwndCanvas);
+    }
     return true;
 }
 
@@ -2483,7 +2487,8 @@ static void CommitLassoTransform(MainWindow* win) {
     UpdateLassoBounds(lasso);
     if (changed) {
         NotifyAnnotationsChanged(win->CurrentTab());
-        MainWindowRerender(win);
+        RerenderTabPage(win->CurrentTab(), lasso.pageNo);
+        HwndRepaintNow(win->hwndCanvas);
     }
 }
 
@@ -2622,6 +2627,7 @@ bool HandleAnnotationLassoCommand(MainWindow* win, int cmdId) {
     if (cmdId == CmdLassoFreehand || cmdId == CmdLassoRectangle) {
         auto& lasso = win->annotationLasso;
         lasso.rectangular = cmdId == CmdLassoRectangle;
+        gSettings->annotations.lassoRectangular = lasso.rectangular;
         if (!lasso.active)
             ToggleAnnotationLasso(win);
         else if (lasso.drawing || lasso.transforming) {
@@ -2781,6 +2787,41 @@ static void PaintAnnotationLasso(MainWindow* win, HDC hdc) {
         gfx.DrawLine(&pen, points[0], VecLast(points));
     }
     if (len(lasso.selected) > 0) {
+        if (lasso.transforming) {
+            for (Annotation* annot : lasso.selected) {
+                if (annot->type == AnnotationType::Ink) {
+                    Vec<int> counts;
+                    Vec<PointF> points;
+                    GetInkList(annot, counts, points);
+                    PdfColor pdfCol = GetColor(annot);
+                    u8 r = 0, g = 0, b = 0, a = 255;
+                    UnpackPdfColor(pdfCol, r, g, b, a);
+                    float bw = BorderWidthF(annot);
+                    int op = Opacity(annot);
+                    Gdiplus::Color strokeCol((BYTE)(op * 255 / 100), r, g, b);
+                    Gdiplus::Pen inkPen(strokeCol, std::max((float)DpiScale(1), bw));
+                    int first = 0;
+                    for (int count : counts) {
+                        Vec<Gdiplus::Point> strokePts;
+                        for (int i = first; i < first + count; i++) {
+                            PointF p = points[i];
+                            if (lasso.rotating) {
+                                p = RotateLassoPoint(p, lasso.bounds, lasso.rotation);
+                            } else if (lasso.bounds.dx > 0 && lasso.bounds.dy > 0) {
+                                p.x = lasso.preview.x + (p.x - lasso.bounds.x) * (lasso.preview.dx / lasso.bounds.dx);
+                                p.y = lasso.preview.y + (p.y - lasso.bounds.y) * (lasso.preview.dy / lasso.bounds.dy);
+                            }
+                            Point scr = dm->CvtToScreen(lasso.pageNo, p);
+                            VecAppend(strokePts, {scr.x, scr.y});
+                        }
+                        if (len(strokePts) > 1) {
+                            gfx.DrawLines(&inkPen, strokePts.els, len(strokePts));
+                        }
+                        first += count;
+                    }
+                }
+            }
+        }
         Rect r = dm->CvtToScreen(lasso.pageNo, lasso.preview);
         if (lasso.rotating) {
             RectF bounds = lasso.bounds;
@@ -2809,13 +2850,41 @@ static void PaintAnnotationLasso(MainWindow* win, HDC hdc) {
             PointF top = dm->CvtFromScreen({r.x + r.dx / 2, r.y}, lasso.pageNo);
             Point anchor = dm->CvtToScreen(lasso.pageNo, RotateLassoPoint(top, lasso.bounds, lasso.rotation));
             gfx.DrawLine(&pen, anchor.x, anchor.y, handle.x, handle.y);
-            gfx.FillEllipse(&brush, handle.x - size / 2, handle.y - size / 2, size, size);
+
+            int rotateSize = DpiScale(24);
+            Rect badge{handle.x - rotateSize / 2, handle.y - rotateSize / 2, rotateSize, rotateSize};
+            Gdiplus::SolidBrush whiteBrush(Gdiplus::Color(255, 255, 255, 255));
+            gfx.FillEllipse(&whiteBrush, badge.x, badge.y, badge.dx, badge.dy);
+            Gdiplus::Pen badgePen(color, (float)DpiScale(2));
+            gfx.DrawEllipse(&badgePen, badge.x, badge.y, badge.dx, badge.dy);
+
+            int iconInset = DpiScale(4);
+            Gdiplus::RectF arcRect((float)(badge.x + iconInset), (float)(badge.y + iconInset),
+                                   (float)(badge.dx - 2 * iconInset), (float)(badge.dy - 2 * iconInset));
+            Gdiplus::Pen arrowPen(color, (float)std::max(DpiScale(2), 2));
+            arrowPen.SetStartCap(Gdiplus::LineCapRound);
+            arrowPen.SetEndCap(Gdiplus::LineCapRound);
+            gfx.DrawArc(&arrowPen, arcRect, 20.f, 290.f);
+
+            float rad = 310.f * 3.14159265f / 180.f;
+            float arcRx = arcRect.Width / 2.f, arcRy = arcRect.Height / 2.f;
+            float tipX = arcRect.X + arcRx + arcRx * cosf(rad);
+            float tipY = arcRect.Y + arcRy + arcRy * sinf(rad);
+            float tangent = rad + 3.14159265f / 2.f;
+            float arrowLen = (float)DpiScale(5);
+            Gdiplus::PointF arrowPts[3] = {
+                {tipX - arrowLen * cosf(tangent - 0.5f), tipY - arrowLen * sinf(tangent - 0.5f)},
+                {tipX, tipY},
+                {tipX - arrowLen * cosf(tangent + 0.5f), tipY - arrowLen * sinf(tangent + 0.5f)}
+            };
+            gfx.DrawLines(&arrowPen, arrowPts, 3);
+
             if (lasso.rotating) {
                 WCHAR label[32];
                 swprintf_s(label, L"%.1f\x00b0", lasso.rotation);
                 SetTextColor(hdc, rgb);
                 SetBkMode(hdc, TRANSPARENT);
-                TextOutW(hdc, handle.x + size, handle.y, label, (int)wcslen(label));
+                TextOutW(hdc, handle.x + rotateSize / 2 + DpiScale(4), handle.y - DpiScale(8), label, (int)wcslen(label));
             }
         }
     }

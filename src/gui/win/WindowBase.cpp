@@ -423,6 +423,12 @@ HWND HwndBase::CreateCustomHwnd(const CreateCustomArgs& args, WStr defaultClassN
     SetColors(kColorNoChange, args.bgColor);
     if (args.icon) {
         HwndSetIcon(hwnd, args.icon);
+    } else if (!(style & WS_CHILD)) {
+        int GetAppIconID();
+        HICON defaultIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(GetAppIconID()));
+        if (defaultIcon) {
+            HwndSetIcon(hwnd, defaultIcon);
+        }
     }
     if (style & WS_VISIBLE) {
         if (style & WS_MAXIMIZE)

@@ -1291,7 +1291,7 @@ void WebviewWnd::OnControllerReady(ICoreWebView2Controller* controller) {
         settings->put_AreDevToolsEnabled(FALSE);
         settings->put_AreDefaultScriptDialogsEnabled(FALSE);
         settings->put_IsStatusBarEnabled(FALSE);
-        settings->put_IsZoomControlEnabled(FALSE);
+        settings->put_IsZoomControlEnabled(TRUE);
         settings->Release();
     }
 

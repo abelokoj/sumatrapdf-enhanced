@@ -733,12 +733,90 @@ static Color ThemePageRenderColorsNoInvert(Color& bg) {
     return text;
 }
 
+struct InvertColorDef {
+    const char* name;
+    Color bg;
+    Color text;
+};
+
+static const InvertColorDef gInvertColorPresets[] = {
+    // 3 White / Light tints
+    {"Pure White", MkRgb(255, 255, 255), MkRgb(0, 0, 0)},
+    {"Warm Sepia", MkRgb(251, 240, 217), MkRgb(42, 34, 24)},
+    {"Soft Paper", MkRgb(240, 242, 245), MkRgb(24, 26, 29)},
+    // 3 Dark tints
+    {"Pure Black", MkRgb(0, 0, 0), MkRgb(255, 255, 255)},
+    {"Midnight Charcoal", MkRgb(30, 30, 30), MkRgb(236, 236, 236)},
+    {"Warm Espresso", MkRgb(43, 37, 32), MkRgb(232, 222, 200)},
+};
+
+int GetInvertColorPreset() {
+    if (!gSettings) return 3;
+    int idx = gSettings->fixedPageUI.invertColorIndex;
+    if (idx < 0 || idx > 7) return 3;
+    return idx;
+}
+
+void SetInvertColorPreset(int preset) {
+    if (gSettings) {
+        gSettings->fixedPageUI.invertColorIndex = preset;
+        ScheduleSaveSettings();
+    }
+}
+
+Color GetInvertCustomColor(bool dark) {
+    if (!gSettings) return dark ? MkRgb(24, 26, 31) : MkRgb(253, 246, 227);
+    ParsedColor* pc = dark ? &gSettings->fixedPageUI.invertCustomDarkCol : &gSettings->fixedPageUI.invertCustomLightCol;
+    ParsedColor* parsed = GetPrefsColor(*pc);
+    if (parsed && parsed->parsedOk) return parsed->col;
+    return dark ? MkRgb(24, 26, 31) : MkRgb(253, 246, 227);
+}
+
+void SetInvertCustomColor(bool dark, Color col) {
+    if (!gSettings) return;
+    u8 r = GetRValue(col), g = GetGValue(col), b = GetBValue(col);
+    TempStr hex = str::FormatTemp("#%02x%02x%02x", r, g, b);
+    ParsedColor* pc = dark ? &gSettings->fixedPageUI.invertCustomDarkCol : &gSettings->fixedPageUI.invertCustomLightCol;
+    str::ReplaceWithCopy(&pc->s, hex);
+    pc->parsedOk = true;
+    pc->wasParsed = true;
+    pc->col = col;
+    pc->pdfCol = col;
+    ScheduleSaveSettings();
+}
+
+Color GetInvertPresetColor(int preset) {
+    if (preset >= 0 && preset < 6) return gInvertColorPresets[preset].bg;
+    if (preset == 6) return GetInvertCustomColor(false);
+    if (preset == 7) return GetInvertCustomColor(true);
+    return MkRgb(0, 0, 0);
+}
+
+const char* GetInvertPresetName(int preset) {
+    if (preset >= 0 && preset < 6) return gInvertColorPresets[preset].name;
+    if (preset == 6) return "Custom Light";
+    if (preset == 7) return "Custom Dark";
+    return "";
+}
+
 Color ThemePageRenderColors(Color& bg) {
     Color text = ThemePageRenderColorsNoInvert(bg);
     if (!gInvertPageColors) {
         return text;
     }
-    std::swap(text, bg);
+    int preset = GetInvertColorPreset();
+    if (preset >= 0 && preset < 6) {
+        bg = gInvertColorPresets[preset].bg;
+        text = gInvertColorPresets[preset].text;
+    } else if (preset == 6) {
+        bg = GetInvertCustomColor(false);
+        text = IsLightColor(bg) ? MkRgb(20, 20, 20) : MkRgb(235, 235, 235);
+    } else if (preset == 7) {
+        bg = GetInvertCustomColor(true);
+        text = IsLightColor(bg) ? MkRgb(20, 20, 20) : MkRgb(235, 235, 235);
+    } else {
+        std::swap(text, bg);
+    }
     return text;
 }
 

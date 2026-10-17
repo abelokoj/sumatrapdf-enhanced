@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2004-2026 Artifex Software, Inc.
+// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -316,8 +316,8 @@ static fz_point rotate_vector(float angle, float x, float y)
 static void pdf_write_arrow_appearance(fz_context *ctx, fz_buffer *buf, fz_rect *rect, float x, float y, float dx, float dy, float w, int close, float max_len)
 {
 	float r = fz_max(1, w);
-	float len = 8.8f * r;
-	float half_w = 4.5f * r;
+	float len = fz_min(4.5f * r + 2.f, 12.f);
+	float half_w = len * 0.45f;
 	if (max_len > 0 && len > max_len)
 	{
 		float scale = max_len / len;
@@ -355,7 +355,7 @@ static void include_cap(fz_rect *rect, float x, float y, float r)
 }
 
 static void
-pdf_write_line_cap_appearance(fz_context *ctx, fz_buffer *buf, fz_rect *rect,
+pdf_write_line_cap_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, fz_rect *rect,
 		float x, float y, float dx, float dy, float w,
 		int sc, int ic, pdf_obj *cap, float max_len)
 {
@@ -393,15 +393,12 @@ pdf_write_line_cap_appearance(fz_context *ctx, fz_buffer *buf, fz_rect *rect,
 		maybe_stroke_and_fill(ctx, buf, sc, ic);
 		include_cap(rect, x, y, r + w/sqrtf(2));
 	}
-	else if (cap == PDF_NAME(OpenArrow))
-	{
-		pdf_write_arrow_appearance(ctx, buf, rect, x, y, dx, dy, w, 0, max_len);
-		maybe_stroke(ctx, buf, sc);
-	}
-	else if (cap == PDF_NAME(ClosedArrow))
+	else if (cap == PDF_NAME(OpenArrow) || cap == PDF_NAME(ClosedArrow))
 	{
 		pdf_write_arrow_appearance(ctx, buf, rect, x, y, dx, dy, w, 1, max_len);
-		maybe_stroke_and_fill(ctx, buf, sc, ic);
+		if (!ic && annot)
+			pdf_write_fill_color_appearance(ctx, annot, buf);
+		maybe_stroke_and_fill(ctx, buf, sc, 1);
 	}
 	/* PDF 1.5 */
 	else if (cap == PDF_NAME(Butt))
@@ -416,15 +413,12 @@ pdf_write_line_cap_appearance(fz_context *ctx, fz_buffer *buf, fz_rect *rect,
 		*rect = fz_include_point_in_rect(*rect, b);
 		*rect = fz_expand_rect(*rect, w);
 	}
-	else if (cap == PDF_NAME(ROpenArrow))
-	{
-		pdf_write_arrow_appearance(ctx, buf, rect, x, y, -dx, -dy, w, 0, max_len);
-		maybe_stroke(ctx, buf, sc);
-	}
-	else if (cap == PDF_NAME(RClosedArrow))
+	else if (cap == PDF_NAME(ROpenArrow) || cap == PDF_NAME(RClosedArrow))
 	{
 		pdf_write_arrow_appearance(ctx, buf, rect, x, y, -dx, -dy, w, 1, max_len);
-		maybe_stroke_and_fill(ctx, buf, sc, ic);
+		if (!ic && annot)
+			pdf_write_fill_color_appearance(ctx, annot, buf);
+		maybe_stroke_and_fill(ctx, buf, sc, 1);
 	}
 	/* PDF 1.6 */
 	else if (cap == PDF_NAME(Slash))
@@ -539,8 +533,8 @@ pdf_write_line_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, fz_
 	{
 		dx = b.x - a.x;
 		dy = b.y - a.y;
-		pdf_write_line_cap_appearance(ctx, buf, rect, a.x, a.y, dx, dy, w, sc, ic, pdf_array_get(ctx, le, 0), 0);
-		pdf_write_line_cap_appearance(ctx, buf, rect, b.x, b.y, -dx, -dy, w, sc, ic, pdf_array_get(ctx, le, 1), 0);
+		pdf_write_line_cap_appearance(ctx, annot, buf, rect, a.x, a.y, dx, dy, w, sc, ic, pdf_array_get(ctx, le, 0), 0);
+		pdf_write_line_cap_appearance(ctx, annot, buf, rect, b.x, b.y, -dx, -dy, w, sc, ic, pdf_array_get(ctx, le, 1), 0);
 	}
 	*rect = fz_expand_rect(*rect, fz_max(1, w));
 }
@@ -1041,7 +1035,7 @@ pdf_write_polygon_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, 
 		dx = b.x - a.x;
 		dy = b.y - a.y;
 
-		pdf_write_line_cap_appearance(ctx, buf, rect, a.x, a.y, dx, dy, lw, sc, ic, pdf_array_get(ctx, le, 0), 0);
+		pdf_write_line_cap_appearance(ctx, annot, buf, rect, a.x, a.y, dx, dy, lw, sc, ic, pdf_array_get(ctx, le, 0), 0);
 
 		a.x = pdf_array_get_real(ctx, verts, (n-1)*2+0);
 		a.y = pdf_array_get_real(ctx, verts, (n-1)*2+1);
@@ -1051,7 +1045,7 @@ pdf_write_polygon_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, 
 		dx = b.x - a.x;
 		dy = b.y - a.y;
 
-		pdf_write_line_cap_appearance(ctx, buf, rect, a.x, a.y, dx, dy, lw, sc, ic, pdf_array_get(ctx, le, 1), 0);
+		pdf_write_line_cap_appearance(ctx, annot, buf, rect, a.x, a.y, dx, dy, lw, sc, ic, pdf_array_get(ctx, le, 1), 0);
 	}
 
 	if (exp == 0)
@@ -2742,7 +2736,7 @@ pdf_write_free_text_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf
 			fz_append_printf(ctx, buf, "S\n");
 
 			le = pdf_dict_get(ctx, annot->obj, PDF_NAME(LE));
-			pdf_write_line_cap_appearance(ctx, buf, rect,
+			pdf_write_line_cap_appearance(ctx, annot, buf, rect,
 				xy[0], xy[1],
 				xy[2] - xy[0], xy[3] - xy[1], b,
 				1, ic, le, 0);

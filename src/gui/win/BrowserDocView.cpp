@@ -865,9 +865,15 @@ LRESULT BrowserDocView::SendMsg(UINT msg, WPARAM wp, LPARAM lp) {
     if (backend == Backend::WebView2 && wv && wv->hwnd) {
         if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL) {
             // Chromium ignores WM_MOUSEWHEEL on the host hwnd. When the frame
-            // (focused) or canvas parent gets the wheel, scroll via JS (#6142).
+            // (focused) or canvas parent gets the wheel, handle zoom or scroll (#6142).
             if ((LOWORD(wp) & MK_CONTROL) || IsCtrlPressed()) {
-                return SendMessageW(wv->hwnd, msg, wp, lp);
+                short delta = GET_WHEEL_DELTA_WPARAM(wp);
+                int currentZoom = GetZoomPercent();
+                if (currentZoom <= 0) currentZoom = 100;
+                int step = (delta > 0) ? 10 : -10;
+                int newZoom = limitValue(currentZoom + step, 20, 500);
+                SetZoomPercent(newZoom);
+                return 0;
             }
             short delta = GET_WHEEL_DELTA_WPARAM(wp);
             bool horiz = (msg == WM_MOUSEHWHEEL) || (LOWORD(wp) & MK_SHIFT) || IsShiftPressed();

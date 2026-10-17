@@ -85,7 +85,8 @@ ReuseInstance = false
 UIFontFamily = system
 "@ | Set-Content -LiteralPath (Join-Path $stageDir 'SumatraPDFEnhanced-settings.txt') -Encoding utf8
 $payloadFiles = @(Get-ChildItem -LiteralPath $stageDir -File -Recurse | Sort-Object FullName | ForEach-Object {
-    @{ path = [IO.Path]::GetRelativePath($stageDir,$_.FullName).Replace('\','/'); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant() }
+    $rel = $_.FullName.Substring($stageDir.Length).TrimStart('\','/')
+    @{ path = $rel.Replace('\','/'); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant() }
 })
 $toolchain = $null
 $bunVersion = $null

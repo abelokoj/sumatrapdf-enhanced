@@ -45,6 +45,7 @@
 #include "RegistrySearchFilter.h"
 #include "Notifications.h"
 #include "PdfDarkMode.h"
+#include "DarkMode.h"
 #include "EngineAll.h"
 #include "CommandAvailability.h"
 #include "Accelerators.h"
@@ -150,6 +151,7 @@ struct CommandPaletteWnd : WindowBase {
     void OnActivate(WindowBase::ActivateEvent*);
     void OnCommand(WindowBase::CommandEvent*);
     void OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent*);
+    void OnDpiChanged(WindowBase::DpiChangedEvent*);
 
     void CollectStrings(MainWindow*);
     void CollectTabsRegular(MainWindow*, WindowTab* currTab);
@@ -1041,6 +1043,13 @@ void CommandPaletteWnd::OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent* ev) {
                                std::min(height + frame.dy - client.dy, work.dy)};
 }
 
+void CommandPaletteWnd::OnDpiChanged(WindowBase::DpiChangedEvent* /*ev*/) {
+    WindowApplyScaledCaption(hwnd);
+    if (layout && hwnd) {
+        DoLayout(HwndClientRect(hwnd).Size());
+    }
+}
+
 enum {
     kHelpNone = -1,
     kHelpSmartTab,
@@ -1208,7 +1217,7 @@ void CommandPaletteWnd::UpdateColors() {
     FillSwitchRow();
     helpKind = kHelpNone;
     UpdateHelpRow();
-    RedrawWindow(hwnd, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_ALLCHILDREN);
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_FRAME | RDW_ERASE | RDW_INVALIDATE | RDW_ALLCHILDREN);
 }
 
 bool CommandPaletteWnd::Create(MainWindow* win, Str prefix, int smartTabAdvance) {
@@ -1220,13 +1229,16 @@ bool CommandPaletteWnd::Create(MainWindow* win, Str prefix, int smartTabAdvance)
     {
         CreateCustomArgs args;
         args.visible = false;
-        args.style = WS_POPUPWINDOW | WS_THICKFRAME;
+        args.title = Str(Tr("Command Palette"));
+        args.style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_CLIPCHILDREN;
         // owned tool window: stays above the frame, off the taskbar (#6126)
         args.owner = win->hwndFrame;
         args.exStyle = WS_EX_TOOLWINDOW;
         args.font = GetFont();
         onGetMinMaxInfo =
             MkMethod1<CommandPaletteWnd, WindowBase::GetMinMaxInfoEvent*, &CommandPaletteWnd::OnGetMinMaxInfo>(this);
+        onDpiChanged =
+            MkMethod1<CommandPaletteWnd, WindowBase::DpiChangedEvent*, &CommandPaletteWnd::OnDpiChanged>(this);
         CreateCustom(args);
     }
     if (!hwnd) {
@@ -1236,6 +1248,7 @@ bool CommandPaletteWnd::Create(MainWindow* win, Str prefix, int smartTabAdvance)
     auto colBg = ThemeWindowControlBackgroundColor();
     auto colTxt = ThemeWindowTextColor();
     SetColors(colTxt, colBg);
+    DarkModeApplyToTitleBar(hwnd);
 
     auto* vbox = new VBox();
     vbox->alignMain = MainAxisAlign::MainStart;
@@ -1352,6 +1365,8 @@ bool CommandPaletteWnd::Create(MainWindow* win, Str prefix, int smartTabAdvance)
     if (str::StartsWith(prefix, Str(kPalettePrefixThumbnails))) {
         SetThumbnailMode(ThumbnailMode::Enabled);
     }
+    DarkModeApplyToPopupWindow(hwnd);
+    WindowApplyScaledCaption(hwnd);
     PositionCommandPalette(hwnd, win->hwndFrame);
 
     EditSetCursorPosAtEnd(editQuery);

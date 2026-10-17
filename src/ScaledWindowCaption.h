@@ -114,12 +114,18 @@ static void PaintAppCaption(HWND hwnd, ScaledWindowCaption* state, HDC target = 
     int iconSize = PlatformFontLineHeight(font);
     bool rtl = (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) != 0;
     LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    int GetAppIconID();
+
     HICON icon = (HICON)SendMessageW(hwnd, WM_GETICON, ICON_SMALL2, 0);
+    if (!icon) icon = (HICON)SendMessageW(hwnd, WM_GETICON, ICON_SMALL, 0);
+    if (!icon) icon = (HICON)SendMessageW(hwnd, WM_GETICON, ICON_BIG, 0);
     if (!icon) icon = (HICON)GetClassLongPtrW(hwnd, GCLP_HICONSM);
+    if (!icon) icon = (HICON)GetClassLongPtrW(hwnd, GCLP_HICON);
+    if (!icon) icon = (HICON)LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(GetAppIconID()), IMAGE_ICON, iconSize, iconSize, LR_SHARED);
     Rect title = caption;
     title.x += pad;
     title.dx -= 2 * pad;
-    if (icon && (style & WS_SYSMENU)) {
+    if (icon) {
         int x = rtl ? title.Right() - iconSize : title.x;
         DrawIconEx(dc, x, caption.y + (caption.dy - iconSize) / 2, icon, iconSize, iconSize, 0, nullptr, DI_NORMAL);
         title.dx -= iconSize + pad;

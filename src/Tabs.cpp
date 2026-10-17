@@ -164,10 +164,15 @@ void UpdateTabWidth(MainWindow* win) {
         win->tabsCtrl->activeStyle = gSettings->activeTabStyle;
         win->tabsCtrl->tabListVisibleItems = limitValue(gSettings->tabListVisibleItems, 1, 50);
         win->tabsCtrl->tabIconDx = UiScalePxForDpi(dpi, limitValue(gSettings->toolbarSize, 8, 64));
-        int iconDx = win->tabsCtrl->tabIconDx;
+        int iconDx = std::min(win->tabsCtrl->tabIconDx, win->tabsCtrl->ScaleMetric(14));
+        Color tabTextCol = win->tabsCtrl->GetColor(kColTabText);
+        Color tabBgCol = win->tabsCtrl->GetColor(kColTabBg);
+        win->tabsCtrl->tabScrollLeftIcon =
+            GetCachedPixmapForSvg(Str(gIconSearchPrev), iconDx, iconDx, tabTextCol, tabBgCol);
+        win->tabsCtrl->tabScrollRightIcon =
+            GetCachedPixmapForSvg(Str(gIconSearchNext), iconDx, iconDx, tabTextCol, tabBgCol);
         win->tabsCtrl->tabListIcon =
-            GetCachedPixmapForSvg(Str(gIconChevronDownBold), iconDx, iconDx, win->tabsCtrl->GetColor(kColTabText),
-                                  win->tabsCtrl->GetColor(kColTabBg));
+            GetCachedPixmapForSvg(Str(gIconChevronDown), iconDx, iconDx, tabTextCol, tabBgCol);
         win->tabsCtrl->tabMinDx = UiScalePxForDpi(dpi, limitValue(gSettings->minTabWidth, 60, 400));
         win->tabsCtrl->tabDefaultDx = std::max(win->tabsCtrl->tabMinDx, UiScalePxForDpi(dpi, gSettings->tabWidth));
     }

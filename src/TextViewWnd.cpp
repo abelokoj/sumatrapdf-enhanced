@@ -163,6 +163,7 @@ struct TextViewWnd : WindowBase {
     bool useCrLf = false;
     bool mixedEndings = false;
     bool* didSave = nullptr;
+    Vec<Button*> formatButtons;
     ~TextViewWnd() override {
         str::Free(editPath);
         str::Free(originalBytes);
@@ -179,18 +180,82 @@ struct TextViewWnd : WindowBase {
     void CloseClick() {
         if (TryClose()) ScheduleDelete();
     }
+    void InsertOrWrap(Str prefix, Str suffix, Str placeholder);
+    void OnBold() { InsertOrWrap(StrL("**"), StrL("**"), StrL("bold text")); }
+    void OnItalic() { InsertOrWrap(StrL("*"), StrL("*"), StrL("italic text")); }
+    void OnUnderline() { InsertOrWrap(StrL("<u>"), StrL("</u>"), StrL("underlined text")); }
+    void OnHeading() { InsertOrWrap(StrL("### "), StrL(""), StrL("Heading")); }
+    void OnList() { InsertOrWrap(StrL("- "), StrL(""), StrL("list item")); }
+    void OnLink() { InsertOrWrap(StrL("["), StrL("](https://)"), StrL("link text")); }
+    void OnTask() { InsertOrWrap(StrL("- [ ] "), StrL(""), StrL("task item")); }
+    void OnColor() { InsertOrWrap(StrL("<span style=\"color: #e03e2d;\">"), StrL("</span>"), StrL("colored text")); }
+    void OnAlign() { InsertOrWrap(StrL("<div align=\"center\">\n"), StrL("\n</div>"), StrL("centered content")); }
+    void OnCode() { InsertOrWrap(StrL("`"), StrL("`"), StrL("code")); }
+    void OnHighlight() { InsertOrWrap(StrL("=="), StrL("=="), StrL("highlighted text")); }
+    void OnCallout() { InsertOrWrap(StrL("> [!NOTE]\n> "), StrL(""), StrL("callout text")); }
+    void OnStrike() { InsertOrWrap(StrL("~~"), StrL("~~"), StrL("strikethrough text")); }
     void EditKey(KeyEvent* ev) {
-        if (ev->isCtrl && !ev->isAlt && ev->vkey == 'S' && editPath) {
+        if (len(editPath) == 0 || !ev->isCtrl || ev->isAlt) return;
+        if (ev->vkey == 'S') {
             SaveMarkdown();
+            ev->didHandle = true;
+        } else if (ev->vkey == 'B') {
+            OnBold();
+            ev->didHandle = true;
+        } else if (ev->vkey == 'I') {
+            OnItalic();
+            ev->didHandle = true;
+        } else if (ev->vkey == 'U') {
+            OnUnderline();
+            ev->didHandle = true;
+        } else if (ev->vkey == 'K') {
+            OnLink();
             ev->didHandle = true;
         }
     }
     void MinimumSize(GetMinMaxInfoEvent* ev) {
-        ev->mmi->ptMinTrackSize.x = DpiScale(320);
-        ev->mmi->ptMinTrackSize.y = DpiScale(200);
+        ev->mmi->ptMinTrackSize.x = DpiScale(580);
+        ev->mmi->ptMinTrackSize.y = DpiScale(300);
     }
     void EditorDpiChanged(DpiChangedEvent*) { UpdateTheme(); }
 };
+
+void TextViewWnd::InsertOrWrap(Str prefix, Str suffix, Str placeholder) {
+    if (!edit || !edit->hwnd) return;
+    DWORD start = 0, end = 0;
+    SendMessageW(edit->hwnd, EM_GETSEL, (WPARAM)&start, (LPARAM)&end);
+    TempStr fullText = edit->GetTextTemp();
+    TempWStr fullWide = ToWStrTemp(fullText);
+    int textLen = fullWide.len;
+    if ((int)start > textLen) start = (DWORD)textLen;
+    if ((int)end > textLen) end = (DWORD)textLen;
+    if (start > end) std::swap(start, end);
+
+    WStr selWide = (start < end) ? WStr(fullWide.s + start, (int)(end - start)) : WStr();
+    TempStr selUtf8 = ToUtf8Temp(selWide);
+
+    str::Builder b;
+    b.Append(prefix);
+    if (len(selUtf8) > 0) {
+        b.Append(selUtf8);
+    } else {
+        b.Append(placeholder);
+    }
+    b.Append(suffix);
+
+    TempStr replacement = ToStrTemp(b);
+    TempWStr repWide = ToWStrTemp(replacement);
+    SendMessageW(edit->hwnd, EM_REPLACESEL, TRUE, (LPARAM)repWide.s);
+
+    if (len(selUtf8) == 0 && len(placeholder) > 0) {
+        TempWStr preWide = ToWStrTemp(prefix);
+        TempWStr phWide = ToWStrTemp(placeholder);
+        DWORD newStart = start + (DWORD)preWide.len;
+        DWORD newEnd = newStart + (DWORD)phWide.len;
+        SendMessageW(edit->hwnd, EM_SETSEL, newStart, newEnd);
+    }
+    SetFocus(edit->hwnd);
+}
 
 void TextViewWnd::ApplyDarkMode() {
     DarkModeApplyToWindowAndEraseBg(hwnd);
@@ -203,6 +268,9 @@ void TextViewWnd::UpdateTheme() {
         auto* appFont = GetAppFontForDpi(GetDpi());
         if (saveButton) saveButton->SetFont(appFont);
         if (closeButton) closeButton->SetFont(appFont);
+        for (auto* btn : formatButtons) {
+            if (btn) btn->SetFont(appFont);
+        }
     }
     // Re-apply monospaced font after darkmode child theming (may reset font).
     if (edit && monoFont) {
@@ -266,6 +334,42 @@ bool TextViewWnd::Create(Str title, Str text) {
         originalView = str::Dup(edit->GetTextTemp());
         auto* root = new VBox();
         root->alignCross = CrossAxisAlign::Stretch;
+
+        auto* toolbar = new HBox();
+        toolbar->alignCross = CrossAxisAlign::CrossCenter;
+        toolbar->gap = DpiScale(3);
+
+        Button::CreateArgs btnArgs;
+        btnArgs.parent = hwnd;
+        btnArgs.font = GetAppFont();
+
+#define ADD_MD_FORMAT_BTN(txt, method)                                       \
+        do {                                                                 \
+            btnArgs.text = Str(txt);                                         \
+            auto* b = new Button();                                          \
+            b->Create(btnArgs);                                              \
+            b->onClick = MkMethod0<TextViewWnd, &TextViewWnd::method>(this); \
+            VecAppend(formatButtons, b);                                     \
+            toolbar->AddChild(b);                                            \
+        } while (0)
+
+        ADD_MD_FORMAT_BTN("B", OnBold);
+        ADD_MD_FORMAT_BTN("I", OnItalic);
+        ADD_MD_FORMAT_BTN("U", OnUnderline);
+        ADD_MD_FORMAT_BTN("H", OnHeading);
+        ADD_MD_FORMAT_BTN("List", OnList);
+        ADD_MD_FORMAT_BTN("Link", OnLink);
+        ADD_MD_FORMAT_BTN("[ ]", OnTask);
+        ADD_MD_FORMAT_BTN("Color", OnColor);
+        ADD_MD_FORMAT_BTN("Align", OnAlign);
+        ADD_MD_FORMAT_BTN("Code", OnCode);
+        ADD_MD_FORMAT_BTN("Highlight", OnHighlight);
+        ADD_MD_FORMAT_BTN("Callout", OnCallout);
+        ADD_MD_FORMAT_BTN("Strike", OnStrike);
+
+#undef ADD_MD_FORMAT_BTN
+
+        root->AddChild(new Padding(toolbar, DpiScaledInsets(6, 6, 2, 6)));
         root->AddChild(edit, 1);
         auto* buttons = new HBox();
         buttons->alignMain = MainAxisAlign::MainEnd;

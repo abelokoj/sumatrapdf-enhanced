@@ -301,6 +301,8 @@ AnnotPlacementKind PlacementKindFromCommand(int cmdId) {
             return AnnotPlacementKind::PolyLine;
         case CmdCreateAnnotSquare:
         case CmdCreateAnnotCircle:
+        case CmdCreateAnnotPolygon:
+        case CmdCreateAnnotStar:
         case CmdCreateAnnotRedact:
             return AnnotPlacementKind::Shape;
         case CmdCreateAnnotInk:
@@ -968,12 +970,69 @@ static bool AppendInkPoint(MainWindow* win, DisplayModel* dm, Point pt, InkSampl
     Rect dirty(screen.x - pad, screen.y - pad, pad * 2 + 1, pad * 2 + 1);
     p.inkScreenBounds = p.inkScreenBounds.IsEmpty() ? dirty : p.inkScreenBounds.Union(dirty);
     HwndInvalidateRect(win->hwndCanvas, p.inkScreenBounds, false);
+    UpdateWindow(win->hwndCanvas);
     return true;
 }
 
 // How many screen pixels one PDF point of the page covers at the current zoom.
 static float PxPerPagePt(DisplayModel* dm, int pageNo) {
     return std::max(dm->GetZoomReal(pageNo), 0.01f);
+}
+
+static float DistPointToSegment(PointF pt, PointF a, PointF b) {
+    float dx = b.x - a.x, dy = b.y - a.y;
+    float l2 = dx * dx + dy * dy;
+    if (l2 <= 0.00001f) return hypotf(pt.x - a.x, pt.y - a.y);
+    float t = std::clamp(((pt.x - a.x) * dx + (pt.y - a.y) * dy) / l2, 0.f, 1.f);
+    float projX = a.x + t * dx, projY = a.y + t * dy;
+    return hypotf(pt.x - projX, pt.y - projY);
+}
+
+static bool DecomposeShapeToInkContour(Annotation* annot, Vec<PointF>& shapePoints) {
+    auto typ = Type(annot);
+    if (typ == AnnotationType::Line) {
+        PointF p1{}, p2{};
+        if (GetLinePoints(annot, p1, p2)) {
+            VecAppend(shapePoints, p1);
+            VecAppend(shapePoints, p2);
+            return true;
+        }
+    } else if (typ == AnnotationType::PolyLine) {
+        Vec<PointF> verts = GetVertices(annot);
+        if (len(verts) >= 2) {
+            for (PointF v : verts) VecAppend(shapePoints, v);
+            return true;
+        }
+    } else if (typ == AnnotationType::Polygon) {
+        Vec<PointF> verts = GetVertices(annot);
+        if (len(verts) >= 2) {
+            for (PointF v : verts) VecAppend(shapePoints, v);
+            VecAppend(shapePoints, verts[0]);
+            return true;
+        }
+    } else if (typ == AnnotationType::Square) {
+        RectF r = GetBounds(annot);
+        if (r.dx > 0 && r.dy > 0) {
+            VecAppend(shapePoints, PointF{r.x, r.y});
+            VecAppend(shapePoints, PointF{r.Right(), r.y});
+            VecAppend(shapePoints, PointF{r.Right(), r.Bottom()});
+            VecAppend(shapePoints, PointF{r.x, r.Bottom()});
+            VecAppend(shapePoints, PointF{r.x, r.y});
+            return true;
+        }
+    } else if (typ == AnnotationType::Circle) {
+        RectF r = GetBounds(annot);
+        if (r.dx > 0 && r.dy > 0) {
+            float cx = r.x + r.dx / 2.f, cy = r.y + r.dy / 2.f;
+            float rx = r.dx / 2.f, ry = r.dy / 2.f;
+            for (int i = 0; i <= 32; i++) {
+                float a = i * (2.f * 3.14159265f / 32.f);
+                VecAppend(shapePoints, PointF{cx + rx * cosf(a), cy + ry * sinf(a)});
+            }
+            return true;
+        }
+    }
+    return false;
 }
 
 bool AnnotationPlacementEraseAt(MainWindow* win, Point pt) {
@@ -1026,6 +1085,53 @@ bool AnnotationPlacementEraseAt(MainWindow* win, Point pt) {
             }
         }
         if (Type(annot) != AnnotationType::Ink) {
+            auto typ = Type(annot);
+            bool isShape = (typ == AnnotationType::Square || typ == AnnotationType::Circle ||
+                            typ == AnnotationType::Line || typ == AnnotationType::PolyLine ||
+                            typ == AnnotationType::Polygon);
+            if (!isShape || win->inkEraseMode == 2) {
+                continue;
+            }
+            Vec<PointF> shapePoints;
+            if (!DecomposeShapeToInkContour(annot, shapePoints) || len(shapePoints) < 2) {
+                continue;
+            }
+            bool touched = false;
+            for (int i = 1; i < len(shapePoints); i++) {
+                if (DistPointToSegment(pagePt, shapePoints[i - 1], shapePoints[i]) <= radius) {
+                    touched = true;
+                    break;
+                }
+            }
+            if (!touched) {
+                continue;
+            }
+            PdfColor pdfColor = GetColor(annot);
+            u8 r = 0, g = 0, b = 0, a = 255;
+            UnpackPdfColor(pdfColor, r, g, b, a);
+            Color color = MkRgb(r, g, b);
+            float bw = BorderWidthF(annot);
+            int opacity = Opacity(annot);
+            Vec<int> counts;
+            VecAppend(counts, len(shapePoints));
+            DeleteAnnotationAndUpdateUI(tab, annot);
+            AnnotCreateArgs args{AnnotationType::Ink};
+            args.col.wasParsed = true;
+            args.col.parsedOk = true;
+            args.col.col = color;
+            args.col.pdfCol = pdfColor;
+            args.borderWidth = bw > 0 ? bw : 1.f;
+            args.opacity = opacity;
+            args.inkStrokeCounts = &counts;
+            args.inkPoints = &shapePoints;
+            Annotation* inkAnnot = EngineMupdfCreateAnnotation(engine, pageNo, shapePoints[0], &args);
+            if (inkAnnot) {
+                InkEraseResult res = EraseAnnotInkSegments(inkAnnot, pagePt, radius);
+                if (res == InkEraseResult::Empty) {
+                    DeleteAnnotationAndUpdateUI(tab, inkAnnot);
+                }
+                savedChanged = true;
+            }
             continue;
         }
         InkEraseResult result = win->inkEraseMode == 3 ? EraseAnnotInkSegments(annot, pagePt, radius)
@@ -1462,6 +1568,8 @@ static void PaintLinePlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
         if (BuildArrowHead(p.start, pageEnd, width, left, right)) {
             Point a = dm->CvtToScreen(pageNo, left), b = dm->CvtToScreen(pageNo, right);
             Gdiplus::Point head[] = {{a.x, a.y}, {end.x, end.y}, {b.x, b.y}};
+            Gdiplus::SolidBrush blueBrush(blue);
+            gs.FillPolygon(&blueBrush, head, dimof(head));
             gs.DrawPolygon(&pen, head, dimof(head));
         }
     }
@@ -1552,6 +1660,27 @@ static void PaintShapePlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
             path.CloseFigure();
             gs.DrawPath(&pen, &path);
         }
+    } else if (OrigCommandId(p.cmdId) == CmdCreateAnnotPolygon) {
+        int n = gSettings ? std::clamp(gSettings->annotations.polygonSides, 3, 32) : 5;
+        Vec<Gdiplus::Point> pts;
+        float cx = rect.x + rect.dx / 2.f, cy = rect.y + rect.dy / 2.f;
+        float rx = rect.dx / 2.f, ry = rect.dy / 2.f;
+        for (int i = 0; i < n; i++) {
+            float angle = -3.14159265f / 2.f + i * (2.f * 3.14159265f / n);
+            VecAppend(pts, {(int)roundf(cx + rx * cosf(angle)), (int)roundf(cy + ry * sinf(angle))});
+        }
+        gs.DrawPolygon(&pen, pts.els, len(pts));
+    } else if (OrigCommandId(p.cmdId) == CmdCreateAnnotStar) {
+        int n = gSettings ? std::clamp(gSettings->annotations.starSides, 3, 32) : 5;
+        Vec<Gdiplus::Point> pts;
+        float cx = rect.x + rect.dx / 2.f, cy = rect.y + rect.dy / 2.f;
+        float rx = rect.dx / 2.f, ry = rect.dy / 2.f;
+        for (int i = 0; i < 2 * n; i++) {
+            float rScale = (i % 2 == 0) ? 1.0f : 0.45f;
+            float angle = -3.14159265f / 2.f + i * (3.14159265f / n);
+            VecAppend(pts, {(int)roundf(cx + rx * rScale * cosf(angle)), (int)roundf(cy + ry * rScale * sinf(angle))});
+        }
+        gs.DrawPolygon(&pen, pts.els, len(pts));
     } else {
         gs.DrawRectangle(&pen, rect.x, rect.y, rect.dx, rect.dy);
     }
@@ -1630,7 +1759,11 @@ static void PaintInkPlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
             gs.FillEllipse(&brush, pts[0].X - dotHalf, pts[0].Y - dotHalf, dotSize, dotSize);
             continue;
         }
-        gs.DrawLines(&pen, pts.els, len(pts));
+        if (len(pts) == 2) {
+            gs.DrawLine(&pen, pts[0], pts[1]);
+            continue;
+        }
+        gs.DrawCurve(&pen, pts.els, len(pts), 0.5f);
     }
 }
 
@@ -1692,6 +1825,7 @@ bool AnnotationPlacementFillCreate(MainWindow* win, AnnotationType type, Point& 
         case AnnotPlacementKind::Shape: {
             bool validType = type == AnnotationType::Square || type == AnnotationType::Circle ||
                              type == AnnotationType::Redact ||
+                             type == AnnotationType::Polygon ||
                              (type == AnnotationType::Ink && MathShapeForCommand(OrigCommandId(p.cmdId)) >= 0);
             if (!validType) {
                 return false;
@@ -1706,6 +1840,28 @@ bool AnnotationPlacementFillCreate(MainWindow* win, AnnotationType type, Point& 
             args.hasRect = true;
             args.rect = p.rect;
             ConfigureShapeCreateArgs(OrigCommandId(p.cmdId), args);
+            if (type == AnnotationType::Polygon) {
+                Vec<PointF> polyPts;
+                int cmd = OrigCommandId(p.cmdId);
+                float cx = p.rect.x + p.rect.dx / 2.f, cy = p.rect.y + p.rect.dy / 2.f;
+                float rx = p.rect.dx / 2.f, ry = p.rect.dy / 2.f;
+                if (cmd == CmdCreateAnnotStar) {
+                    int n = gSettings ? std::clamp(gSettings->annotations.starSides, 3, 32) : 5;
+                    for (int i = 0; i < 2 * n; i++) {
+                        float rScale = (i % 2 == 0) ? 1.0f : 0.45f;
+                        float angle = -3.14159265f / 2.f + i * (3.14159265f / n);
+                        VecAppend(polyPts, {cx + rx * rScale * cosf(angle), cy + ry * rScale * sinf(angle)});
+                    }
+                } else {
+                    int n = gSettings ? std::clamp(gSettings->annotations.polygonSides, 3, 32) : 5;
+                    for (int i = 0; i < n; i++) {
+                        float angle = -3.14159265f / 2.f + i * (2.f * 3.14159265f / n);
+                        VecAppend(polyPts, {cx + rx * cosf(angle), cy + ry * sinf(angle)});
+                    }
+                }
+                p.points = polyPts;
+                args.polyLinePoints = &p.points;
+            }
             return true;
         }
         case AnnotPlacementKind::Line:

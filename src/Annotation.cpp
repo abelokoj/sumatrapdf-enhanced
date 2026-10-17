@@ -226,10 +226,12 @@ static void AppendAppearanceBytes(fz_context* ctx, fz_buffer* output, unsigned c
 }
 
 static void ApplyCornerRadius(fz_context* ctx, pdf_annot* annot) {
-    if (pdf_annot_type(ctx, annot) != PDF_ANNOT_SQUARE) return;
+    if (!ctx || !annot || pdf_annot_type(ctx, annot) != PDF_ANNOT_SQUARE) return;
     float radius = ReadCornerRadius(ctx, annot);
     if (radius <= 0) return;
-    pdf_obj* appearance = pdf_dict_getp(ctx, pdf_annot_obj(ctx, annot), "AP/N");
+    pdf_obj* obj = pdf_annot_obj(ctx, annot);
+    if (!obj) return;
+    pdf_obj* appearance = pdf_dict_getp(ctx, obj, "AP/N");
     if (!pdf_is_stream(ctx, appearance)) return;
     fz_buffer* original = nullptr;
     fz_buffer* rounded = nullptr;
@@ -237,8 +239,12 @@ static void ApplyCornerRadius(fz_context* ctx, pdf_annot* annot) {
     fz_var(rounded);
     fz_try(ctx) {
         original = pdf_load_stream(ctx, appearance);
-        unsigned char* bytes;
+        unsigned char* bytes = nullptr;
         size_t size = fz_buffer_storage(ctx, original, &bytes);
+        if (!bytes || size == 0) {
+            fz_drop_buffer(ctx, original);
+            return;
+        }
         for (size_t begin = 0; begin < size;) {
             size_t end = begin;
             while (end < size && bytes[end] != '\n') end++;
@@ -274,66 +280,77 @@ static void ApplyCornerRadius(fz_context* ctx, pdf_annot* annot) {
         fz_drop_buffer(ctx, rounded);
     }
     fz_catch(ctx) {
-        fz_rethrow(ctx);
+        fz_report_error(ctx);
     }
 }
 
 static void ApplyInteriorOpacity(fz_context* ctx, pdf_annot* annot) {
+    if (!ctx || !annot) return;
     pdf_obj* obj = pdf_annot_obj(ctx, annot);
+    if (!obj) return;
     pdf_obj* saved = pdf_dict_gets(ctx, obj, kInteriorOpacityKey);
     if (!saved) return;
     pdf_obj* appearance = pdf_dict_getp(ctx, obj, "AP/N");
     if (!pdf_is_stream(ctx, appearance)) return;
-    float opacity = limitValue(pdf_to_int(ctx, saved), 0, 100) / 100.f;
-    pdf_obj* resources = pdf_dict_get(ctx, appearance, PDF_NAME(Resources));
-    if (!resources) resources = pdf_dict_put_dict(ctx, appearance, PDF_NAME(Resources), 1);
-    pdf_obj* states = pdf_dict_get(ctx, resources, PDF_NAME(ExtGState));
-    if (!states) states = pdf_dict_put_dict(ctx, resources, PDF_NAME(ExtGState), 2);
-    bool prepend = !pdf_dict_gets(ctx, states, kInteriorGraphicsState);
-    bool changed = prepend;
-    if (prepend) {
-        pdf_obj* state = pdf_dict_puts_dict(ctx, states, kInteriorGraphicsState, 2);
-        pdf_dict_put(ctx, state, PDF_NAME(Type), PDF_NAME(ExtGState));
-    }
-    // PDF keeps stroke /CA separate from fill /ca; MuPDF normally emits one opacity for both.
-    for (int i = 0; i < pdf_dict_len(ctx, states); i++) {
-        pdf_obj* state = pdf_dict_get_val(ctx, states, i);
-        pdf_obj* value = pdf_dict_get(ctx, state, PDF_NAME(ca));
-        if (!value || pdf_to_real(ctx, value) != opacity) {
-            pdf_dict_put_real(ctx, state, PDF_NAME(ca), opacity);
-            changed = true;
+    fz_try(ctx) {
+        float opacity = limitValue(pdf_to_int(ctx, saved), 0, 100) / 100.f;
+        pdf_obj* resources = pdf_dict_get(ctx, appearance, PDF_NAME(Resources));
+        if (!resources) resources = pdf_dict_put_dict(ctx, appearance, PDF_NAME(Resources), 1);
+        if (!pdf_is_dict(ctx, resources)) return;
+        pdf_obj* states = pdf_dict_get(ctx, resources, PDF_NAME(ExtGState));
+        if (!states) states = pdf_dict_put_dict(ctx, resources, PDF_NAME(ExtGState), 2);
+        if (!pdf_is_dict(ctx, states)) return;
+        bool prepend = !pdf_dict_gets(ctx, states, kInteriorGraphicsState);
+        bool changed = prepend;
+        if (prepend) {
+            pdf_obj* state = pdf_dict_puts_dict(ctx, states, kInteriorGraphicsState, 2);
+            pdf_dict_put(ctx, state, PDF_NAME(Type), PDF_NAME(ExtGState));
+        }
+        for (int i = 0; i < pdf_dict_len(ctx, states); i++) {
+            pdf_obj* state = pdf_dict_get_val(ctx, states, i);
+            if (!pdf_is_dict(ctx, state)) continue;
+            pdf_obj* value = pdf_dict_get(ctx, state, PDF_NAME(ca));
+            if (!value || pdf_to_real(ctx, value) != opacity) {
+                pdf_dict_put_real(ctx, state, PDF_NAME(ca), opacity);
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        if (!prepend) {
+            pdf_clean_obj(ctx, obj);
+            pdf_set_annot_resynthesised(ctx, annot);
+            return;
+        }
+        fz_buffer* original = nullptr;
+        fz_buffer* combined = nullptr;
+        fz_var(original);
+        fz_var(combined);
+        fz_try(ctx) {
+            original = pdf_load_stream(ctx, appearance);
+            combined = fz_new_buffer(ctx, original->len + 32);
+            fz_append_printf(ctx, combined, "/%s gs\n", kInteriorGraphicsState);
+            fz_append_buffer(ctx, combined, original);
+            pdf_update_stream(ctx, pdf_get_bound_document(ctx, appearance), appearance, combined, 0);
+            pdf_clean_obj(ctx, obj);
+            pdf_set_annot_resynthesised(ctx, annot);
+        }
+        fz_always(ctx) {
+            fz_drop_buffer(ctx, original);
+            fz_drop_buffer(ctx, combined);
+        }
+        fz_catch(ctx) {
+            fz_report_error(ctx);
         }
     }
-    if (!changed) return;
-    if (!prepend) {
-        pdf_clean_obj(ctx, obj);
-        pdf_set_annot_resynthesised(ctx, annot);
-        return;
-    }
-    fz_buffer* original = nullptr;
-    fz_buffer* combined = nullptr;
-    fz_var(original);
-    fz_var(combined);
-    fz_try(ctx) {
-        original = pdf_load_stream(ctx, appearance);
-        combined = fz_new_buffer(ctx, original->len + 32);
-        fz_append_printf(ctx, combined, "/%s gs\n", kInteriorGraphicsState);
-        fz_append_buffer(ctx, combined, original);
-        pdf_update_stream(ctx, pdf_get_bound_document(ctx, appearance), appearance, combined, 0);
-        pdf_clean_obj(ctx, obj);
-        pdf_set_annot_resynthesised(ctx, annot);
-    }
-    fz_always(ctx) {
-        fz_drop_buffer(ctx, original);
-        fz_drop_buffer(ctx, combined);
-    }
     fz_catch(ctx) {
-        fz_rethrow(ctx);
+        fz_report_error(ctx);
     }
 }
 
 static void* ApplyPageFillOpacity(fz_context* ctx, fz_page* page, void*) {
+    if (!ctx || !page) return nullptr;
     auto* pdfPage = pdf_page_from_fz_page(ctx, page);
+    if (!pdfPage) return nullptr;
     for (pdf_annot* item = pdf_first_annot(ctx, pdfPage); item; item = pdf_next_annot(ctx, item)) {
         ApplyCornerRadius(ctx, item);
         ApplyInteriorOpacity(ctx, item);
@@ -342,7 +359,9 @@ static void* ApplyPageFillOpacity(fz_context* ctx, fz_page* page, void*) {
 }
 
 static void UpdateAnnot(fz_context* ctx, pdf_annot* annot) {
+    if (!ctx || !annot) return;
     auto* page = pdf_annot_page(ctx, annot);
+    if (!page || !page->doc) return;
     auto* document = page->doc;
     pdf_begin_implicit_operation(ctx, document);
     fz_try(ctx) {
@@ -3023,7 +3042,8 @@ bool BuildArrowHead(PointF start, PointF tip, float width, PointF& left, PointF&
     dy /= distance;
     // Match MuPDF's standard PDF ClosedArrow appearance.
     float unit = std::max(1.f, width);
-    float length = 8.8f * unit, halfWidth = 4.5f * unit;
+    float length = std::min(4.5f * unit + 2.f, 12.f);
+    float halfWidth = length * 0.45f;
     left = {tip.x - dx * length - dy * halfWidth, tip.y - dy * length + dx * halfWidth};
     right = {tip.x - dx * length + dy * halfWidth, tip.y - dy * length - dx * halfWidth};
     return true;
@@ -3998,7 +4018,8 @@ AnnotationType CmdIdToAnnotationType(int cmdId) {
         case CmdCreateAnnotAxes3D:          return AnnotationType::Ink;
         case CmdCreateAnnotSquare:         return AnnotationType::Square;
         case CmdCreateAnnotCircle:         return AnnotationType::Circle;
-        case CmdCreateAnnotPolygon:        return AnnotationType::Polygon;
+        case CmdCreateAnnotPolygon:
+        case CmdCreateAnnotStar:           return AnnotationType::Polygon;
         case CmdCreateAnnotPolyLine:       return AnnotationType::PolyLine;
         case CmdCreateAnnotHighlight:      return AnnotationType::Highlight;
         case CmdCreateAnnotUnderline:      return AnnotationType::Underline;
@@ -4084,8 +4105,8 @@ static bool TestShapePresets(EngineBase* engine) {
         PointF tip{100 * cosf(a), 100 * sinf(a)}, left, right;
         ok &= BuildArrowHead({0, 0}, tip, 2, left, right);
         float cx = (left.x + right.x) / 2, cy = (left.y + right.y) / 2;
-        ok &= fabsf(hypotf(tip.x - cx, tip.y - cy) - 17.6f) < .001f;
-        ok &= fabsf(hypotf(left.x - right.x, left.y - right.y) - 18.f) < .001f;
+        ok &= fabsf(hypotf(tip.x - cx, tip.y - cy) - 11.0f) < .001f;
+        ok &= fabsf(hypotf(left.x - right.x, left.y - right.y) - 9.9f) < .001f;
     }
     PointF left, right;
     ok &= !BuildArrowHead({1, 1}, {1, 1}, 2, left, right);

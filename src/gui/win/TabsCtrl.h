@@ -117,6 +117,8 @@ struct TabsCtrl : VirtCtrl {
     int wheelRemainder = 0;
     int viewportDx = 0;
     bool hasOverflow = false;
+    Pixmap* tabScrollLeftIcon = nullptr;
+    Pixmap* tabScrollRightIcon = nullptr;
     Pixmap* tabListIcon = nullptr;
     int tabListVisibleItems = 10;
     TabListPopup* tabListPopup = nullptr;

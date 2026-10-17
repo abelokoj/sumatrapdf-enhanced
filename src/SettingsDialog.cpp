@@ -38,6 +38,7 @@
 #include "DarkMode.h"
 #include "UiFonts.h"
 #include "DocController.h"
+#include "VocabularyDialog.h"
 #include "EngineBase.h"
 #include "DisplayModel.h"
 #include "WindowTab.h"
@@ -905,6 +906,8 @@ struct SettingsWnd : WindowBase {
     DropDown* dropDictionarySpacing = nullptr;
     DropDown* dropDictionaryScale = nullptr;
     DropDown* dropLearningScale = nullptr;
+    DropDown* dropDictionaryDesign = nullptr;
+    DropDown* dropLearningHubDesign = nullptr;
     VirtText* fontDownloadStatus = nullptr;
     SettingsFontDownload* fontDownload = nullptr;
     DropDown* dropFileIconStyle = nullptr;
@@ -1592,6 +1595,8 @@ void SettingsWnd::SaveValues() {
                          dropDictionarySpacing,
                          dropDictionaryScale,
                          dropLearningScale,
+                         dropDictionaryDesign,
+                         dropLearningHubDesign,
                          dropBackupMode,
                          dropBackupFolder};
     for (auto* drop : drops)
@@ -2058,6 +2063,14 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     gSettings->dictionaryUI.lineSpacing = (float)spacing;
     gSettings->dictionaryUI.fontScale = (float)dictionaryScale;
     gSettings->dictionaryUI.learningHubScale = (float)learningScale;
+    if (dropDictionaryDesign) {
+        int dSel = CbGetCurrentSelection(dropDictionaryDesign);
+        gSettings->dictionaryUI.dictionaryDesign = (dSel == 1) ? 2 : 1;
+    }
+    if (dropLearningHubDesign) {
+        int lSel = CbGetCurrentSelection(dropLearningHubDesign);
+        gSettings->dictionaryUI.learningHubDesign = (lSel == 1) ? 2 : 1;
+    }
     str::ReplaceWithCopy(&gSettings->markdownUI.fontName, markdownFont);
     str::ReplaceWithCopy(&gSettings->markdownUI.mathFontName, markdownMath);
     gSettings->markdownUI.readingWidth = (float)markdownWidth;
@@ -2152,6 +2165,7 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     // call SetTabsInTitlebar() for windows that have only one tab, but that's somewhat inconsistent
     for (MainWindow* window : gWindows) window->RedrawAll(true);
     ApplySettingsToOpenWindows();
+    RefreshVocabularyDialogs();
     if (markdownFontsChanged) {
         for (MainWindow* window : gWindows) {
             for (WindowTab* tab : window->Tabs()) {
@@ -3199,7 +3213,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
                                          .padding = Insets{UiScalePx(12), 0, UiScalePx(4), 0}}));
         auto* table = new SettingsForm();
         table->rtl = isRtl;
-        table->SetSize(4, 2);
+        table->SetSize(6, 2);
         table->colGap = UiScalePx(20);
         table->rowGap = UiScalePx(6);
         VecAppend(forms, table);
@@ -3220,10 +3234,23 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         dropLearningScale = MakeDropDown(this, font, isRtl, true);
         FillNumberChoices(dropDictionaryScale, StrL("75|100|125|150|200|300"), gSettings->dictionaryUI.fontScale);
         FillNumberChoices(dropLearningScale, StrL("75|100|125|150|200|300"), gSettings->dictionaryUI.learningHubScale);
-        DropDown* controls[] = {dropDictionaryFont, dropDictionarySpacing, dropDictionaryScale, dropLearningScale};
+        dropDictionaryDesign = MakeDropDown(this, font, isRtl, false);
+        StrVec dictDesigns;
+        dictDesigns.Append(Tr("Design 1: Curated Lexicon (Apple & Oxford Edition)"));
+        dictDesigns.Append(Tr("Design 2: Deep-Work Inspector (Dual-Pane Academic & Dev)"));
+        dropDictionaryDesign->SetItems(dictDesigns);
+        CbSetCurrentSelection(dropDictionaryDesign, gSettings->dictionaryUI.dictionaryDesign == 2 ? 1 : 0);
+        dropLearningHubDesign = MakeDropDown(this, font, isRtl, false);
+        StrVec hubDesigns;
+        hubDesigns.Append(Tr("Design 1: Mastery Dashboard (Duolingo & Anki Pro)"));
+        hubDesigns.Append(Tr("Design 2: Cognitive Knowledge Canvas (RemNote & SuperMemo)"));
+        dropLearningHubDesign->SetItems(hubDesigns);
+        CbSetCurrentSelection(dropLearningHubDesign, gSettings->dictionaryUI.learningHubDesign == 2 ? 1 : 0);
+        DropDown* controls[] = {dropDictionaryFont, dropDictionarySpacing, dropDictionaryScale, dropLearningScale,
+                                dropDictionaryDesign, dropLearningHubDesign};
         Str labels[] = {Tr("Reading font:"), Tr("Line spacing:"), Tr("Dictionary text scale (%):"),
-                        Tr("Learning Hub text scale (%):")};
-        for (int i = 0; i < 4; i++) {
+                        Tr("Learning Hub text scale (%):"), Tr("Dictionary design:"), Tr("Learning Hub design:")};
+        for (int i = 0; i < 6; i++) {
             table->SetCell(i, 0, NewSettingsLabel({.s = labels[i], .font = font, .isRtl = isRtl})).alignV =
                 CrossAxisAlign::CrossCenter;
             table->SetCell(i, 1, controls[i]).alignH = CrossAxisAlign::Stretch;

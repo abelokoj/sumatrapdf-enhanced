@@ -12436,6 +12436,22 @@ static void ApplyRedactionsInTab(WindowTab* tab) {
     ShowTemporaryNotification(win->hwndCanvas, Tr("Redactions applied."), kNotif5SecsTimeOut);
 }
 
+struct InvertColorPickCtx {
+    MainWindow* win = nullptr;
+    bool dark = false;
+};
+
+static void InvertCustomColorPicked(InvertColorPickCtx* ctx, ChangeColorsArgs* res) {
+    if (res && res->didSelect && res->color != kColorUnset && ctx && ctx->win) {
+        SetInvertCustomColor(ctx->dark, res->color);
+        SetInvertColorPreset(ctx->dark ? 7 : 6);
+        SetInvertPageColors(true);
+        UpdateDocumentColors();
+        ToolbarUpdateStateForWindow(ctx->win, true);
+    }
+    delete ctx;
+}
+
 static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     int cmdId = LOWORD(wp);
     int invokedCmdId = cmdId;
@@ -14073,6 +14089,33 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             // change how (or whether) pages follow the theme (issue #5887)
             SetInvertPageColors(!GetInvertPageColors());
             UpdateDocumentColors();
+            ToolbarUpdateStateForWindow(win, true);
+            break;
+        }
+        case CmdInvertColorPureWhite:
+        case CmdInvertColorWarmSepia:
+        case CmdInvertColorSoftGray:
+        case CmdInvertColorPureBlack:
+        case CmdInvertColorCharcoal:
+        case CmdInvertColorWarmEspresso: {
+            int preset = cmdId - CmdInvertColorPureWhite;
+            SetInvertColorPreset(preset);
+            SetInvertPageColors(true);
+            UpdateDocumentColors();
+            ToolbarUpdateStateForWindow(win, true);
+            break;
+        }
+        case CmdInvertColorCustomLight:
+        case CmdInvertColorCustomDark: {
+            bool dark = (cmdId == CmdInvertColorCustomDark);
+            Color initial = GetInvertCustomColor(dark);
+            auto* ctx = new InvertColorPickCtx{win, dark};
+            auto* args = new ChangeColorsArgs();
+            args->win = win;
+            args->title = dark ? Tr("Custom Inverted Dark Background") : Tr("Custom Inverted Light Background");
+            args->color = initial;
+            args->onClose = MkFunc1(InvertCustomColorPicked, ctx);
+            ShowChangeColorsDialog(args);
             break;
         }
         case CmdToggleGrayscale: {
@@ -14308,6 +14351,8 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
         case CmdCreateAnnotCircle:
             [[fallthrough]];
         case CmdCreateAnnotPolygon:
+            [[fallthrough]];
+        case CmdCreateAnnotStar:
             [[fallthrough]];
         case CmdCreateAnnotPolyLine:
             [[fallthrough]];

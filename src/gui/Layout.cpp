@@ -741,8 +741,8 @@ void VBox::SetBoundsForChild(int i, ILayout* v, int posX, int posY, int posX2, i
 }
 
 boxElementInfo& VBox::AddChild(ILayout* child, int flex) {
-    if (LayoutTreeContains(child, this)) {
-        ReportIf(true);
+    if (!child || LayoutTreeContains(child, this)) {
+        ReportIf(child && LayoutTreeContains(child, this));
         return gRefusedBoxElement;
     }
     boxElementInfo v{};
@@ -1072,8 +1072,8 @@ void HBox::SetBoundsForChild(int i, ILayout* v, int posX, int posY, int posX2, i
 }
 
 boxElementInfo& HBox::AddChild(ILayout* child, int flex) {
-    if (LayoutTreeContains(child, this)) {
-        ReportIf(true);
+    if (!child || LayoutTreeContains(child, this)) {
+        ReportIf(child && LayoutTreeContains(child, this));
         return gRefusedBoxElement;
     }
     boxElementInfo v{};
@@ -1651,8 +1651,8 @@ int Wrap::ChildrenCount() const {
 }
 
 boxElementInfo& Wrap::AddChild(ILayout* child, int flex) {
-    if (LayoutTreeContains(child, this)) {
-        ReportIf(true);
+    if (!child || LayoutTreeContains(child, this)) {
+        ReportIf(child && LayoutTreeContains(child, this));
         return gRefusedBoxElement;
     }
     boxElementInfo v{};

@@ -87,13 +87,16 @@ static const FieldInfo gFixedPageUIFields[] = {
     {offsetof(FixedPageUI, gradientColors), SettingType::ColorArray, 0},
     {offsetof(FixedPageUI, windowBgCol), SettingType::Color, (intptr_t)""},
     {offsetof(FixedPageUI, pageGrid), SettingType::Struct, (intptr_t)&gPageGridInfo},
+    {offsetof(FixedPageUI, invertColorIndex), SettingType::Int, 3},
+    {offsetof(FixedPageUI, invertCustomLightCol), SettingType::Color, (intptr_t)"#fdf6e3"},
+    {offsetof(FixedPageUI, invertCustomDarkCol), SettingType::Color, (intptr_t)"#181a1f"},
 };
 static const StructInfo gFixedPageUIInfo = {
     sizeof(FixedPageUI),
-    9,
+    12,
     gFixedPageUIFields,
     "Grayscale\0TextColor\0BackgroundColor\0SelectionColor\0WindowMargin\0PageSpacing\0GradientColors\0WindowBgCol\0Pag"
-    "eGrid",
+    "eGrid\0InvertColorIndex\0InvertCustomLightCol\0InvertCustomDarkCol",
     "if true, render document pages in grayscale. Toggle with CmdToggleGrayscale\0color used instead of black for the "
     "document's text\0color used instead of white for the document's page background\0color value for the text "
     "selection rectangle (also used to highlight found text). Use an #aarrggbb value to control opacity: a smaller "
@@ -103,7 +106,7 @@ static const StructInfo gFixedPageUIInfo = {
     "instead of a single background color, fade through these colors from the top of the document to the bottom (stops "
     "are spread evenly, at most 3 colors). The shifting background is meant to give a subconscious sense of reading "
     "progress. Suggested values: #2828aa #28aa28 #aa2828\0if given, sets the canvas background color for PDF "
-    "files\0measurement grid overlay (View > Page Grid). Spacing and style are saved; showing the grid is session-only",
+    "files\0measurement grid overlay (View > Page Grid). Spacing and style are saved; showing the grid is session-only\0inverted background color preset index (0-5 predefined, 6-7 custom)\0custom color for inverted light background\0custom color for inverted dark background",
     false};
 
 static const FieldInfo gEBookUIFields[] = {
@@ -261,15 +264,18 @@ static const FieldInfo gDictionaryUIFields[] = {
     {offsetof(DictionaryUI, lineSpacing), SettingType::Float, (intptr_t)"1.15"},
     {offsetof(DictionaryUI, fontScale), SettingType::Float, (intptr_t)"100"},
     {offsetof(DictionaryUI, learningHubScale), SettingType::Float, (intptr_t)"100"},
+    {offsetof(DictionaryUI, dictionaryDesign), SettingType::Int, 1},
+    {offsetof(DictionaryUI, learningHubDesign), SettingType::Int, 1},
 };
 static const StructInfo gDictionaryUIInfo = {
     sizeof(DictionaryUI),
-    4,
+    6,
     gDictionaryUIFields,
-    "FontName\0LineSpacing\0FontScale\0LearningHubScale",
+    "FontName\0LineSpacing\0FontScale\0LearningHubScale\0DictionaryDesign\0LearningHubDesign",
     "dictionary reading font; empty follows the interface font; accepts any installed Windows font\0dictionary "
     "line-height multiplier; greater than 0 and at most 100\0dictionary text scale as a percentage of interface text, "
-    "50 through 300\0Learning Hub text scale as a percentage of interface text, 50 through 300",
+    "50 through 300\0Learning Hub text scale as a percentage of interface text, 50 through 300\0dictionary interface "
+    "design: 1 (Curated Lexicon) or 2 (Deep-Work Inspector)\0Learning Hub interface design: 1 (Mastery Dashboard) or 2 (Cognitive Canvas)",
     false};
 
 static const FieldInfo gHtmlUIFields[] = {
@@ -427,6 +433,9 @@ static const StructInfo gInkPenProfile_4_Info = {
 static const FieldInfo gAnnotationsFields[] = {
     {offsetof(Annotations, shapeTool), SettingType::Int, 2},
     {offsetof(Annotations, shapeCornerRadius), SettingType::Float, (intptr_t)"0"},
+    {offsetof(Annotations, polygonSides), SettingType::Int, 5},
+    {offsetof(Annotations, starSides), SettingType::Int, 5},
+    {offsetof(Annotations, lassoRectangular), SettingType::Bool, 0},
     {offsetof(Annotations, inkBallpoint), SettingType::Struct, (intptr_t)&gInkPenProfileInfo},
     {offsetof(Annotations, inkFountain), SettingType::Struct, (intptr_t)&gInkPenProfile_1_Info},
     {offsetof(Annotations, inkBrush), SettingType::Struct, (intptr_t)&gInkPenProfile_2_Info},
@@ -480,9 +489,9 @@ static const FieldInfo gAnnotationsFields[] = {
 };
 static const StructInfo gAnnotationsInfo = {
     sizeof(Annotations),
-    50,
+    53,
     gAnnotationsFields,
-    "ShapeTool\0ShapeCornerRadius\0InkBallpoint\0InkFountain\0InkBrush\0InkPencil\0InkHighlighter\0HighlightColor\0Unde"
+    "ShapeTool\0ShapeCornerRadius\0PolygonSides\0StarSides\0LassoRectangular\0InkBallpoint\0InkFountain\0InkBrush\0InkPencil\0InkHighlighter\0HighlightColor\0Unde"
     "rlineColor\0SquigglyColor\0StrikeOutColor\0FreeTextColor\0FreeTextBackgroundColor\0FreeTextOpacity\0FreeTextFontFa"
     "mily\0FreeTextFontStyle\0FreeTextSize\0FreeTextBorderWidth\0FreeTextAlignment\0PresetColors\0TextIconColor\0LineCo"
     "lor\0LineInteriorColor\0LineBorderWidth\0LineInteriorOpacity\0PolyLineColor\0PolyLineInteriorColor\0PolyLineBorder"
@@ -492,7 +501,8 @@ static const StructInfo gAnnotationsInfo = {
     "or\0TextIconType\0DefaultAuthor\0SignatureImage",
     "last shape selected: 0 = line, 1 = polyline, 2 = rectangle, 3 = ellipse, 4 = polygon, 5 = arrow, 6 = dashed line, "
     "7 = parabola, 8 = negative parabola, 9 = cubic, 10 = negative cubic, 11 = reciprocal, 12 = negative reciprocal, "
-    "13 = 2D axes, 14 = 3D axes\0rectangle corner radius in PDF points; 0 keeps square corners\0saved settings for "
+    "13 = 2D axes, 14 = 3D axes\0rectangle corner radius in PDF points; 0 keeps square corners\0number of sides for regular "
+    "polygon shape\0number of sides for star shape\0whether lasso selection defaults to rectangular instead of freehand\0saved settings for "
     "this pen type\0saved settings for this pen type\0saved settings for this pen type\0saved settings for this pen "
     "type\0saved settings for this pen type\0color of newly created highlight annotations. Use an #aarrggbb value to "
     "set default opacity (00 = transparent, FF = opaque); #rrggbb is fully opaque\0color of newly created underline "

@@ -392,6 +392,15 @@ static SeqStrings gCommandNames =
     "CmdCreateAnnotNegativeReciprocal\0"
     "CmdCreateAnnotAxes2D\0"
     "CmdCreateAnnotAxes3D\0"
+    "CmdCreateAnnotStar\0"
+    "CmdInvertColorPureWhite\0"
+    "CmdInvertColorWarmSepia\0"
+    "CmdInvertColorSoftGray\0"
+    "CmdInvertColorPureBlack\0"
+    "CmdInvertColorCharcoal\0"
+    "CmdInvertColorWarmEspresso\0"
+    "CmdInvertColorCustomLight\0"
+    "CmdInvertColorCustomDark\0"
     "\0";
 
 static i32 gCommandIds[] = {
@@ -773,6 +782,15 @@ static i32 gCommandIds[] = {
     CmdCreateAnnotNegativeReciprocal,
     CmdCreateAnnotAxes2D,
     CmdCreateAnnotAxes3D,
+    CmdCreateAnnotStar,
+    CmdInvertColorPureWhite,
+    CmdInvertColorWarmSepia,
+    CmdInvertColorSoftGray,
+    CmdInvertColorPureBlack,
+    CmdInvertColorCharcoal,
+    CmdInvertColorWarmEspresso,
+    CmdInvertColorCustomLight,
+    CmdInvertColorCustomDark,
 };
 
 SeqStrings gCommandDescriptions =
@@ -1154,6 +1172,15 @@ SeqStrings gCommandDescriptions =
     "Create Negative Reciprocal Annotation\0"
     "Create 2D Axes Annotation\0"
     "Create 3D Axes Annotation\0"
+    "Create Star Annotation\0"
+    "Invert Background: Pure White\0"
+    "Invert Background: Warm Sepia\0"
+    "Invert Background: Soft Gray\0"
+    "Invert Background: Pure Black\0"
+    "Invert Background: Midnight Charcoal\0"
+    "Invert Background: Warm Espresso\0"
+    "Invert Background: Custom Light...\0"
+    "Invert Background: Custom Dark...\0"
     "\0";
 
 SeqStrings gCommandAltDescs =
@@ -1798,6 +1825,7 @@ CustomCommand* CreateCommandFromDefinition(Str definition) {
         case CmdCreateAnnotSquare:
         case CmdCreateAnnotCircle:
         case CmdCreateAnnotPolygon:
+        case CmdCreateAnnotStar:
         case CmdCreateAnnotPolyLine:
         case CmdCreateAnnotHighlight:
         case CmdCreateAnnotUnderline:

@@ -111,7 +111,9 @@ enum class DetailStyle {
     Section,
     Example,
     Muted,
-    WordLink
+    WordLink,
+    IPA,
+    Accent
 };
 struct DetailRun {
     int start, length;
@@ -455,6 +457,15 @@ static void FormatDetails(LearningWindow* w) {
         if (style == DetailStyle::Example) format.dwEffects |= CFE_ITALIC;
         if (style == DetailStyle::Muted) format.crTextColor = ThemeWindowDarkerTextColor();
         if (style == DetailStyle::WordLink) format.dwEffects |= CFE_LINK;
+        if (style == DetailStyle::IPA) {
+            bool dark = DarkModeIsActive();
+            format.crTextColor = dark ? RGB(100, 180, 245) : RGB(20, 100, 190);
+        }
+        if (style == DetailStyle::Accent) {
+            bool dark = DarkModeIsActive();
+            format.dwEffects |= CFE_BOLD;
+            format.crTextColor = dark ? RGB(235, 180, 60) : RGB(180, 110, 10);
+        }
         SendMessageW(child, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&format);
     };
     if (!len(w->detailRuns)) {
@@ -509,6 +520,7 @@ struct DetailBuilder {
 };
 static void ShowMeanings(LearningWindow* w) {
     if (!len(w->meanings)) return;
+    int design = gSettings ? gSettings->dictionaryUI.dictionaryDesign : 1;
     DetailBuilder text(w);
     text.Line(w->meanings[0].headword, DetailStyle::Heading);
     Str dictionary, part;
@@ -516,10 +528,10 @@ static void ShowMeanings(LearningWindow* w) {
     for (const auto& meaning : w->meanings) {
         if (!str::Eq(dictionary, meaning.dictionaryId)) {
             text.Line({});
-            text.Line(meaning.dictionary, DetailStyle::Section);
-            if (len(meaning.phonetic)) text.Line(meaning.phonetic, DetailStyle::Example);
+            text.Line(design == 2 ? fmt("DICTIONARY PACK: %s", meaning.dictionary) : meaning.dictionary, DetailStyle::Section);
+            if (len(meaning.phonetic)) text.Line(fmt("/%s/", meaning.phonetic), DetailStyle::IPA);
             if (len(meaning.phoneticUk) && !str::Eq(meaning.phoneticUk, meaning.phonetic))
-                text.Line(fmt("UK: %s", meaning.phoneticUk), DetailStyle::Example);
+                text.Line(fmt("UK: /%s/", meaning.phoneticUk), DetailStyle::IPA);
             if (len(meaning.sourceUrl)) text.Line(fmt("%s: %s", Tr("Source"), meaning.sourceUrl), DetailStyle::Muted);
             if (len(meaning.license)) text.Line(meaning.license, DetailStyle::Muted);
             dictionary = meaning.dictionaryId;
@@ -527,21 +539,29 @@ static void ShowMeanings(LearningWindow* w) {
             number = 0;
         }
         if (!number || !str::Eq(part, meaning.partOfSpeech)) {
-            text.Line(len(meaning.partOfSpeech) ? meaning.partOfSpeech : Tr("Meanings"), DetailStyle::Section);
+            Str partTitle = len(meaning.partOfSpeech) ? meaning.partOfSpeech : Tr("Meanings");
+            if (design == 2) {
+                text.Line(fmt("DEFINITIONS (%s):", partTitle), DetailStyle::Accent);
+            } else {
+                text.Line(partTitle, DetailStyle::Section);
+            }
             part = meaning.partOfSpeech;
         }
         text.Line(fmt("%d. %s", ++number, meaning.definition));
-        if (len(meaning.example)) text.Line(fmt("%s: %s", Tr("Example"), meaning.example), DetailStyle::Example);
+        if (len(meaning.example)) text.Line(fmt("  %s: \"%s\"", Tr("Example"), meaning.example), DetailStyle::Example);
         text.Links(Tr("Synonyms"), meaning.synonyms);
         text.Links(Tr("Antonyms"), meaning.antonyms);
         text.Line({});
     }
-    if (len(w->context)) {
-        text.Line(Tr("PDF context"), DetailStyle::Section);
-        text.Line(w->context, DetailStyle::Example);
+    if (len(w->context) || len(w->source)) {
+        text.Line(design == 2 ? Tr("CAPTURED FROM PDF READING SESSION:") : Tr("PDF context:"), DetailStyle::Accent);
+        if (len(w->source)) {
+            text.Line(fmt("  %s: %s  •  %s %d", Tr("Document"), w->source, Tr("page"), w->page), DetailStyle::Muted);
+        }
+        if (len(w->context)) {
+            text.Line(fmt("  \"%s\"", w->context), DetailStyle::Example);
+        }
     }
-    if (len(w->source))
-        text.Line(fmt("%s: %s · %s %d", Tr("Document"), w->source, Tr("page"), w->page), DetailStyle::Muted);
     text.Finish();
 }
 static void StoredDefinition(DetailBuilder& text, Str definition) {
@@ -815,20 +835,28 @@ static void WordDetails(LearningWindow* w) {
              Tr("No saved words here yet. Select a word in a document and press Shift+D to look it up and save it."));
         return;
     }
+    int design = gSettings ? gSettings->dictionaryUI.learningHubDesign : 1;
     DetailBuilder text(w);
     text.Line(word->word, DetailStyle::Heading);
     text.Line({});
     StoredDefinition(text, word->definition);
-    if (len(word->context)) {
+    if (len(word->context) || len(word->sourcePath)) {
         text.Line({});
-        text.Line(Tr("PDF context"), DetailStyle::Section);
-        text.Line(word->context, DetailStyle::Example);
+        text.Line(design == 2 ? Tr("SOURCE & READING CONTEXT:") : Tr("PDF context:"), DetailStyle::Accent);
+        if (len(word->sourcePath)) {
+            text.Line(fmt("  %s: %s  •  %s %d", Tr("Document"), word->sourcePath, Tr("page"), word->page), DetailStyle::Muted);
+        }
+        if (len(word->context)) {
+            text.Line(fmt("  \"%s\"", word->context), DetailStyle::Example);
+        }
     }
-    if (len(word->sourcePath)) {
-        text.Line(fmt("%s: %s · %s %d", Tr("Document"), word->sourcePath, Tr("page"), word->page), DetailStyle::Muted);
+    text.Line({});
+    if (design == 2) {
+        text.Line(fmt("MASTERY METRICS: Reviews: %d  •  Lapses: %d  •  Interval: %d days", word->reviews, word->lapses, word->intervalDays), DetailStyle::Accent);
+    } else {
+        text.Line(fmt("Reviews: %d · lapses: %d · interval: %d days", word->reviews, word->lapses, word->intervalDays),
+                  DetailStyle::Muted);
     }
-    text.Line(fmt("Reviews: %d · lapses: %d · interval: %d days", word->reviews, word->lapses, word->intervalDays),
-              DetailStyle::Muted);
     text.Finish();
     Text(w, lcLearned, word->learned ? Tr("Mark unlearned") : Tr("Mark learned"));
 }
@@ -1037,7 +1065,8 @@ static void MeasureLearning(LearningWindow* w) {
             y += row * 4 + gap;
             Place(w, lcDetails, pad, y, width, detailHeight);
         } else {
-            int listWidth = width / 3;
+            int hubDesign = gSettings ? gSettings->dictionaryUI.learningHubDesign : 1;
+            int listWidth = (hubDesign == 2) ? (width * 38 / 100) : (width / 3);
             Place(w, lcLibrary, pad, y, listWidth, detailHeight);
             Place(w, lcDetails, pad + listWidth + gap, y, width - listWidth - gap, detailHeight);
         }
@@ -3750,6 +3779,9 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary, bo
     w->guideStep = gGuideProgress[dictionary ? 0 : 1];
     w->serial = ++gLearningSerial;
     LoadLearningPrefs(w);
+    if (dictionary && gSettings && gSettings->dictionaryUI.dictionaryDesign == 2) {
+        w->managementVisible = true;
+    }
     w->background = CreateSolidBrush(ThemeMainWindowBackgroundColor());
     w->fieldBackground = CreateSolidBrush(ThemeControlBackgroundColor());
     DpiSetFromHwnd(owner ? owner->hwndFrame : nullptr);

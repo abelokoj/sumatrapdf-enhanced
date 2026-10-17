@@ -206,6 +206,12 @@ VirtHost* VirtHost::Create(const CreateArgs& args) {
         delete host;
         return nullptr;
     }
+    int GetAppIconID();
+    HICON appIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(GetAppIconID()));
+    if (appIcon) {
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)appIcon);
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)appIcon);
+    }
     return host;
 }
 

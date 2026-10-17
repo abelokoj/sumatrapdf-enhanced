@@ -63,6 +63,8 @@
 #include "EnhancedIcons.h"
 #include "Theme.h"
 #include "DarkMode.h"
+
+static VirtCtrl* ToolbarItemForCmd(MainWindow* win, int cmdId);
 #include "ReadAloud.h"
 #include "RenderCache.h"
 #include "Toolbar.h"
@@ -117,6 +119,13 @@ static const char* kHandQuillIcon =
     R"quill(M438 1051v-10v-1v-4l-3 -4l1 8v1v10ZM498 1072l-4 -12v-16l-2 -4l-11 -4l-7 -2h-1h-5l7 4h0l-8 -2h-1l4 2v2h-3l-3 -2h-2l12 6h-3l-9 -2h0l1 2l6 2l5 2l4 2l-15 -4l-1 1l2 1l9 4h2l3 2l6 2l6 1l-2 1l-15 -4h-3l-7 -4l-1 1l2 1l6 4l8 2l3 2h8l1 2h-2h-1h-4l-11 -4h-3h0l17 6h3l2 2l1 1l-8 -3h-3l-10 -4h-1v2l3 2l9 2l10 2l2 2h-3h-1l-15 -4h-1h-2h0l15 6h4h1ZM522 1043l-2 -1v-7l-2 -1v2v1l2 6ZM454 1051v-13l-2 3v5v1v1v3ZM992 1084l6 -6l6 -7l4 -8v-3l2 -3l4 -12l-1 -5l-9 18v2l-4 6l-4 11l-6 7ZM376 1044l-1 -2l-1 1l2 1ZM432 1060l2 -6v-8l-2 -4v15l-2 1v2ZM1048 1049v-5l-2 -2v3l2 4ZM1048 1066l-4 -11v-2l-2 -1v5l2 3l2 5l1 1ZM1052 1057l-2 -5v3v2ZM270 1058v-2v-2l-2 2v2ZM399 1062l-1 -2l1 -6l1 2v1ZM878 1071l-2 -5l-2 -10v7v1l2 6l1 2ZM1013 1066l1 -3l3 -3h1ZM400 1066l-6 -5l1 -1l5 3v2ZM270 1082l2 -7l2 -9v-4l-2 7l-2 7v1v4l-2 1ZM890 1069v-5v5ZM1042 1072l-2 -8l-2 3l2 5ZM1080 1068l-2 -4v3l1 1ZM1104 1075v-3l-4 -4v1v2l2 3l2 2ZM1050 1074v-4h-2l2 4ZM1108 1102v-1l-2 -1l-16 -15l-9 -15l-1 2l4 6l8 12l8 8l4 4ZM1120 1073l-2 -3v2l1 2ZM894 1081l-2 -7v3l2 4ZM1122 1076l-2 -2v1l1 1ZM1038 1079v-2l-2 -1v1v2ZM1112 1086l-2 -4l-5 -6l-1 1l2 3l4 4l2 2ZM1070 1082l-1 -2l-1 1l2 1ZM1072 1085l-1 -3l-1 2l2 2ZM1152 1087l-2 -3v1l2 3ZM253 1088l1 -2l1 -2l1 1ZM1156 1102l-12 -8l-10 -10v1l4 6l8 7l6 4ZM1068 1092l-4 -6v1l2 3l2 2ZM1074 1088l-1 -2l-1 1l2 1ZM1142 1102l-9 -6l-9 -10v1l2 6l5 5l6 4h3ZM1124 1102l-8 -4l-11 -10h-1v1l9 9l9 4ZM1116 1090l-2 -2v1l1 1ZM1168 1103l-3 -3l-12 -12h-1l4 7l7 7l3 2ZM1090 1102l-4 -2l-11 -12l-1 1l2 4l7 7l5 2ZM1062 1095l-1 -1h-1l1 2ZM1078 1101l-8 -7h0l4 6l3 2ZM200 1145v-1v-2l-2 2l1 2Z"/></svg>)quill";
 static const char* kLassoToolIcon =
     R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 15c-2-1-3-3-2-6 1-4 5-6 10-5 5 1 8 4 6 8-2 3-7 5-11 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2" stroke-linecap="round"/><path d="M9 14c-3-1-5 0-5 2 0 2 4 3 5 1 1-1 0-3-1-2-1 2 0 6 3 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>)";
+
+static const char* LassoToolIcon(MainWindow* win) {
+    if (win && win->annotationLasso.rectangular) {
+        return gIconAnnotSquare;
+    }
+    return kLassoToolIcon;
+}
 
 static bool FitToolbarGroups(const Vec<int>& widths, int available, int gap, int overflowDx, int brandIdx,
                              Vec<bool>& visible) {
@@ -1407,6 +1416,7 @@ static ToolbarButtonInfo gToolbarButtons[] = {
     {nullptr, 0, {}},
     {gIconAnnotationMode, CmdAnnotationMode, TrN("Annotation Mode (Esc to exit)")},
     {kHandQuillIcon, CmdToggleEditPDF, TrN("Edit PDF")},
+    {kHandQuillIcon, CmdEditMarkdown, TrN("Edit Markdown")},
     {kHandToolIcon, CmdHandTool, TrN("Hand tool: drag to pan")},
     {kTextSelectToolIcon, CmdTextSelectTool, TrN("Select text: drag to select; Shift-click to extend")},
     {kLassoToolIcon, CmdAnnotationLasso, TrN("Lasso: select, move, resize or delete annotations")},
@@ -1449,6 +1459,7 @@ static const int kShapeFillCommands[] = {CmdCreateAnnotLine,
                                          CmdCreateAnnotSquare,
                                          CmdCreateAnnotCircle,
                                          CmdCreateAnnotPolygon,
+                                         CmdCreateAnnotStar,
                                          CmdCreateAnnotArrow,
                                          CmdCreateAnnotDashedLine,
                                          CmdCreateAnnotParabola,
@@ -2352,6 +2363,17 @@ void ToolbarUpdateStateForWindow(MainWindow* win, bool setButtonsVisibility) {
     SetToolbarButtonCheckedState(win, CmdHandTool, win->handTool);
     SetToolbarButtonCheckedState(win, CmdTextSelectTool, win->textSelectTool);
     SetToolbarButtonCheckedState(win, CmdAnnotationLasso, win->annotationLasso.active);
+    if (auto* button = AsVirtIconButton(ToolbarItemForCmd(win, CmdAnnotationLasso))) {
+        ToolbarVirt* tb = win->toolbarVirt;
+        if (tb) {
+            Color fg = TbTextColor();
+            Color dis = TbDisabledColor();
+            const char* icon = LassoToolIcon(win);
+            button->pixmap = GetCachedPixmapForSvg(Str(icon), tb->iconSize, tb->iconSize, fg, TbBgColor());
+            button->pixmapDisabled = GetCachedPixmapForSvg(Str(icon), tb->iconSize, tb->iconSize, dis, TbBgColor());
+            button->SetTooltip(win->annotationLasso.rectangular ? Tr("Lasso: Rectangle selection") : Tr("Lasso: Freehand selection"));
+        }
+    }
 
     bool showPdfAnnotationsToolbar = win->pdfAnnotationsToolbarEnabled && ctx->isPdf && ctx->supportsAnnots;
     SetPdfAnnotationsToolbarVisible(win, showPdfAnnotationsToolbar);
@@ -3026,11 +3048,12 @@ static void RefreshToolbarIcons(MainWindow* win) {
         if (!HasToolbarButtonContent(bi)) {
             continue;
         }
+        const char* icon = bi.cmdId == CmdAnnotationLasso ? LassoToolIcon(win) : bi.icon;
         ib->pixmap = bi.cmdId == CmdAnnotationShapes ? ShapeToolPixmap(sz, fg)
-                                                     : GetCachedPixmapForSvg(Str(bi.icon), sz, sz, fg, TbBgColor());
+                                                     : GetCachedPixmapForSvg(Str(icon), sz, sz, fg, TbBgColor());
         ib->pixmapDisabled = bi.cmdId == CmdAnnotationShapes
                                  ? ShapeToolPixmap(sz, dis)
-                                 : GetCachedPixmapForSvg(Str(bi.icon), sz, sz, dis, TbBgColor());
+                                 : GetCachedPixmapForSvg(Str(icon), sz, sz, dis, TbBgColor());
     }
     if (tb->overflowButton) {
         tb->overflowButton->pixmap = GetCachedPixmapForSvg(Str(kToolSettingsIcon), sz, sz, fg, TbBgColor());
@@ -3402,11 +3425,6 @@ static void OnToolbarButtonClicked(MainWindow* win, VirtMouseEvent* ev) {
         ev->didHandle = true;
         return;
     }
-    if (w->IsEnabled() && ev->button == 0 && cmdId == CmdAnnotationLasso) {
-        ShowToolbarButtonDropdown(win, cmdId);
-        ev->didHandle = true;
-        return;
-    }
     // right-click: the drop-down, not the button's command
     if (ev->button == 1) {
         if (ShowPinToolMenu(win, cmdId)) {
@@ -3424,7 +3442,11 @@ static void OnToolbarButtonClicked(MainWindow* win, VirtMouseEvent* ev) {
         if (ib->hasDropdown) {
             int dropDx = ib->DropdownDx();
             if (dropDx > 0 && ev->pt.x >= w->bounds.dx - dropDx) {
-                ShowTtsVoiceMenu(win, GetToolbarButtonScreenRect(win, cmdId));
+                if (cmdId == CmdToggleReadAloud) {
+                    ShowTtsVoiceMenu(win, GetToolbarButtonScreenRect(win, cmdId));
+                } else {
+                    ShowToolbarButtonDropdown(win, cmdId);
+                }
                 ev->didHandle = true;
                 return;
             }
@@ -4131,7 +4153,7 @@ static bool ShowToolbarButtonDropdown(MainWindow* win, int cmdId) {
     }
 
     if (auto* ib = AsVirtIconButton(ToolbarItemForCmd(win, cmdId))) {
-        if (ib->hasDropdown && cmdId != CmdAnnotationShapes) {
+        if (ib->hasDropdown && cmdId != CmdAnnotationShapes && cmdId != CmdAnnotationLasso && cmdId != CmdInvertColors) {
             ShowTtsVoiceMenu(win, GetToolbarButtonScreenRect(win, cmdId));
             return true;
         }
@@ -4420,6 +4442,29 @@ static void BuildLassoHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     ev->layout = NewToolbarHoverMenu(win, items);
 }
 
+static void BuildInvertHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
+    Vec<ToolbarHoverMenuItem> items;
+    bool inverted = GetInvertPageColors();
+    int currentPreset = GetInvertColorPreset();
+
+    VecAppend(items, {Str(kEnhancedIconInvert), Tr("Invert Document Colors"), CmdInvertColors, true, inverted});
+
+    // 3 White / Light tints
+    VecAppend(items, {Str(gIconAnnotSquare), Tr("Pure White (Light)"), CmdInvertColorPureWhite, true, inverted && currentPreset == 0});
+    VecAppend(items, {Str(gIconAnnotSquare), Tr("Warm Sepia (Light)"), CmdInvertColorWarmSepia, true, inverted && currentPreset == 1});
+    VecAppend(items, {Str(gIconAnnotSquare), Tr("Soft Paper Gray (Light)"), CmdInvertColorSoftGray, true, inverted && currentPreset == 2});
+    VecAppend(items, {Str(gIconAnnotSquare), Tr("Custom Light Background..."), CmdInvertColorCustomLight, true, inverted && currentPreset == 6});
+
+    // 3 Dark tints
+    VecAppend(items, {Str(gIconAnnotSquare), Tr("Pure Black (Dark)"), CmdInvertColorPureBlack, true, inverted && currentPreset == 3});
+    VecAppend(items, {Str(gIconAnnotSquare), Tr("Midnight Charcoal (Dark)"), CmdInvertColorCharcoal, true, inverted && currentPreset == 4});
+    VecAppend(items, {Str(gIconAnnotSquare), Tr("Warm Espresso (Dark)"), CmdInvertColorWarmEspresso, true, inverted && currentPreset == 5});
+    VecAppend(items, {Str(gIconAnnotSquare), Tr("Custom Dark Background..."), CmdInvertColorCustomDark, true, inverted && currentPreset == 7});
+
+    ev->layout = NewToolbarHoverMenu(win, items);
+    ev->centerOnButton = true;
+}
+
 void ShowLassoToolbarActions(MainWindow* win) {
     if (!win || len(win->annotationLasso.selected) == 0) return;
     HideToolbarHoverDropdown(win);
@@ -4536,12 +4581,14 @@ static float* ShapeBorderWidth(int cmd) {
         case CmdCreateAnnotCircle:
             return &a.circleBorderWidth;
         case CmdCreateAnnotPolygon:
+        case CmdCreateAnnotStar:
             return &a.polygonBorderWidth;
     }
     return nullptr;
 }
 
 static void ShapeWidthPicked(const int* cmd, float width) {
+    if (!cmd) return;
     if (float* setting = ShapeBorderWidth(*cmd)) *setting = limitValue(width, 0.f, 64.f);
     ScheduleSaveSettings();
 }
@@ -4566,6 +4613,7 @@ static ShapeFillSettings ShapeFillForCmd(int cmd) {
         case CmdCreateAnnotCircle:
             return {&a.circleInteriorColor, &a.circleInteriorOpacity};
         case CmdCreateAnnotPolygon:
+        case CmdCreateAnnotStar:
             return {&a.polygonInteriorColor, &a.polygonInteriorOpacity};
     }
     return {};
@@ -4578,6 +4626,7 @@ static const int* ShapeFillCommandPtr(int cmd) {
 }
 
 static void ShapeFillColorPicked(const int* cmd, Color color) {
+    if (!cmd) return;
     auto setting = ShapeFillForCmd(*cmd);
     if (!setting.color) return;
     SetColorText(*setting.color, color == kColorUnset ? Str{} : SerializeColorTemp(color & 0xffffff));
@@ -4585,6 +4634,7 @@ static void ShapeFillColorPicked(const int* cmd, Color color) {
 }
 
 static void ShapeFillOpacityPicked(const int* cmd, int opacity) {
+    if (!cmd) return;
     auto setting = ShapeFillForCmd(*cmd);
     if (!setting.opacity) return;
     *setting.opacity = std::clamp(opacity, 0, 100);
@@ -5850,17 +5900,18 @@ static void OnShapeFillSwatch(MainWindow* win, VirtMouseEvent* ev) {
         ev->didHandle = true;
         return;
     }
-    auto* swatch = (ToolbarColorSwatch*)ev->target;
+    auto* swatch = ev ? (ToolbarColorSwatch*)ev->target : nullptr;
+    if (!swatch) return;
     int cmd = (int)swatch->userData;
     const int* tool = ShapeFillCommandPtr(cmd);
     if (!tool) return;
     ShapeFillColorPicked(tool, swatch->col);
-    auto* host = win->toolbarVirt->hoverHost;
-    if (host) {
+    auto* host = (win && win->toolbarVirt) ? win->toolbarVirt->hoverHost : nullptr;
+    if (host && host->layout) {
         Vec<VirtCtrl*> controls;
         CollectPaletteControls(host->layout, controls);
         for (auto* control : controls) {
-            if (!str::Eq(control->name, StrL("shape-background-color")) || control->userData != cmd) continue;
+            if (!control || !str::Eq(control->name, StrL("shape-background-color")) || control->userData != cmd) continue;
             auto* color = (ToolbarColorSwatch*)control;
             color->isCurrent =
                 color->isNone ? swatch->isNone : !swatch->isNone && (color->col & 0xffffff) == (swatch->col & 0xffffff);
@@ -6076,13 +6127,15 @@ static void OnShapeTypeClicked(MainWindow* win, VirtMouseEvent* ev) {
 
 static void OnShapeBorderColor(MainWindow* win, VirtMouseEvent* ev) {
     if (ev->button != 0) return;
-    auto* swatch = (ToolbarColorSwatch*)ev->target;
+    auto* swatch = ev ? (ToolbarColorSwatch*)ev->target : nullptr;
+    if (!swatch) return;
     SetAnnotPresetColor(win, swatch->id, swatch->col);
-    auto* tb = win->toolbarVirt;
-    if (tb && tb->hoverHost) {
+    auto* tb = win ? win->toolbarVirt : nullptr;
+    if (tb && tb->hoverHost && tb->hoverHost->layout) {
         Vec<VirtCtrl*> controls;
         CollectPaletteControls(tb->hoverHost->layout, controls);
         for (auto* ctrl : controls) {
+            if (!ctrl) continue;
             if (str::Eq(ctrl->name, StrL("shape-border-color"))) {
                 auto* color = (ToolbarColorSwatch*)ctrl;
                 color->isCurrent = SameColorAndAlpha(color->col, swatch->col);
@@ -6092,8 +6145,10 @@ static void OnShapeBorderColor(MainWindow* win, VirtMouseEvent* ev) {
             }
             if (str::Eq(ctrl->name, StrL("shape-border-width"))) {
                 auto* slider = (InkThicknessSlider*)ctrl;
-                slider->preview->col = swatch->col;
-                slider->preview->Invalidate();
+                if (slider && slider->preview) {
+                    slider->preview->col = swatch->col;
+                    slider->preview->Invalidate();
+                }
             }
         }
     }
@@ -6105,17 +6160,30 @@ static void ShapeRadiusPicked(MainWindow*, float radius) {
     ScheduleSaveSettings();
 }
 
+static void PolygonSidesPicked(MainWindow*, float sides) {
+    if (!gSettings) return;
+    gSettings->annotations.polygonSides = std::clamp((int)roundf(sides), 3, 32);
+    ScheduleSaveSettings();
+}
+
+static void StarSidesPicked(MainWindow*, float sides) {
+    if (!gSettings) return;
+    gSettings->annotations.starSides = std::clamp((int)roundf(sides), 3, 32);
+    ScheduleSaveSettings();
+}
+
 static void BuildShapesHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     auto* tb = win ? win->toolbarVirt : nullptr;
     if (!tb || !gSettings) return;
     int cmd = SelectedShapeCmd();
     const char* icons[] = {gIconAnnotLine,    gIconAnnotPolyLine, gIconAnnotSquare, gIconAnnotCircle,
-                           gIconAnnotPolygon, gIconArrowUp,       gIconAnnotLine};
+                           gIconAnnotPolygon, gIconSidebarFavorites, gIconArrowUp,       gIconAnnotLine};
     Str names[] = {Tr("Line"),
                    Tr("Polyline"),
                    Tr("Rectangle"),
                    Tr("Ellipse"),
                    Tr("Polygon"),
+                   Tr("Star"),
                    Tr("Arrow"),
                    Tr("Dashed line"),
                    Tr("Parabola: y = x²"),
@@ -6132,14 +6200,14 @@ static void BuildShapesHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     auto* tools = new Wrap();
     tools->colGap = UiScalePx(6);
     tools->rowGap = UiScalePx(6);
-    for (int i : {0, 5, 6, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14}) {
+    for (int i : {0, 6, 7, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15}) {
         const char* icon = i < dimofi(icons) ? icons[i] : gIconAnnotPolyLine;
         auto* button = NewPaletteButton(win, Str(icon), names[i]);
         button->id = kShapeFillCommands[i];
         button->name = StrL("shape-type");
         button->padding = {UiScalePx(8), UiScalePx(8), UiScalePx(8), UiScalePx(8)};
         button->pixmap = IsLineVariant(button->id) ? LineVariantIcon(button->id, tb->iconSize, TbTextColor())
-                                                   : GetCachedPixmapForSvg(Str(icons[i]), tb->iconSize, tb->iconSize,
+                                                   : GetCachedPixmapForSvg(Str(icon), tb->iconSize, tb->iconSize,
                                                                            TbTextColor(), TbBgColor());
         button->SetTooltip(names[i]);
         button->onClick = MkFunc1(OnShapeTypeClicked, win);
@@ -6153,17 +6221,21 @@ static void BuildShapesHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     panel->AddChild(MakeAnnotColorsPanel(win, Tr("Border"), AnnotCurrentColor(win, cmd), cmd, false, &swatches,
                                          MkFunc1(OnShapeBorderColor, win), MkFunc1(OnAnnotColorsEditClicked, win)));
     for (auto* swatch : swatches) swatch->name = StrL("shape-border-color");
-    panel->AddChild(MakeShapeFillPanel(win, cmd));
+    if (ILayout* fillPanel = MakeShapeFillPanel(win, cmd)) {
+        panel->AddChild(fillPanel);
+    }
     InkThicknessSlider* slider = nullptr;
     auto* width = ShapeBorderWidth(cmd);
     if (width) {
         auto* thickness = MakeInkThicknessPanel(win, AnnotCurrentColor(win, cmd), *width,
-                                                MkFunc1(ShapeWidthPicked, ShapeFillCommandPtr(cmd)),
-                                                Tr("Border thickness (pt)"), 0, &slider, 64, true);
-        slider->name = StrL("shape-border-width");
-        slider->id = cmd;
+                                                 MkFunc1(ShapeWidthPicked, ShapeFillCommandPtr(cmd)),
+                                                 Tr("Border thickness (pt)"), 0, &slider, 64, true);
+        if (slider) {
+            slider->name = StrL("shape-border-width");
+            slider->id = cmd;
+        }
         panel->AddChild(new Padding(thickness, Insets{UiScalePx(8), UiScalePx(12), UiScalePx(12), UiScalePx(12)}));
-        RecordHoverItem(tb, slider, Tr("Border thickness"), {{}, Tr("Border thickness"), cmd, true, false});
+        if (slider) RecordHoverItem(tb, slider, Tr("Border thickness"), {{}, Tr("Border thickness"), cmd, true, false});
     }
     if (cmd == CmdCreateAnnotSquare) {
         auto* row = new HBox();
@@ -6179,6 +6251,36 @@ static void BuildShapesHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
         row->AddChild(radius);
         panel->AddChild(new Padding(row, Insets{UiScalePx(8), UiScalePx(12), UiScalePx(8), UiScalePx(12)}));
         RecordHoverItem(tb, radius, radius->tooltip, {{}, radius->tooltip, cmd, true, false});
+    }
+    if (cmd == CmdCreateAnnotPolygon) {
+        auto* row = new HBox();
+        row->alignCross = CrossAxisAlign::CrossCenter;
+        row->gap = UiScalePx(10);
+        row->AddChild(
+            NewVirtText({.s = Tr("Number of sides"), .font = tb->platformFont, .textColor = TbTextColor()}), 1);
+        auto* sides = new PaletteNumberEdit(tb->platformFont, 3, 32, 0);
+        sides->name = StrL("polygon-sides");
+        sides->SetTooltip(Tr("Polygon sides: 3 to 32."));
+        sides->SetValue((float)(gSettings ? gSettings->annotations.polygonSides : 5));
+        sides->onValue = MkFunc1(PolygonSidesPicked, win);
+        row->AddChild(sides);
+        panel->AddChild(new Padding(row, Insets{UiScalePx(8), UiScalePx(12), UiScalePx(8), UiScalePx(12)}));
+        RecordHoverItem(tb, sides, sides->tooltip, {{}, sides->tooltip, cmd, true, false});
+    }
+    if (cmd == CmdCreateAnnotStar) {
+        auto* row = new HBox();
+        row->alignCross = CrossAxisAlign::CrossCenter;
+        row->gap = UiScalePx(10);
+        row->AddChild(
+            NewVirtText({.s = Tr("Star points"), .font = tb->platformFont, .textColor = TbTextColor()}), 1);
+        auto* sides = new PaletteNumberEdit(tb->platformFont, 3, 32, 0);
+        sides->name = StrL("star-sides");
+        sides->SetTooltip(Tr("Star points: 3 to 32."));
+        sides->SetValue((float)(gSettings ? gSettings->annotations.starSides : 5));
+        sides->onValue = MkFunc1(StarSidesPicked, win);
+        row->AddChild(sides);
+        panel->AddChild(new Padding(row, Insets{UiScalePx(8), UiScalePx(12), UiScalePx(8), UiScalePx(12)}));
+        RecordHoverItem(tb, sides, sides->tooltip, {{}, sides->tooltip, cmd, true, false});
     }
     ev->layout = new Padding(panel, Insets{UiScalePx(8), UiScalePx(8), UiScalePx(8), UiScalePx(8)});
 }
@@ -6868,9 +6970,9 @@ static void RestorePinnedShape(PinnedAnnotationTool* preset, int cmd) {
 
 static TempStr PinnedShapeSvg(PinnedAnnotationTool* preset, int cmd) {
     if (IsLineVariant(cmd)) return {};
-    const char* icons[] = {gIconAnnotLine, gIconAnnotPolyLine, gIconAnnotSquare, gIconAnnotCircle, gIconAnnotPolygon};
+    const char* icons[] = {gIconAnnotLine, gIconAnnotPolyLine, gIconAnnotSquare, gIconAnnotCircle, gIconAnnotPolygon, gIconSidebarFavorites};
     const char* icon = nullptr;
-    for (int i = 0; i < dimofi(kShapeFillCommands); i++)
+    for (int i = 0; i < std::min(dimofi(kShapeFillCommands), dimofi(icons)); i++)
         if (kShapeFillCommands[i] == cmd) icon = icons[i];
     if (!icon) return {};
     Color border = ParseAnnotColor(preset->color), fill = ParseAnnotColor(preset->fillColor);
@@ -7455,12 +7557,12 @@ static void BuildToolbarLayout(MainWindow* win) {
         } else {
             auto* ib = new VirtIconButton();
             ib->padding = {cyPad, iconPad, cyPad, iconPad};
-            ib->hasDropdown = (bi.cmdId == CmdToggleReadAloud || bi.cmdId == CmdAnnotationShapes);
+            ib->hasDropdown = (bi.cmdId == CmdToggleReadAloud || bi.cmdId == CmdAnnotationShapes || bi.cmdId == CmdAnnotationLasso || bi.cmdId == CmdInvertColors);
             if (bi.cmdId == CmdOpenFile) {
                 ib->label = Tr("Open");
                 ib->labelFont = tb->platformFont;
             }
-            Str svg = bi.svgIcon ? bi.svgIcon : Str(bi.cmdId == CmdAnnotationShapes ? ShapeToolIcon() : bi.icon);
+            Str svg = bi.svgIcon ? bi.svgIcon : Str(bi.cmdId == CmdAnnotationShapes ? ShapeToolIcon() : (bi.cmdId == CmdAnnotationLasso ? LassoToolIcon(win) : bi.icon));
             ib->pixmap = len(bi.svgIcon) == 0 && bi.cmdId == CmdAnnotationMode
                              ? AnnotationModeIconPixmap(tb->iconSize, fg)
                          : bi.cmdId == CmdAnnotationShapes
@@ -7560,8 +7662,8 @@ static void BuildToolbarLayout(MainWindow* win) {
         } else {
             auto* ib = new VirtIconButton();
             ib->padding = {cyPad, iconPad, cyPad, iconPad};
-            ib->hasDropdown = bi.cmdId == CmdAnnotationShapes;
-            Str svg(bi.cmdId == CmdAnnotationShapes ? ShapeToolIcon() : bi.icon);
+            ib->hasDropdown = (bi.cmdId == CmdAnnotationShapes || bi.cmdId == CmdAnnotationLasso || bi.cmdId == CmdInvertColors);
+            Str svg(bi.cmdId == CmdAnnotationShapes ? ShapeToolIcon() : (bi.cmdId == CmdAnnotationLasso ? LassoToolIcon(win) : bi.icon));
             ib->pixmap = bi.cmdId == CmdAnnotationShapes
                              ? ShapeToolPixmap(tb->iconSize, fg)
                              : GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize, fg, TbBgColor());
@@ -7646,6 +7748,7 @@ static void BuildToolbarLayout(MainWindow* win) {
     SetToolbarHoverDropdown(win, CmdToggleLaserPointer, MkFunc1(BuildLaserHoverMenu, win));
     SetToolbarHoverDropdown(win, CmdSinglePageView, MkFunc1(BuildLayoutHoverMenu, win));
     SetToolbarHoverDropdown(win, CmdAnnotationLasso, MkFunc1(BuildLassoHoverMenu, win));
+    SetToolbarHoverDropdown(win, CmdInvertColors, MkFunc1(BuildInvertHoverMenu, win));
     SetToolbarHoverDropdown(win, CmdSaveAnnotations, MkFunc1(BuildSaveHoverMenu, win));
     // one strip for the two of them, so it doesn't jump when the mouse crosses
     // from one to the other

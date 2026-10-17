@@ -54,6 +54,8 @@ relative to `ext/mupdf`, so `-p1` from inside that directory.
 | `0051-pdf-pinned-note-appearance` | original pinned-paper appearance for standard Text/Note annotations |
 | `0052-pdf-arrowhead-appearance` | sharp arrowhead strokes and complete optional length-limit calls |
 
+| `0053-pdf-filled-arrowhead-appearance` | compact filled arrowhead appearance and annotation-aware fill colors |
+
 That is the whole list: `ext/mupdf` is byte-for-byte `1.28.5` plus these
 patches, and nothing else.
 

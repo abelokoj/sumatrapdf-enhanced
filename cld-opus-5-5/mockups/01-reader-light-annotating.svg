@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+<rect x="0" y="0" width="1440" height="900" rx="0" fill="#F5F2EA" opacity="1"/>
+<rect x="0" y="0" width="1440" height="44" rx="0" fill="#F5F2EA" opacity="1"/>
+<circle cx="24" cy="22" r="9" fill="#C96442"/>
+<text x="40" y="27" font-family="Georgia, 'Tiempos Text', serif" font-size="13" font-weight="600" fill="#1F1E1C" text-anchor="start">Sumatra</text>
+<rect x="120" y="8" width="200" height="36" rx="10" fill="#FFFFFF" opacity="1"/>
+<text x="134" y="31" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="12.5" font-weight="500" fill="#1F1E1C" text-anchor="start">bishop-prml-ch3.pdf</text>
+<text x="302" y="31" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="13" font-weight="400" fill="#6B675F" text-anchor="start">×</text>
+<text x="338" y="31" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="12.5" font-weight="400" fill="#6B675F" text-anchor="start">lecture-07-notes.pdf</text>
+<text x="506" y="31" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="13" font-weight="400" fill="#6B675F" text-anchor="start">×</text>
+<text x="542" y="31" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="12.5" font-weight="400" fill="#6B675F" text-anchor="start">thesis-draft-v4.pdf</text>
+<text x="710" y="31" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="13" font-weight="400" fill="#6B675F" text-anchor="start">×</text>
+<text x="742" y="31" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="16" font-weight="400" fill="#6B675F" text-anchor="start">+</text>
+<text x="1330" y="28" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="13" font-weight="400" fill="#6B675F" text-anchor="start">–</text>
+<text x="1370" y="28" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="13" font-weight="400" fill="#6B675F" text-anchor="start">▢</text>
+<text x="1410" y="28" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="13" font-weight="400" fill="#6B675F" text-anchor="start">✕</text>
+<line x1="0" y1="44" x2="1440" y2="44" stroke="#DDD6C8"/>
+<rect x="16" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(24,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 2v12"/></g>
+<rect x="60" y="52" width="108" height="32" rx="8" fill="#FFFFFF" stroke="#DDD6C8" stroke-width="1" opacity="1"/>
+<text x="76" y="73" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="13" font-weight="600" fill="#1F1E1C" text-anchor="start">12</text>
+<text x="100" y="73" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="13" font-weight="400" fill="#6B675F" text-anchor="start">/ 148</text>
+<rect x="176" y="52" width="84" height="32" rx="8" fill="#FFFFFF" stroke="#DDD6C8" stroke-width="1" opacity="1"/>
+<text x="218" y="73" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="13" font-weight="500" fill="#1F1E1C" text-anchor="middle">125 %</text>
+<rect x="554" y="48" width="332" height="40" rx="12" fill="#FFFFFF" stroke="#DDD6C8" stroke-width="1" opacity="1"/>
+<rect x="558" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(566,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4a1.5 1.5 0 013 0v4M7 8V3a1.5 1.5 0 013 0v5M10 8V4a1.5 1.5 0 013 0v6c0 3-2 5-5 5H7c-2 0-3-1-4-3l-2-3a1.5 1.5 0 012.5-1.5L4 9"/></g>
+<rect x="594" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(602,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2l10 5-4 1.5L7.5 13z"/></g>
+<rect x="630" y="52" width="32" height="32" rx="8" fill="#F3E1D8" opacity="1"/><g transform="translate(638,60)" stroke="#C96442" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M2 14l1-4 8-8 3 3-8 8z M9 4l3 3"/></g>
+<rect x="666" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(674,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h10 M5 10l5-7 3 2-5 7H5z"/></g>
+<rect x="702" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(710,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M6 13h8 M2 10l6-7 5 4-5 6H5z"/></g>
+<rect x="738" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(746,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="6" rx="6" ry="4" stroke-dasharray="2 2"/><path d="M5 9c-1 2 0 4 2 5"/></g>
+<rect x="774" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(782,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="7" height="7" rx="1"/><circle cx="11" cy="11" r="3.5"/></g>
+<rect x="810" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(818,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h10 M8 3v10 M6 13h4"/></g>
+<rect x="846" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(854,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2h10v8l-3 4H3z M10 14v-4h3"/></g>
+<rect x="1392" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(1400,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="3" cy="8" r=".8"/><circle cx="8" cy="8" r=".8"/><circle cx="13" cy="8" r=".8"/></g>
+<rect x="1356" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(1364,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M13 9.5A5.5 5.5 0 016.5 3 5.5 5.5 0 1013 9.5z"/></g>
+<rect x="1320" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(1328,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></g>
+<rect x="1276" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(1284,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M11 3l3 3-3 3 M14 6H7a4 4 0 000 8h3"/></g>
+<rect x="1240" y="52" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(1248,60)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3L2 6l3 3 M2 6h7a4 4 0 010 8H6"/></g>
+<line x1="0" y1="96" x2="1440" y2="96" stroke="#DDD6C8"/>
+<rect x="0" y="97" width="220" height="771" rx="0" fill="#F5F2EA" opacity="1"/>
+<text x="20" y="128" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="13" font-weight="600" fill="#1F1E1C" text-anchor="start">Pages</text>
+<text x="200" y="128" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="12" font-weight="400" fill="#6B675F" text-anchor="end">Outline</text>
+<rect x="52" y="148" width="116" height="150" rx="4" fill="#FFFFFF" stroke="#DDD6C8" stroke-width="1" opacity="1"/>
+<rect x="64" y="166" width="92" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="180" width="78" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="194" width="64" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="208" width="92" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="222" width="78" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="236" width="64" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="250" width="92" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<text x="110" y="312" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="11" font-weight="400" fill="#6B675F" text-anchor="middle">11</text>
+<rect x="52" y="318" width="116" height="150" rx="4" fill="#FFFFFF" stroke="#C96442" stroke-width="2" opacity="1"/>
+<rect x="64" y="336" width="92" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="350" width="78" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="364" width="64" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="378" width="92" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="392" width="78" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="406" width="64" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="420" width="92" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<text x="110" y="482" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="11" font-weight="600" fill="#C96442" text-anchor="middle">12</text>
+<rect x="52" y="488" width="116" height="150" rx="4" fill="#FFFFFF" stroke="#DDD6C8" stroke-width="1" opacity="1"/>
+<rect x="64" y="506" width="92" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="520" width="78" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="534" width="64" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="548" width="92" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="562" width="78" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="576" width="64" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="590" width="92" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<text x="110" y="652" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="11" font-weight="400" fill="#6B675F" text-anchor="middle">13</text>
+<rect x="52" y="658" width="116" height="150" rx="4" fill="#FFFFFF" stroke="#DDD6C8" stroke-width="1" opacity="1"/>
+<rect x="64" y="676" width="92" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="690" width="78" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="704" width="64" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="718" width="92" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="732" width="78" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="746" width="64" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<rect x="64" y="760" width="92" height="5" rx="2" fill="#6B675F" opacity="0.22"/>
+<text x="110" y="822" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="11" font-weight="400" fill="#6B675F" text-anchor="middle">14</text>
+<line x1="220" y1="97" x2="220" y2="868" stroke="#DDD6C8"/>
+<rect x="221" y="97" width="1219" height="771" rx="0" fill="#E9E4D8" opacity="1"/>
+<rect x="421" y="169" width="718" height="700" rx="4" fill="#FFFFFF" stroke="#DDD6C8" stroke-width="1" opacity="1"/>
+<text x="484" y="230" font-family="Georgia, 'Tiempos Text', serif" font-size="20" font-weight="600" fill="#1F1E1C" text-anchor="start">3.2  Variational Inference</text>
+<rect x="484" y="260" width="592" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="278" width="568.3199999999999" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="296" width="586.08" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="314" width="550.5600000000001" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="332" width="355.2" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="362" width="592" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="380" width="574.24" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="398" width="580.16" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="416" width="532.8000000000001" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="434" width="562.4" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="464" width="414.4" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="482" width="592" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="500" width="556.48" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="518" width="586.08" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="536" width="520.96" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="566" width="296.0" height="7" rx="3" fill="#6B675F" opacity="0.28"/>
+<rect x="484" y="272" width="550.5600000000001" height="14" rx="3" fill="#F2C94C" opacity="0.45"/>
+<rect x="484" y="290" width="355.2" height="14" rx="3" fill="#F2C94C" opacity="0.45"/>
+<path d="M920 352 c 60 -18 140 -4 150 20 c 8 24 -80 36 -150 26 c -50 -8 -40 -40 10 -48" fill="none" stroke="#C96442" stroke-width="2.6" stroke-linecap="round"/>
+<path d="M1070 380 q 40 30 30 90" fill="none" stroke="#C96442" stroke-width="2.4" stroke-linecap="round"/>
+<path d="M1088 458 l 12 14 l 10 -16" fill="none" stroke="#C96442" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="980" y="500" font-family="'Segoe Print', 'Comic Neue', cursive" font-size="17" font-weight="400" fill="#C96442" text-anchor="start">ELBO &#8804; log p(x) &#8212; why?</text>
+<rect x="480" y="560" width="300" height="74" rx="2" fill="none" stroke="#2F6FDB" stroke-width="2.4"/>
+<rect x="480" y="640" width="170" height="24" rx="6" fill="#F3E1D8" opacity="1"/>
+<text x="492" y="656" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="11" font-weight="600" fill="#C96442" text-anchor="start">Snapped to rectangle</text>
+<g transform="translate(1100,540)"><rect width="26" height="26" rx="6" fill="#F2C94C"/><path d="M7 9h12M7 14h8" stroke="#6B5410" stroke-width="1.6" stroke-linecap="round"/></g>
+<rect x="520" y="108" width="520" height="52" rx="14" fill="#FFFFFF" stroke="#DDD6C8" stroke-width="1" opacity="1"/>
+<circle cx="554" cy="134" r="14" fill="#1F1E1C" opacity="1"/>
+<circle cx="554" cy="134" r="2.0" fill="#fff" opacity=".85"/>
+<circle cx="606" cy="134" r="19" fill="none" stroke="#C96442" stroke-width="2"/>
+<circle cx="606" cy="134" r="14" fill="#C96442" opacity="1"/>
+<circle cx="606" cy="134" r="2.5" fill="#fff" opacity=".85"/>
+<circle cx="658" cy="134" r="14" fill="#2F6FDB" opacity="1"/>
+<circle cx="658" cy="134" r="2.25" fill="#fff" opacity=".85"/>
+<circle cx="710" cy="134" r="14" fill="#3E8E5A" opacity="1"/>
+<circle cx="710" cy="134" r="4.0" fill="#fff" opacity=".85"/>
+<circle cx="762" cy="134" r="14" fill="#F2C94C" opacity="0.55"/>
+<circle cx="762" cy="134" r="6.0" fill="#fff" opacity=".85"/>
+<circle cx="814" cy="134" r="14" fill="#E57AA8" opacity="0.55"/>
+<circle cx="814" cy="134" r="6.0" fill="#fff" opacity=".85"/>
+<line x1="862" y1="120" x2="862" y2="148" stroke="#DDD6C8"/>
+<text x="878" y="130" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="10.5" font-weight="400" fill="#6B675F" text-anchor="start">Thickness</text>
+<rect x="878" y="138" width="110" height="4" rx="2" fill="#EDE8DD" opacity="1"/>
+<rect x="878" y="138" width="46" height="4" rx="2" fill="#C96442" opacity="1"/>
+<circle cx="924" cy="140" r="7" fill="#FFFFFF" stroke="#C96442" stroke-width="2"/>
+<text x="1002" y="144" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="18" font-weight="400" fill="#6B675F" text-anchor="start">+</text>
+<rect x="1370" y="300" width="48" height="168" rx="14" fill="#FFFFFF" stroke="#DDD6C8" stroke-width="1" opacity="1"/>
+<rect x="1378" y="308" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(1386,316)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="5" width="14" height="6" rx="1" transform="rotate(-30 8 8)"/></g>
+<rect x="1378" y="348" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(1386,356)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="12" height="8" rx="2"/><path d="M5 8h6"/></g>
+<rect x="1378" y="388" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(1386,396)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="4" height="8" rx="2"/><path d="M4 8a4 4 0 008 0 M8 12v2"/></g>
+<rect x="1378" y="428" width="32" height="32" rx="8" fill="#FFFFFF" opacity="1"/><g transform="translate(1386,436)" stroke="#6B675F" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="7" height="7" rx="1"/><circle cx="11" cy="11" r="3.5"/></g>
+<rect x="0" y="868" width="1440" height="32" rx="0" fill="#F5F2EA" opacity="1"/>
+<line x1="0" y1="868" x2="1440" y2="868" stroke="#DDD6C8"/>
+<text x="16" y="889" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="11.5" font-weight="400" fill="#6B675F" text-anchor="start">Page 12 of 148  &#183;  4 annotations on page  &#183;  Autosaved to recovery copy</text>
+<text x="1424" y="889" font-family="'Segoe UI Variable', 'Segoe UI', Inter, sans-serif" font-size="11.5" font-weight="400" fill="#6B675F" text-anchor="end">Pen-only mode  &#183;  Finger scrolls</text>
+</svg>

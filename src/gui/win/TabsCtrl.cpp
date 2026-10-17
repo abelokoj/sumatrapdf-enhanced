@@ -3,6 +3,7 @@
 
 #include "base/Base.h"
 #include "base/Win.h"
+#include "base/Pixmap.h"
 #include "gui/Dpi.h"
 
 #include "gui/UIModels.h"
@@ -65,9 +66,9 @@ struct TabListPopup {
     }
 };
 
-static Rect TabSeparatorRect(Rect r, int thickness, bool isRtl) {
-    int inset = r.dy / 4;
-    return {isRtl ? r.x : r.Right() - thickness, r.y + inset, thickness, r.dy - inset * 2};
+static Rect TabSeparatorRect(Rect r, int thickness, bool isRtl, int topPad = 0) {
+    int inset = (r.dy - topPad) / 4;
+    return {isRtl ? r.x : r.Right() - thickness, r.y + topPad + inset, thickness, r.dy - topPad - inset * 2};
 }
 
 // hwnd is kept LTR (like the canvas); UI direction comes from the parent frame
@@ -218,7 +219,9 @@ void TabCtrl::SetBounds(Rect r) {
     int dx = r.dx;
     int dy = r.dy;
 
-    int closeDy = std::min(std::max(tabsCtrl->ScaleMetric(12), tabsCtrl->tabIconDx), dy);
+    int topPad = tabsCtrl->ScaleMetric(2);
+    int contentDy = std::max(1, dy - topPad);
+    int closeDy = std::min(std::max(tabsCtrl->ScaleMetric(12), tabsCtrl->tabIconDx), contentDy);
     int closeDx = closeDy;
 
     // Padding between circle and tab edge; grow with the button.
@@ -230,7 +233,7 @@ void TabCtrl::SetBounds(Rect r) {
         closeDy = closeDx;
         closePad = std::max(1, (dx - closeDx) / 2);
     }
-    int closeY = (dy - closeDy) / 2;
+    int closeY = topPad + (contentDy - closeDy) / 2;
 
     // Hit target: at least ~40 DIP wide (touch-friendly), full tab height.
     // Cap at half the tab so title still has a drag/select zone.
@@ -278,11 +281,12 @@ void TabCtrl::Paint(VirtPaintCtx& ctx) {
             TabReadableColor(IsLightColor(tabBgCol) ? MkRgb(0xC4, 0x1E, 0x1E) : MkRgb(0xFF, 0x6A, 0x6A), tabBgCol);
     }
 
-    Rect surface = r;
+    int topPad = tabsCtrl->ScaleMetric(2);
+    Rect surface{r.x, r.y + topPad, r.dx, r.dy - topPad};
     int radius = tabsCtrl->ScaleMetric(selected ? 5 : 8);
     if (selected && ActiveStyle() == 4) {
-        int inset = std::min(tabsCtrl->ScaleMetric(3), std::min(r.dx, r.dy) / 4);
-        surface = {r.x + inset, r.y + inset, r.dx - 2 * inset, r.dy - 2 * inset};
+        int inset = std::min(tabsCtrl->ScaleMetric(3), std::min(surface.dx, surface.dy) / 4);
+        surface = {surface.x + inset, surface.y + inset, surface.dx - 2 * inset, surface.dy - 2 * inset};
         radius = tabsCtrl->ScaleMetric(6);
     }
     Color border = selected && ActiveStyle() == 3 ? TabReadableColor(TabAccent(), tabBgCol, 3.1) : kColorTransparent;
@@ -290,7 +294,7 @@ void TabCtrl::Paint(VirtPaintCtx& ctx) {
 
     bool isRtl = IsTabsRtl(hwnd);
     if (!selected) {
-        Rect separator = TabSeparatorRect(r, std::max(1, tabsCtrl->ScaleMetric(1)), isRtl);
+        Rect separator = TabSeparatorRect(r, std::max(1, tabsCtrl->ScaleMetric(1)), isRtl, topPad);
         gfx->FillRect(separator, AccentColor(tabBgCol, 48));
     }
     PlatformFont* font = tabsCtrl->GetFont();
@@ -298,7 +302,7 @@ void TabCtrl::Paint(VirtPaintCtx& ctx) {
 
     // draw text — inset from the close glyph (size varies with tab height),
     // or using the full tab width when the ✕ is hidden
-    Rect rTxt = r;
+    Rect rTxt{r.x, r.y + topPad, r.dx, r.dy - topPad};
     int textPad = tabsCtrl->ScaleMetric(8);
     int textGap = tabsCtrl->ScaleMetric(4);
     bool closeVisible = CloseVisible();
@@ -1302,27 +1306,64 @@ LRESULT TabsCtrl::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 HdcFillRect(hdc, clientRc, bgCol);
             }
             if (hasOverflow) {
+                int topPad = ScaleMetric(2);
                 Rect buttons{viewportDx, 0, clientRc.dx - viewportDx, clientRc.dy};
                 HdcFillRect(hdc, buttons, bgCol);
-                PlatformFont* arrowFont = GetUserGuiFont(GetFont()->GetName(), tabIconDx);
-                HGDIOBJ oldFont = SelectObject(hdc, arrowFont->GetHFont());
-                int oldMode = SetBkMode(hdc, TRANSPARENT);
-                Color oldColor = SetTextColor(hdc, GetColor(kColTabText));
                 RECT left{viewportDx, 0, viewportDx + scrollButtonDx, clientRc.dy};
                 RECT right{left.right, 0, left.right + scrollButtonDx, clientRc.dy};
                 RECT list{right.right, 0, clientRc.dx, clientRc.dy};
-                DrawTextW(hdc, L"\u2039", 1, &left, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                DrawTextW(hdc, L"\u203a", 1, &right, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                int iconDx = tabIconDx;
+                if (tabScrollLeftIcon) {
+                    iconDx = tabScrollLeftIcon->width;
+                } else if (tabListIcon) {
+                    iconDx = tabListIcon->width;
+                }
+                int iconDy = iconDx;
+                int iconY = topPad + (clientRc.dy - topPad - iconDy) / 2;
+
+                GfxHdc gfx(hdc);
+                if (tabScrollLeftIcon && left.right > left.left) {
+                    gfx.PushClip(ToRect(left));
+                    gfx.DrawPixmap(tabScrollLeftIcon,
+                                   {left.left + (left.right - left.left - iconDx) / 2, iconY, iconDx, iconDy});
+                    gfx.PopClip();
+                } else {
+                    PlatformFont* arrowFont = GetUserGuiFont(GetFont()->GetName(), tabIconDx);
+                    HGDIOBJ oldFont = SelectObject(hdc, arrowFont->GetHFont());
+                    int oldMode = SetBkMode(hdc, TRANSPARENT);
+                    Color oldColor = SetTextColor(hdc, GetColor(kColTabText));
+                    RECT leftText = left;
+                    leftText.top += topPad;
+                    DrawTextW(hdc, L"\u2039", 1, &leftText, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SetTextColor(hdc, oldColor);
+                    SetBkMode(hdc, oldMode);
+                    SelectObject(hdc, oldFont);
+                }
+
+                if (tabScrollRightIcon && right.right > right.left) {
+                    gfx.PushClip(ToRect(right));
+                    gfx.DrawPixmap(tabScrollRightIcon,
+                                   {right.left + (right.right - right.left - iconDx) / 2, iconY, iconDx, iconDy});
+                    gfx.PopClip();
+                } else {
+                    PlatformFont* arrowFont = GetUserGuiFont(GetFont()->GetName(), tabIconDx);
+                    HGDIOBJ oldFont = SelectObject(hdc, arrowFont->GetHFont());
+                    int oldMode = SetBkMode(hdc, TRANSPARENT);
+                    Color oldColor = SetTextColor(hdc, GetColor(kColTabText));
+                    RECT rightText = right;
+                    rightText.top += topPad;
+                    DrawTextW(hdc, L"\u203a", 1, &rightText, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SetTextColor(hdc, oldColor);
+                    SetBkMode(hdc, oldMode);
+                    SelectObject(hdc, oldFont);
+                }
+
                 if (tabListIcon && list.right > list.left) {
-                    GfxHdc gfx(hdc);
                     gfx.PushClip(ToRect(list));
-                    gfx.DrawPixmap(tabListIcon, {list.left + (list.right - list.left - tabIconDx) / 2,
-                                                 (clientRc.dy - tabIconDx) / 2, tabIconDx, tabIconDx});
+                    gfx.DrawPixmap(tabListIcon,
+                                   {list.left + (list.right - list.left - iconDx) / 2, iconY, iconDx, iconDy});
                     gfx.PopClip();
                 }
-                SetTextColor(hdc, oldColor);
-                SetBkMode(hdc, oldMode);
-                SelectObject(hdc, oldFont);
             }
             ReleaseDC(hwnd, hdc);
             return 0;

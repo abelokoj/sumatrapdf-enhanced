@@ -58,6 +58,12 @@ void FreeThemes();
 bool MigrateRenamedThemeNames();
 bool GetInvertPageColors();
 void SetInvertPageColors(bool);
+int GetInvertColorPreset();
+void SetInvertColorPreset(int preset);
+Color GetInvertCustomColor(bool dark);
+void SetInvertCustomColor(bool dark, Color col);
+Color GetInvertPresetColor(int preset);
+const char* GetInvertPresetName(int preset);
 
 struct VirtButton;
 struct PlatformFont;

@@ -777,14 +777,27 @@ static bool GetSelectionBounds(MainWindow* win, Rect& out) {
 static bool PositionToolbar(SelectionToolbar* tb, const Rect& sel) {
     MainWindow* win = tb->win;
     Rect canvas = win->canvasRc;
-    int gap = DpiScale(6);
+    int gap = DpiScale(8);
     int w = tb->size.dx;
     int h = tb->size.dy;
 
     int x = sel.x + (sel.dx / 2) - (w / 2);
-    int y = sel.y - gap - h;
-    if (y < canvas.y) {
+    int y;
+    if (tb->lassoMode || HasLassoSelection(win)) {
         y = sel.y + sel.dy + gap;
+        if (y + h > canvas.y + canvas.dy) {
+            int aboveY = sel.y - gap - h - DpiScale(28); // leave room for top rotation handle
+            if (aboveY >= canvas.y) {
+                y = aboveY;
+            } else {
+                y = std::max(canvas.y, canvas.y + canvas.dy - h);
+            }
+        }
+    } else {
+        y = sel.y - gap - h;
+        if (y < canvas.y) {
+            y = sel.y + sel.dy + gap;
+        }
     }
 
     int maxX = canvas.x + canvas.dx - w;

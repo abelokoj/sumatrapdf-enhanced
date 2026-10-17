@@ -387,8 +387,17 @@ enum {
     CmdCreateAnnotNegativeReciprocal = 581,
     CmdCreateAnnotAxes2D = 582,
     CmdCreateAnnotAxes3D = 583,
+    CmdCreateAnnotStar = 584,
+    CmdInvertColorPureWhite = 585,
+    CmdInvertColorWarmSepia = 586,
+    CmdInvertColorSoftGray = 587,
+    CmdInvertColorPureBlack = 588,
+    CmdInvertColorCharcoal = 589,
+    CmdInvertColorWarmEspresso = 590,
+    CmdInvertColorCustomLight = 591,
+    CmdInvertColorCustomDark = 592,
 
-    CmdLast = 583,
+    CmdLast = 592,
     CmdFirstCustom = CmdLast + 100,
 
     // aliases, at the end to not mess ordering

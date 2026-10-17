@@ -711,6 +711,10 @@ struct FixedPageUI {
     // measurement grid overlay (View > Page Grid). Spacing and style are
     // saved; showing the grid is session-only
     PageGrid pageGrid;
+    // inverted background color preset (0=Pure White, 1=Warm Sepia, 2=Soft Gray, 3=Pure Black, 4=Midnight Charcoal, 5=Warm Espresso, 6=Custom Light, 7=Custom Dark)
+    int invertColorIndex;
+    ParsedColor invertCustomLightCol;
+    ParsedColor invertCustomDarkCol;
 };
 
 // default values for annotations in PDF documents
@@ -722,6 +726,12 @@ struct Annotations {
     int shapeTool;
     // rectangle corner radius in PDF points; 0 keeps square corners
     float shapeCornerRadius;
+    // number of sides for regular polygon shape (3 to 32)
+    int polygonSides;
+    // number of points/sides for star shape (3 to 32)
+    int starSides;
+    // whether lasso selection defaults to rectangular instead of freehand
+    bool lassoRectangular;
     // saved settings for this pen type
     InkPenProfile inkBallpoint;
     // saved settings for this pen type
@@ -928,6 +938,10 @@ struct DictionaryUI {
     // Learning Hub text scale as a percentage of interface text, 50
     // through 300
     float learningHubScale;
+    // dictionary interface design: 1 = Curated Lexicon, 2 = Deep-Work Inspector
+    int dictionaryDesign;
+    // learning hub interface design: 1 = Mastery Dashboard, 2 = Cognitive Canvas
+    int learningHubDesign;
 };
 
 // customization options for HTML UI. If UseFixedPageUI is true, MuPDF
