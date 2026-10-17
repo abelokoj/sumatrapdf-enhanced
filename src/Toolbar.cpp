@@ -6178,6 +6178,7 @@ static void BuildShapesHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
         radius->onValue = MkFunc1(ShapeRadiusPicked, win);
         row->AddChild(radius);
         panel->AddChild(new Padding(row, Insets{UiScalePx(8), UiScalePx(12), UiScalePx(8), UiScalePx(12)}));
+        RecordHoverItem(tb, radius, radius->tooltip, {{}, radius->tooltip, cmd, true, false});
     }
     ev->layout = new Padding(panel, Insets{UiScalePx(8), UiScalePx(8), UiScalePx(8), UiScalePx(8)});
 }

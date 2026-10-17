@@ -282,29 +282,74 @@ static TempStr CsvText(Str value) {
     out.AppendChar('"');
     return ToStrTemp(out);
 }
+static TempStr NotePageLabel(const StudyNote& n) {
+    if (len(n.pageLabel) > 0 && !str::Eq(n.pageLabel, fmt("%d", n.page))) {
+        return fmt("page %s (%d)", n.pageLabel, n.page);
+    }
+    return fmt("page %d", n.page);
+}
+static TempStr NoteTypeName(AnnotationType type) {
+    switch (type) {
+        case AnnotationType::Text:
+            return StrL("Note");
+        case AnnotationType::FreeText:
+            return StrL("Free Text");
+        case AnnotationType::StrikeOut:
+            return StrL("Strike Out");
+        case AnnotationType::PolyLine:
+            return StrL("Polyline");
+        default:
+            return SeqStrByIndex(AnnotationTypeNames(), (int)type);
+    }
+}
 static TempStr NoteHeading(const StudyNote& n) {
-    return fmt("Page %s (%d) · %s", n.pageLabel, n.page, SeqStrByIndex(AnnotationTypeNames(), (int)n.type));
+    return fmt("%s, %s", NoteTypeName(n.type), NotePageLabel(n));
+}
+static TempStr StudyTimestamp(time_t date) {
+    if (!date) return {};
+    tm utc{};
+    if (gmtime_s(&utc, &date)) return {};
+    char text[32]{};
+    strftime(text, dimof(text), "%Y-%m-%d %H:%M:%S", &utc);
+    return str::DupTemp(Str(text));
 }
 static TempStr NoteDetails(const StudyNote& n) {
     str::Builder out;
-    out.Append(fmt("Color: %s", StudyColor(n.color)));
-    if (n.author) out.Append(fmt(" | Author: %s", n.author));
-    if (n.created) out.Append(fmt(" | Created: %s", StudyDate(n.created)));
-    if (n.modified) out.Append(fmt(" | Modified: %s", StudyDate(n.modified)));
+    if (n.created) {
+        out.Append(fmt("Date: %s", StudyTimestamp(n.created)));
+    } else if (n.modified) {
+        out.Append(fmt("Modified: %s", StudyTimestamp(n.modified)));
+    }
+    if (n.author) {
+        if (len(out)) out.Append(StrL(" | "));
+        out.Append(fmt("Author: %s", n.author));
+    }
+    if (n.color && n.color != kColorUnset) {
+        if (len(out)) out.Append(StrL(" | "));
+        out.Append(fmt("Color: %s", StudyColor(n.color)));
+    }
     return ToStrTemp(out);
 }
-static constexpr char kDrawingNotice[] =
-    "Non-text annotation. Its drawing remains in the source PDF; no handwriting recognition was performed.";
-static constexpr char kNoQuoteNotice[] =
-    "No underlying text could be extracted. Scanned pages require OCR; no text was invented.";
+static constexpr char kDrawingNotice[] = "Non-text annotation (drawing).\n\n";
+static constexpr char kNoQuoteNotice[] = "No text could be extracted.\n\n";
 static TempStr NoteBody(const StudyNote& n) {
     str::Builder out;
-    if (n.quote) out.Append(fmt("Selected text:\n%s\n\n", n.quote));
-    if (n.comment) out.Append(fmt("Note:\n%s\n\n", n.comment));
-    if (n.drawing)
-        out.Append(StrL(kDrawingNotice));
-    else if (len(n.quote) == 0 && len(n.comment) == 0)
-        out.Append(StrL(kNoQuoteNotice));
+    if (n.quote) {
+        out.AppendChar('"');
+        out.Append(n.quote);
+        out.Append(StrL("\"\n\n"));
+    }
+    if (n.comment) {
+        if (n.quote) out.Append(StrL("Note:\n"));
+        out.Append(n.comment);
+        out.Append(StrL("\n\n"));
+    }
+    if (len(n.quote) == 0 && len(n.comment) == 0) {
+        if (n.drawing)
+            out.Append(StrL(kDrawingNotice));
+        else
+            out.Append(StrL(kNoQuoteNotice));
+    }
     return ToStrTemp(out);
 }
 
@@ -339,7 +384,8 @@ static bool WriteStudyDocx(str::Builder& out, StudyDocument& doc, const Vec<Stud
     for (int i = 0; i < len(notes); i++) {
         const StudyNote& n = *notes[i];
         paragraph(NoteHeading(n), true);
-        paragraph(NoteDetails(n), false);
+        TempStr details = NoteDetails(n);
+        if (len(details) > 0) paragraph(details, false);
         paragraph(NoteBody(n), false);
         xml.Append(
             fmt("<w:p><w:hyperlink r:id=\"p%d\"><w:r><w:rPr><w:color w:val=\"166534\"/><w:u "
@@ -414,7 +460,9 @@ static bool RenderStudy(str::Builder& out, StudyDocument& doc, const Vec<StudyNo
                 "content=\"width=device-width\"><title>%s</title><style>body{font:1.05rem/1.65 "
                 "system-ui,sans-serif;max-width:54rem;margin:3rem auto;padding:0 "
                 "1.25rem;color:#17251d}article{border-top:1px solid #bccbbf;padding:1.5rem "
-                "0}p{white-space:pre-wrap;overflow-wrap:anywhere}small{color:#405548}a{color:#166534}</style></"
+                "0}h2{margin:0 0 0.5rem;font-size:1.35rem}small{display:block;color:#405548;margin-bottom:0.75rem}"
+                "blockquote{border-left:3px solid #166534;margin:1rem 0;padding:0.25rem 1rem;background:#f4f7f5;color:#23382b}"
+                "p{white-space:pre-wrap;overflow-wrap:anywhere}a{color:#166534}</style></"
                 "head><body><h1>%s</h1><p>Source: %s</p>\n",
                 XmlText(doc.title), XmlText(doc.title), XmlText(doc.source)));
     else if (format == StudyFormat::Typst)
@@ -434,21 +482,87 @@ static bool RenderStudy(str::Builder& out, StudyDocument& doc, const Vec<StudyNo
         Str heading = NoteHeading(*n), details = NoteDetails(*n), body = NoteBody(*n),
             link = StudyLink(doc.source, n->page);
         switch (format) {
-            case StudyFormat::Html:
-                out.Append(
-                    fmt("<article><h2>%s</h2><small>%s</small><p>%s</p><a href=\"%s\">Open source page</a></article>\n",
-                        XmlText(heading), XmlText(details), XmlText(body), XmlText(link)));
+            case StudyFormat::Html: {
+                out.Append(fmt("<article><h2>%s</h2>\n", XmlText(heading)));
+                if (len(details) > 0) out.Append(fmt("<small>%s</small>\n", XmlText(details)));
+                if (n->quote) out.Append(fmt("<blockquote><p>%s</p></blockquote>\n", XmlText(n->quote)));
+                if (n->comment) {
+                    if (n->quote)
+                        out.Append(fmt("<p><strong>Note:</strong><br/>%s</p>\n", XmlText(n->comment)));
+                    else
+                        out.Append(fmt("<p>%s</p>\n", XmlText(n->comment)));
+                }
+                if (len(n->quote) == 0 && len(n->comment) == 0) {
+                    if (n->drawing)
+                        out.Append(StrL("<p><em>Non-text annotation (drawing)</em></p>\n"));
+                    else
+                        out.Append(StrL("<p><em>No text could be extracted</em></p>\n"));
+                }
+                out.Append(fmt("<a href=\"%s\">Open source page</a></article>\n", XmlText(link)));
                 break;
-            case StudyFormat::Typst:
-                out.Append(fmt("#heading(level: 2, %s)\n#notes(%s)\n\n#notes(%s)\n\n#link(%s)[Open source page]\n\n",
-                               TypstText(heading), TypstText(details), TypstText(body), TypstText(link)));
+            }
+            case StudyFormat::Typst: {
+                out.Append(fmt("#heading(level: 2, %s)\n", TypstText(heading)));
+                if (len(details) > 0)
+                    out.Append(fmt("#text(fill: luma(100), size: 9pt, %s)\n\n", TypstText(details)));
+                if (n->quote)
+                    out.Append(fmt("#rect(stroke: (left: 2.5pt + rgb(\"#166534\")), inset: (left: 10pt, y: 4pt), fill: rgb(\"#f4f7f5\"))[#notes(%s)]\n\n",
+                                   TypstText(n->quote)));
+                if (n->comment) {
+                    if (n->quote)
+                        out.Append(fmt("*Note:* #linebreak() #notes(%s)\n\n", TypstText(n->comment)));
+                    else
+                        out.Append(fmt("#notes(%s)\n\n", TypstText(n->comment)));
+                }
+                if (len(n->quote) == 0 && len(n->comment) == 0) {
+                    if (n->drawing)
+                        out.Append(StrL("_Non-text annotation (drawing)_\n\n"));
+                    else
+                        out.Append(StrL("_No text could be extracted_\n\n"));
+                }
+                out.Append(fmt("#link(%s)[Open source page]\n\n", TypstText(link)));
                 break;
-            case StudyFormat::Markdown:
-                out.Append(fmt("## %s\n\n%s\n\n%s\n\n[Open source page](%s)\n\n", MarkdownText(heading),
-                               MarkdownText(details), MarkdownText(body), link));
+            }
+            case StudyFormat::Markdown: {
+                out.Append(fmt("## %s\n\n", MarkdownText(heading)));
+                if (len(details) > 0) out.Append(fmt("*%s*\n\n", MarkdownText(details)));
+                if (n->quote) {
+                    int start = 0;
+                    for (int j = 0; j <= len(n->quote); j++) {
+                        if (j < len(n->quote) && n->quote.s[j] != '\n' && n->quote.s[j] != '\r') continue;
+                        Str line(n->quote.s + start, j - start);
+                        out.Append(StrL("> "));
+                        out.Append(MarkdownText(line));
+                        out.Append(StrL("  \n"));
+                        if (j < len(n->quote) && n->quote.s[j] == '\r' && j + 1 < len(n->quote) &&
+                            n->quote.s[j + 1] == '\n')
+                            j++;
+                        start = j + 1;
+                    }
+                    out.AppendChar('\n');
+                }
+                if (n->comment) {
+                    if (n->quote) out.Append(StrL("**Note:**  \n"));
+                    out.Append(MarkdownText(n->comment));
+                    out.Append(StrL("\n\n"));
+                }
+                if (len(n->quote) == 0 && len(n->comment) == 0) {
+                    if (n->drawing)
+                        out.Append(StrL("*(Drawing annotation)*\n\n"));
+                    else
+                        out.Append(StrL("*(No text extracted)*\n\n"));
+                }
+                out.Append(fmt("[Open source page](%s)\n\n", link));
                 break;
-            default:
-                out.Append(fmt("%s\n%s\n\n%s\n\nSource page: %s\n\n", heading, details, body, link));
+            }
+            default: {
+                out.Append(fmt("%s\n", heading));
+                if (len(details) > 0) out.Append(fmt("%s\n", details));
+                out.AppendChar('\n');
+                out.Append(body);
+                out.Append(fmt("Source page: %s\n\n", link));
+                break;
+            }
         }
     }
     if (format == StudyFormat::Html) out.Append(StrL("</body></html>\n"));
@@ -1019,5 +1133,48 @@ void StudyExport_UnitTests() {
         utassert(RenderStudy(emptyOut, doc, empty, (StudyFormat)format));
         utassert(len(emptyOut) > 0);
     }
+    // Verify Skim-reference export formatting for text and markdown
+    str::Builder txtOut;
+    utassert(RenderStudy(txtOut, doc, notes, StudyFormat::Text));
+    utassert(str::Contains(txtOut, StrL("Highlight, page ii (2)")));
+    utassert(str::Contains(txtOut, StrL("Date: 2023-11-14 22:13:20")));
+    utassert(str::Contains(txtOut, StrL("\"α + β < 2")));
+    utassert(str::Contains(txtOut, StrL("Note:\n=SUM(1,2)")));
+    utassert(str::Contains(txtOut, StrL("Ink, page i (1)")));
+    utassert(str::Contains(txtOut, StrL("Non-text annotation (drawing).")));
+    utassert(!str::Contains(txtOut, StrL("Color: none")));
+
+    str::Builder mdOut;
+    utassert(RenderStudy(mdOut, doc, notes, StudyFormat::Markdown));
+    utassert(str::Contains(mdOut, StrL("## Highlight, page ii (2)")));
+    utassert(str::Contains(mdOut, StrL("*Date: 2023-11-14 22:13:20")));
+    utassert(str::Contains(mdOut, StrL("> α + β < 2")));
+    utassert(str::Contains(mdOut, StrL("**Note:**")));
+    utassert(str::Contains(mdOut, StrL("## Ink, page i (1)")));
+    utassert(str::Contains(mdOut, StrL("*(Drawing annotation)*")));
+
+    StudyNote p1;
+    p1.page = 1;
+    p1.type = AnnotationType::Highlight;
+    utassert(str::Eq(NoteHeading(p1), StrL("Highlight, page 1")));
+    p1.pageLabel = str::Dup(StrL("1"));
+    utassert(str::Eq(NoteHeading(p1), StrL("Highlight, page 1")));
+    str::Free(p1.pageLabel);
+    p1.pageLabel = str::Dup(StrL("iv"));
+    utassert(str::Eq(NoteHeading(p1), StrL("Highlight, page iv (1)")));
+    str::Free(p1.pageLabel);
+
+    StudyNote textNote;
+    textNote.page = 3;
+    textNote.type = AnnotationType::Text;
+    textNote.comment = str::Dup(StrL("Sticky thought"));
+    utassert(str::Eq(NoteHeading(textNote), StrL("Note, page 3")));
+    str::Builder noteTxt;
+    Vec<StudyNote*> noteList;
+    VecAppend(noteList, &textNote);
+    utassert(RenderStudy(noteTxt, doc, noteList, StudyFormat::Text));
+    utassert(str::Contains(noteTxt, StrL("Sticky thought")));
+    utassert(!str::Contains(noteTxt, StrL("Note:\nSticky thought")));
+    str::Free(textNote.comment);
 }
 #endif

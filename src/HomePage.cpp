@@ -1557,19 +1557,26 @@ bool HomePage_UnitTestsTextSizing() {
         str::ReplaceWithCopy(&gSettings->uIFontFamily, family);
         for (int dpi : {96, 144, 192}) {
             DpiSet(dpi, dpi);
-            for (int scale : {100, 150}) {
+            for (int scale : {100, 150, 200}) {
                 gSettings->interfaceScale = scale;
-                for (int fontSize : {0, 14, 32, 64}) {
+                for (int fontSize : {0, 14, 28, 32, 64}) {
                     gSettings->uIFontSize = fontSize;
                     int lineDy = PlatformFontLineHeight(HomePageFont(14));
                     int iconDy = HomeFileIconDy();
                     Rect caption{1000, 100, 400, kThumbsCaptionDy};
-                    for (bool rtl : {false, true}) {
-                        Rect icon = HomeFileIconBounds(caption, {16, 16}, iconDy, UiScalePx(4), rtl);
-                        ok &= icon.dy == iconDy;
-                        ok &= std::abs(2 * icon.y + icon.dy - 2 * caption.y - caption.dy) <= 1;
-                        ok &= rtl ? icon.x == caption.Right() + UiScalePx(4) : icon.Right() == caption.x - UiScalePx(4);
+                    for (Size source : {Size{16, 16}, Size{12, 16}, Size{16, 20}, Size{32, 32}, Size{48, 48}}) {
+                        for (bool rtl : {false, true}) {
+                            Rect icon = HomeFileIconBounds(caption, source, iconDy, UiScalePx(4), rtl);
+                            ok &= icon.dy > 0 && icon.dx > 0;
+                            ok &= icon.dx <= iconDy && icon.dy <= iconDy;
+                            ok &= std::abs(2 * icon.y + icon.dy - 2 * caption.y - caption.dy) <= 1;
+                            ok &= rtl ? icon.x == caption.Right() + UiScalePx(4)
+                                      : icon.Right() == caption.x - UiScalePx(4);
+                            ok &= caption.Intersect(icon).IsEmpty();
+                        }
                     }
+                    ok &= HomeFileIconBounds(caption, {0, 0}, iconDy, UiScalePx(4), false).IsEmpty();
+                    ok &= HomeFileIconBounds(caption, {16, 16}, 0, UiScalePx(4), false).IsEmpty();
                     ok &= kThumbsCaptionDy >= lineDy + UiScalePx(4);
                     ok &= kHomeListRowDy >= lineDy + UiScalePx(6);
                     ok &= kHomeListRowDy >= kHomeListThumbDy + UiScalePx(6);
@@ -2085,6 +2092,7 @@ static void ClearHomeLayoutCache(MainWindow* win) {
 // rebuilt on the next HomePageRelayout.
 // must be called before the FileState objects the cache points at are freed
 void HomePageInvalidateLayoutCache() {
+    FreeHomeFileIcons();
     for (MainWindow* win : gWindows) {
         ClearHomeLayoutCache(win);
     }

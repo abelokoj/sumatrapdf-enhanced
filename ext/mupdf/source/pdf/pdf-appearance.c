@@ -313,15 +313,26 @@ static fz_point rotate_vector(float angle, float x, float y)
 	return fz_make_point(x*ca - y*sa, x*sa + y*ca);
 }
 
-static void pdf_write_arrow_appearance(fz_context *ctx, fz_buffer *buf, fz_rect *rect, float x, float y, float dx, float dy, float w, int close)
+static void pdf_write_arrow_appearance(fz_context *ctx, fz_buffer *buf, fz_rect *rect, float x, float y, float dx, float dy, float w, int close, float max_len)
 {
 	float r = fz_max(1, w);
+	float len = 8.8f * r;
+	float half_w = 4.5f * r;
+	if (max_len > 0 && len > max_len)
+	{
+		float scale = max_len / len;
+		len = max_len;
+		half_w *= scale;
+	}
 	float angle = atan2f(dy, dx);
 	fz_point v, a, b;
 
-	v = rotate_vector(angle, 8.8f*r, 4.5f*r);
+	/* Reset dash pattern and ensure sharp miter join for the arrowhead */
+	fz_append_string(ctx, buf, "[] 0 d\n0 j\n10 M\n0 J\n");
+
+	v = rotate_vector(angle, len, half_w);
 	a = fz_make_point(x + v.x, y + v.y);
-	v = rotate_vector(angle, 8.8f*r, -4.5f*r);
+	v = rotate_vector(angle, len, -half_w);
 	b = fz_make_point(x + v.x, y + v.y);
 
 	*rect = fz_include_point_in_rect(*rect, a);
@@ -346,7 +357,7 @@ static void include_cap(fz_rect *rect, float x, float y, float r)
 static void
 pdf_write_line_cap_appearance(fz_context *ctx, fz_buffer *buf, fz_rect *rect,
 		float x, float y, float dx, float dy, float w,
-		int sc, int ic, pdf_obj *cap)
+		int sc, int ic, pdf_obj *cap, float max_len)
 {
 	float l = sqrtf(dx*dx + dy*dy);
 	dx = dx / l;
@@ -384,12 +395,12 @@ pdf_write_line_cap_appearance(fz_context *ctx, fz_buffer *buf, fz_rect *rect,
 	}
 	else if (cap == PDF_NAME(OpenArrow))
 	{
-		pdf_write_arrow_appearance(ctx, buf, rect, x, y, dx, dy, w, 0);
+		pdf_write_arrow_appearance(ctx, buf, rect, x, y, dx, dy, w, 0, max_len);
 		maybe_stroke(ctx, buf, sc);
 	}
 	else if (cap == PDF_NAME(ClosedArrow))
 	{
-		pdf_write_arrow_appearance(ctx, buf, rect, x, y, dx, dy, w, 1);
+		pdf_write_arrow_appearance(ctx, buf, rect, x, y, dx, dy, w, 1, max_len);
 		maybe_stroke_and_fill(ctx, buf, sc, ic);
 	}
 	/* PDF 1.5 */
@@ -407,12 +418,12 @@ pdf_write_line_cap_appearance(fz_context *ctx, fz_buffer *buf, fz_rect *rect,
 	}
 	else if (cap == PDF_NAME(ROpenArrow))
 	{
-		pdf_write_arrow_appearance(ctx, buf, rect, x, y, -dx, -dy, w, 0);
+		pdf_write_arrow_appearance(ctx, buf, rect, x, y, -dx, -dy, w, 0, max_len);
 		maybe_stroke(ctx, buf, sc);
 	}
 	else if (cap == PDF_NAME(RClosedArrow))
 	{
-		pdf_write_arrow_appearance(ctx, buf, rect, x, y, -dx, -dy, w, 1);
+		pdf_write_arrow_appearance(ctx, buf, rect, x, y, -dx, -dy, w, 1, max_len);
 		maybe_stroke_and_fill(ctx, buf, sc, ic);
 	}
 	/* PDF 1.6 */
@@ -528,8 +539,8 @@ pdf_write_line_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, fz_
 	{
 		dx = b.x - a.x;
 		dy = b.y - a.y;
-		pdf_write_line_cap_appearance(ctx, buf, rect, a.x, a.y, dx, dy, w, sc, ic, pdf_array_get(ctx, le, 0));
-		pdf_write_line_cap_appearance(ctx, buf, rect, b.x, b.y, -dx, -dy, w, sc, ic, pdf_array_get(ctx, le, 1));
+		pdf_write_line_cap_appearance(ctx, buf, rect, a.x, a.y, dx, dy, w, sc, ic, pdf_array_get(ctx, le, 0), 0);
+		pdf_write_line_cap_appearance(ctx, buf, rect, b.x, b.y, -dx, -dy, w, sc, ic, pdf_array_get(ctx, le, 1), 0);
 	}
 	*rect = fz_expand_rect(*rect, fz_max(1, w));
 }
@@ -1030,7 +1041,7 @@ pdf_write_polygon_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, 
 		dx = b.x - a.x;
 		dy = b.y - a.y;
 
-		pdf_write_line_cap_appearance(ctx, buf, rect, a.x, a.y, dx, dy, lw, sc, ic, pdf_array_get(ctx, le, 0));
+		pdf_write_line_cap_appearance(ctx, buf, rect, a.x, a.y, dx, dy, lw, sc, ic, pdf_array_get(ctx, le, 0), 0);
 
 		a.x = pdf_array_get_real(ctx, verts, (n-1)*2+0);
 		a.y = pdf_array_get_real(ctx, verts, (n-1)*2+1);
@@ -1040,7 +1051,7 @@ pdf_write_polygon_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, 
 		dx = b.x - a.x;
 		dy = b.y - a.y;
 
-		pdf_write_line_cap_appearance(ctx, buf, rect, a.x, a.y, dx, dy, lw, sc, ic, pdf_array_get(ctx, le, 1));
+		pdf_write_line_cap_appearance(ctx, buf, rect, a.x, a.y, dx, dy, lw, sc, ic, pdf_array_get(ctx, le, 1), 0);
 	}
 
 	if (exp == 0)
@@ -2734,7 +2745,7 @@ pdf_write_free_text_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf
 			pdf_write_line_cap_appearance(ctx, buf, rect,
 				xy[0], xy[1],
 				xy[2] - xy[0], xy[3] - xy[1], b,
-				1, ic, le);
+				1, ic, le, 0);
 		}
 	}
 

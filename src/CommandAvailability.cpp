@@ -659,8 +659,9 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
         return CommandVisibility::Hide;
     }
 
-    // Editing remains deferred until its save/reopen acceptance is complete.
-    if (cmdId == CmdEditMarkdown) return CommandVisibility::Hide;
+    if (cmdId == CmdEditMarkdown) {
+        return ctx.isMarkdown && CanAccessDisk() ? CommandVisibility::Show : CommandVisibility::Hide;
+    }
 
     if (cmdId == CmdShowGeneratedHTML && !ctx.isMarkdown) {
         return CommandVisibility::Hide;

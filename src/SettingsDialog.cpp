@@ -48,6 +48,7 @@
 #include "PdfDarkMode.h"
 #include "RefHover.h"
 #include "MarkdownFonts.h"
+#include "MarkdownLayout.h"
 #include "MarkdownModel.h"
 #include "FileTypeIcons.h"
 #include "Installer.h"
@@ -1759,10 +1760,17 @@ void SettingsWnd::OnCancel(VirtMouseEvent*) {
 void SettingsWnd::MarkdownWidthChanged() {
     if (markdownLayoutUpdating) return;
     double width, left, right;
-    if (!ReadSettingNumber(dropMarkdownWidth, StrL("%"), width) || width <= 0 || width > 100 ||
+    if (!ReadSettingNumber(dropMarkdownWidth, StrL("%"), width) || width < 0 || width > 100 ||
         !ReadSettingNumber(dropMarkdownLeft, StrL("%"), left) ||
         !ReadSettingNumber(dropMarkdownRight, StrL("%"), right))
         return;
+    if (width == 0) {
+        markdownLayoutUpdating = true;
+        dropMarkdownLeft->SetText(StrL("0"));
+        dropMarkdownRight->SetText(StrL("0"));
+        markdownLayoutUpdating = false;
+        return;
+    }
     if (left < 0 || right < 0) return;
     double total = left + right;
     left = total > 0 ? (100 - width) * left / total : (100 - width) / 2;
@@ -1941,13 +1949,28 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     if (!ReadSettingNumber(dropMarkdownWidth, StrL("%"), markdownWidth) ||
         !ReadSettingNumber(dropMarkdownLeft, StrL("%"), markdownLeft) ||
         !ReadSettingNumber(dropMarkdownRight, StrL("%"), markdownRight) || markdownWidth < 0 || markdownWidth > 100 ||
-        markdownLeft < 0 || markdownRight < 0 || markdownLeft >= 100 || markdownRight >= 100 ||
-        (markdownWidth > 0 && std::abs(markdownWidth + markdownLeft + markdownRight - 100) > 0.05)) {
+        markdownLeft < 0 || markdownRight < 0 || markdownLeft >= 100 || markdownRight >= 100) {
         MessageBoxW(
             hwnd,
             CWStrTemp(Tr("Reading width and left/right margins must total 100%. Use width 0 for the default layout.")),
             CWStrTemp(Tr("Check Markdown layout")), MB_OK | MB_ICONWARNING);
         return;
+    }
+    if (markdownWidth > 0 && std::abs(markdownWidth + markdownLeft + markdownRight - 100) > 0.05) {
+        float fW = (float)markdownWidth;
+        float fL = (float)markdownLeft;
+        float fR = (float)markdownRight;
+        if (DeriveMarkdownLayout(fW, fL, fR)) {
+            markdownWidth = fW;
+            markdownLeft = fL;
+            markdownRight = fR;
+        } else {
+            MessageBoxW(
+                hwnd,
+                CWStrTemp(Tr("Reading width and left/right margins must total 100%. Use width 0 for the default layout.")),
+                CWStrTemp(Tr("Check Markdown layout")), MB_OK | MB_ICONWARNING);
+            return;
+        }
     }
     int fileIconStyle = SelectedFileIconStyle(dropFileIconStyle);
     if (HasPermission(Perm::RegistryAccess) && !FileTypeIconPackAvailable(fileIconStyle)) {

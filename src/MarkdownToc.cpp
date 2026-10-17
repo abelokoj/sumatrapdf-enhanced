@@ -816,6 +816,17 @@ bool MarkdownToc_UnitTestHtmlLinks() {
         !ValidMarkdownLayout(80, 10, 10) || !ValidMarkdownLayout(85, 10, 5) || len(MarkdownLayoutCssTemp(0, 10, 10)) ||
         !str::Contains(MarkdownLayoutCssTemp(80, 10, 10), StrL("width:80.0000%")))
         return false;
+    float dW = 80, dL = 0, dR = 0;
+    if (!DeriveMarkdownLayout(dW, dL, dR) || std::abs(dL - 10.f) > 0.01f || std::abs(dR - 10.f) > 0.01f)
+        return false;
+    float dW2 = 70, dL2 = 10, dR2 = 0;
+    if (!DeriveMarkdownLayout(dW2, dL2, dR2) || std::abs(dR2 - 20.f) > 0.01f)
+        return false;
+    float dW3 = 0, dL3 = 10, dR3 = 10;
+    if (DeriveMarkdownLayout(dW3, dL3, dR3))
+        return false;
+    if (!str::Contains(MarkdownLayoutCssTemp(80, 0, 0), StrL("margin-left:10.0000%")))
+        return false;
     Str scrollbarPage = MarkdownToHtmlPage(StrL("# Scrollbar\n\nText"));
     bool scrollbarOk = str::Contains(scrollbarPage, StrL("--scrollbar-size:")) &&
                        str::Contains(scrollbarPage, StrL("data:image/svg+xml,%3Csvg")) &&

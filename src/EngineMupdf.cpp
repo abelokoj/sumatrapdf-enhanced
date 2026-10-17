@@ -4533,13 +4533,18 @@ bool EngineMupdf::LoadFromStream(fz_stream* stm, Str nameHint, PasswordUI* pwdUI
     }
     if (GuessFileTypeFromName(nameHint, true) == FileType::Markdown) {
         auto* markdown = GetMarkdownUI();
-        if (markdown && ValidMarkdownLayout(markdown->readingWidth, markdown->leftMargin, markdown->rightMargin)) {
-            userCss =
-                str::JoinTemp(userCss, fmt("@page { margin-left: %gpt !important; margin-right: %gpt !important; }\n"
-                                           "body { margin-left: 0 !important; margin-right: 0 !important; "
-                                           "padding-left: 0 !important; padding-right: 0 !important; }\n",
-                                           DpiScale(ldx * markdown->leftMargin / 100, displayDPI),
-                                           DpiScale(ldx * markdown->rightMargin / 100, displayDPI)));
+        if (markdown) {
+            float width = markdown->readingWidth;
+            float left = markdown->leftMargin;
+            float right = markdown->rightMargin;
+            if (ValidMarkdownLayout(width, left, right) || DeriveMarkdownLayout(width, left, right)) {
+                userCss =
+                    str::JoinTemp(userCss, fmt("@page { margin-left: %gpt !important; margin-right: %gpt !important; }\n"
+                                               "body { margin-left: 0 !important; margin-right: 0 !important; "
+                                               "padding-left: 0 !important; padding-right: 0 !important; }\n",
+                                               DpiScale(ldx * left / 100, displayDPI),
+                                               DpiScale(ldx * right / 100, displayDPI)));
+            }
         }
     }
     ebookUserCss = str::Dup(arena, userCss);

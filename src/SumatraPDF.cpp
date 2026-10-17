@@ -12002,6 +12002,7 @@ void SetAnnotCreateArgs(AnnotCreateArgs& args, CustomCommand* cmd) {
         args.borderWidth = isfinite(a.squareBorderWidth) ? limitValue(a.squareBorderWidth, 0.f, 64.f) : 1.f;
         interiorCol = GetParsedColor(a.squareInteriorColor);
         interiorOpacity = a.squareInteriorOpacity;
+        args.cornerRadius = isfinite(a.shapeCornerRadius) ? limitValue(a.shapeCornerRadius, 0.f, 1000.f) : 0.f;
     } else if (typ == AnnotationType::Circle) {
         col = GetParsedColor(a.circleColor);
         args.borderWidth = isfinite(a.circleBorderWidth) ? limitValue(a.circleBorderWidth, 0.f, 64.f) : 1.f;

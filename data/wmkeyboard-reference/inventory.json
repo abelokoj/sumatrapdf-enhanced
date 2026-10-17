@@ -1,0 +1,201 @@
+{
+  "schema_version": "1.0",
+  "project": "WMKeyboard (Reference Application)",
+  "upstream_url": "https://github.com/wasi-master/wmkeyboard",
+  "primary_license": "MIT License (Copyright (c) 2026 Wasi Master)",
+  "third_party_licenses": {
+    "material_symbols": "Apache License 2.0 (Google LLC)",
+    "inter_font": "SIL Open Font License 1.1 (Rasmus Andersson)",
+    "amaz_obitaem_ostrov": "Freeware (Monogram outlines only; font binary never distributed)"
+  },
+  "canvas_and_rendering_specs": {
+    "standard_icon_box": "24dp x 24dp",
+    "adaptive_launcher_canvas": "108dp x 108dp",
+    "safe_circle_diameter": "66dp (radius 32.5dp)",
+    "material_symbols_viewport": "960 x 960 (origin bottom-left, y-up, viewBox 0 -960 960 960)",
+    "stroke_width_standard": "1.7dp - 1.75dp",
+    "stroke_line_cap": "round",
+    "stroke_line_join": "round"
+  },
+  "categories": {
+    "branding_and_launcher": [
+      {
+        "id": "launcher_monochrome",
+        "type": "vector",
+        "source": "app/src/main/res/drawable/ic_launcher_monochrome.xml",
+        "purpose": "Android 13+ themed icon, single even-odd path"
+      },
+      {
+        "id": "launcher_background",
+        "type": "gradient",
+        "source": "app/src/main/res/drawable/ic_launcher_background.xml",
+        "purpose": "Adaptive icon background (#2F3474 -> #191C42)"
+      },
+      {
+        "id": "media_kit_icon",
+        "type": "svg",
+        "source": "docs/public/media-kit/logo/icon.svg",
+        "purpose": "Full launcher icon with soft drop shadow and gradient pin"
+      },
+      {
+        "id": "media_kit_icon_rounded",
+        "type": "svg",
+        "source": "docs/public/media-kit/logo/icon-rounded.svg",
+        "purpose": "Rounded app icon for documentation and marketing"
+      },
+      {
+        "id": "media_kit_mark_mono_black",
+        "type": "svg",
+        "source": "docs/public/media-kit/logo/mark-mono-black.svg",
+        "purpose": "Monochrome black brand mark"
+      },
+      {
+        "id": "media_kit_mark_mono_white",
+        "type": "svg",
+        "source": "docs/public/media-kit/logo/mark-mono-white.svg",
+        "purpose": "Monochrome white brand mark"
+      },
+      {
+        "id": "media_kit_mark_on_dark",
+        "type": "svg",
+        "source": "docs/public/media-kit/logo/mark-on-dark.svg",
+        "purpose": "Mark styled for dark backgrounds"
+      },
+      {
+        "id": "media_kit_mark_on_light",
+        "type": "svg",
+        "source": "docs/public/media-kit/logo/mark-on-light.svg",
+        "purpose": "Mark styled for light backgrounds"
+      },
+      {
+        "id": "media_kit_lockup_dark",
+        "type": "svg",
+        "source": "docs/public/media-kit/logo/lockup-dark.svg",
+        "purpose": "Horizontal logo + wordmark lockup (dark mode)"
+      },
+      {
+        "id": "media_kit_lockup_light",
+        "type": "svg",
+        "source": "docs/public/media-kit/logo/lockup-light.svg",
+        "purpose": "Horizontal logo + wordmark lockup (light mode)"
+      },
+      {
+        "id": "media_kit_wordmark_navy",
+        "type": "svg",
+        "source": "docs/public/media-kit/logo/wordmark-navy.svg",
+        "purpose": "Inter outline wordmark in navy"
+      },
+      {
+        "id": "media_kit_wordmark_white",
+        "type": "svg",
+        "source": "docs/public/media-kit/logo/wordmark-white.svg",
+        "purpose": "Inter outline wordmark in white"
+      }
+    ],
+    "system_and_shortcuts": [
+      {
+        "id": "qs_pin_keyboard",
+        "source": "app/src/main/res/drawable/ic_qs_pin_keyboard.xml",
+        "purpose": "Quick Settings tile toggle for persistent keyboard"
+      },
+      {
+        "id": "shortcut_ai_chat",
+        "source": "app/src/main/res/drawable/ic_shortcut_ai_chat.xml",
+        "purpose": "Launcher shortcut for AI assistant"
+      },
+      {
+        "id": "shortcut_languages",
+        "source": "app/src/main/res/drawable/ic_shortcut_languages.xml",
+        "purpose": "Launcher shortcut for Language settings"
+      },
+      {
+        "id": "shortcut_themes",
+        "source": "app/src/main/res/drawable/ic_shortcut_themes.xml",
+        "purpose": "Launcher shortcut for Theme catalog"
+      },
+      {
+        "id": "shortcut_tools",
+        "source": "app/src/main/res/drawable/ic_shortcut_tools.xml",
+        "purpose": "Launcher shortcut for Toolbar toolbox"
+      },
+      {
+        "id": "common_notification",
+        "source": "core/common/src/main/res/drawable/common_ic_notification.xml",
+        "purpose": "Status bar persistent service notification"
+      },
+      {
+        "id": "summon_ai",
+        "source": "feature/ime/src/main/res/drawable/ic_summon_ai.xml",
+        "purpose": "IME summon overlay for AI chat"
+      },
+      {
+        "id": "summon_keyboard",
+        "source": "feature/ime/src/main/res/drawable/ic_summon_keyboard.xml",
+        "purpose": "Floating summon handle for docked keyboard"
+      },
+      {
+        "id": "summon_keyboard_hide",
+        "source": "feature/ime/src/main/res/drawable/ic_summon_keyboard_hide.xml",
+        "purpose": "Floating dismiss handle for docked keyboard"
+      }
+    ],
+    "social_brands": [
+      {
+        "id": "brand_telegram",
+        "source": "app/src/main/res/drawable/ic_brand_telegram.xml"
+      },
+      {
+        "id": "brand_instagram",
+        "source": "app/src/main/res/drawable/ic_brand_instagram.xml"
+      },
+      {
+        "id": "brand_reddit",
+        "source": "app/src/main/res/drawable/ic_brand_reddit.xml"
+      },
+      {
+        "id": "brand_tiktok",
+        "source": "app/src/main/res/drawable/ic_brand_tiktok.xml"
+      },
+      {
+        "id": "brand_x",
+        "source": "app/src/main/res/drawable/ic_brand_x.xml"
+      }
+    ],
+    "handcrafted_ime_glyphs": [
+      {
+        "id": "keyboard_forward_delete",
+        "source": "feature/ime/src/main/java/com/wasimaster/wmkeyboard/ime/ui/KeyboardIcons.kt",
+        "desc": "Non-reversing forward-delete ⌦ icon with rounded slab"
+      },
+      {
+        "id": "keyboard_incognito",
+        "source": "feature/ime/src/main/java/com/wasimaster/wmkeyboard/ime/ui/KeyboardIcons.kt",
+        "desc": "Hat crown, brim, and glasses incognito badge"
+      }
+    ],
+    "custom_material_symbols": [
+      "Sticker",
+      "StickerAdd",
+      "GifBox",
+      "Gif",
+      "Gif2",
+      "SmartToy",
+      "SettingsFilled",
+      "MicFilled",
+      "AnimatedImages",
+      "TrackpadInput",
+      "MobileHandLeft",
+      "ToolsLevel",
+      "Dictionary",
+      "KeyboardExternalInput",
+      "PartlyCloudyDay",
+      "ConvertToText",
+      "TranslateIndic",
+      "Shift",
+      "ShiftFilled",
+      "ShiftLockFilled",
+      "KeyboardPreviousLanguage",
+      "KeyboardKeys"
+    ]
+  }
+}
