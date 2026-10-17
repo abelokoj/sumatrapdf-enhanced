@@ -162,7 +162,7 @@ static void AddRoundedRectPath(Gdiplus::GraphicsPath& path, const Rect& rc, int 
 
 // gdiplus rather than gdi's RoundRect() because the corners have to be
 // anti-aliased to look like anything
-void GfxHdc::FillRoundedRect(const Rect& r, int radius, Color fill, Color border) {
+void GfxHdc::FillRoundedRect(const Rect& r, int radius, Color fill, Color border, float borderWidth) {
     if (r.IsEmpty()) {
         return;
     }
@@ -180,7 +180,7 @@ void GfxHdc::FillRoundedRect(const Rect& r, int radius, Color fill, Color border
         gp.g.FillPath(&br, &path);
     }
     if (!ColorSkipsPaint(border)) {
-        Gdiplus::Pen pen(GdiRgbFromColor(border), 1);
+        Gdiplus::Pen pen(GdiRgbFromColor(border), borderWidth);
         gp.g.DrawPath(&pen, &path);
     }
 }

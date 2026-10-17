@@ -361,6 +361,13 @@ static LRESULT CALLBACK WndProcSidebarPanel(HWND hwnd, UINT msg, WPARAM wp, LPAR
         return 0;
     }
 
+    if (msg == WM_PAINT && p->view == SidebarView::Bookmarks && win->tocTreeView &&
+        win->tocTreeView->needsVisibleRebuild) {
+        // Initial layout can precede showing the frame itself.
+        LayoutSidebarPanel(p);
+        RefreshTocTreeIfNeeded(win);
+    }
+
     // the header and the thumbnails are virtual controls, so this window paints
     // them and hands them their input
     if (VirtHostOnMessage(hwnd, p->root, msg, wp, lp, res, ThemeControlBackgroundColor())) {
@@ -369,6 +376,12 @@ static LRESULT CALLBACK WndProcSidebarPanel(HWND hwnd, UINT msg, WPARAM wp, LPAR
 
     if (msg == WM_SIZE) {
         LayoutSidebarPanel(p);
+    }
+    if (msg == WM_WINDOWPOSCHANGED && (((WINDOWPOS*)lp)->flags & SWP_SHOWWINDOW) && p->view == SidebarView::Bookmarks) {
+        // A hidden panel can be shown at its old size without WM_SIZE.
+        LayoutSidebarPanel(p);
+        RefreshTocTreeIfNeeded(win);
+        HwndInvalidate(hwnd, false);
     }
     // DefWindowProc() passes an unhandled wheel on to the frame, which scrolls
     // the document

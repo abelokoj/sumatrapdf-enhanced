@@ -43,6 +43,7 @@ import {
   killAndWait,
   launchControlled,
   scrollToolbarToCommand,
+  selectToolbarShape,
   pressKey,
   sendCommand,
 } from "./win-automation.ts";
@@ -256,24 +257,7 @@ export async function testit(): Promise<void> {
 
     sendMessage(frame, WM_COMMAND, cmdId("CmdToggleEditPDF"), 0);
     const toolbar = findChildByClass(frame, "SUMATRA_VIRT_TOOLBAR");
-    const clickToolbar = async () => {
-      const toolbarDump = await scrollToolbarToCommand(client, frame, "CmdCreateAnnotPolyLine");
-      const button = toolbarButtonRect(toolbarDump);
-      const bounds = getClientRect(toolbar);
-      if (
-        button.dx <= 0 ||
-        button.dy <= 0 ||
-        button.x < bounds.left ||
-        button.y < bounds.top ||
-        button.x + button.dx > bounds.right ||
-        button.y + button.dy > bounds.bottom
-      ) {
-        throw new Error(
-          `polyline-annotation-placement: toolbar button outside client bounds ${JSON.stringify(bounds)}\n${toolbarDump}`,
-        );
-      }
-      await clickAt(toolbar, button.x + Math.floor(button.dx / 2), button.y + Math.floor(button.dy / 2), 0);
-    };
+    const clickToolbar = () => selectToolbarShape(client, frame, proc.pid!, cmdId("CmdCreateAnnotPolyLine"));
 
     await clickToolbar();
     let state = await waitForPlacement(client, true, "initial toolbar click");

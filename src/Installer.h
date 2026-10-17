@@ -128,3 +128,4 @@ void ReRegisterFileAssociations();
 void LogNonDefaultRegisteredExtensions();
 void CollectNonDefaultRegisteredExtensions(StrVec& out);
 void LaunchDefaultAppDialogForExtension(HWND hwnd, Str ext);
+bool ApplyFileTypeIcons(int style, Str cacheRoot = {});

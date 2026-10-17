@@ -301,7 +301,7 @@ bool CustomZoomWnd::Create(MainWindow* mainWin) {
         vbox->AddChild(hbox);
     }
 
-    auto* padding = new Padding(vbox, DpiScaledInsets(4, 8));
+    auto* padding = PadWindowScroll(vbox, listBox, DpiScaledInsets(4, 8));
     layout = padding;
 
     UpdateTheme();

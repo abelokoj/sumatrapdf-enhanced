@@ -22,6 +22,8 @@ void SetHomePageListView(bool listView);
 void SetPromoString(Str s);
 void FreeHomePageTips();
 void HomePageInvalidateLayoutCache();
+void HomePageRefreshFiles(MainWindow*, Str selectedPath);
+void HomePageSetCompleted(MainWindow*, Str path, bool completed);
 
 void DrawHomePage(MainWindow* win, Gfx* gfx);
 void HomePageCreate(MainWindow* win);
@@ -48,4 +50,5 @@ void HomePageClearActiveEntry(MainWindow* win);
 
 TempStr HomeListRowsResultTemp(int* exitCodeOut);
 TempStr HomeSelectionResultTemp(int* exitCodeOut);
+TempStr HomeOptionsResultTemp(int* exitCodeOut);
 TempStr HomeInputResultTemp(Str action, int value, int* exitCodeOut);

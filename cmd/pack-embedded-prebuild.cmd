@@ -74,6 +74,8 @@ if not exist "%STAGING%\" mkdir "%STAGING%"
 copy /y "%WORK%\translations.txt" "%STAGING%\translations.txt" >nul || exit /b 1
 copy /y "%ROOT%\ext\marked.min.js" "%STAGING%\marked.min.js" >nul || exit /b 1
 copy /y "%ROOT%\ext\mermaid.min.js" "%STAGING%\mermaid.min.js" >nul || exit /b 1
+robocopy "%ROOT%\ext\katex" "%STAGING%\katex" /E /NFL /NDL /NJH /NJS /NP >nul
+if errorlevel 8 exit /b 1
 
 REM Only runtime dictionary files and public license notices enter the installer.
 if not exist "%STAGING%\dictionaries\wordnet-en\" mkdir "%STAGING%\dictionaries\wordnet-en"

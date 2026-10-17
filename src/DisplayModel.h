@@ -203,6 +203,7 @@ struct DisplayModel : DocController {
     bool PageVisible(int pageNo) const;
     bool PageVisibleNearby(int pageNo) const;
     int FirstVisiblePageNo() const;
+    int LastVisiblePageNo() const;
     bool FirstBookPageVisible() const;
     bool LastBookPageVisible() const;
 
@@ -276,6 +277,7 @@ struct DisplayModel : DocController {
     void ChangeStartPage(int startPage);
     Point GetContentStart(int pageNo) const;
     void RecalcVisibleParts() const;
+    void BuildPageBands();
     void RenderVisibleParts();
     void AddNavPoint(bool rememberZoom = false);
     RectF GetContentBox(int pageNo, float pad = 0) const;
@@ -298,6 +300,13 @@ struct DisplayModel : DocController {
     mutable int visibleFirstPage = 0;
     mutable int visibleLastPage = 0;
     mutable int visibleCurrentPage = 0;
+    struct PageBand {
+        int pageNo;
+        int top;
+        int maxBottom;
+    };
+    Vec<PageBand> pageBands;
+    bool pageBandsValid = false;
 
     // guards pagesInfo/pageCount against the render thread reading them while
     // SyncWithEngineLayout() swaps in a freshly rebuilt array. UI-thread code

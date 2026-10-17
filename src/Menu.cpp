@@ -154,6 +154,14 @@ static MenuDef menuDefFile[] = {
         CmdExportStudyNotes,
     },
     {
+        TrN("Export annotations for transfer..."),
+        CmdExportAnnotationsTransfer,
+    },
+    {
+        TrN("Import annotations from another version..."),
+        CmdImportAnnotationsTransfer,
+    },
+    {
         TrN("Convert to PDF..."),
         CmdConvertToPDF,
     },
@@ -1786,10 +1794,9 @@ HMENU BuildMenuFromDef(MenuDef* menuDef, HMENU menu, BuildMenuCtx* ctx) {
         }
         if (ctx) {
             removeMenu |= !ctx->isCursorOnPage && (subMenuDef == menuDefCreateAnnotUnderCursor);
-            // these annotations need text to mark up, so a rectangular
-            // selection doesn't count
+            // Block selections support highlights; other markup still requires text.
             removeMenu |=
-                (!ctx->hasTextSelection || !ctx->supportsAnnots) && (subMenuDef == menuDefCreateAnnotFromSelection);
+                (!ctx->hasSelection || !ctx->supportsAnnots) && (subMenuDef == menuDefCreateAnnotFromSelection);
             // in the context menu only show translate / search items for a text
             // selection (the menubar variant is live-updated via
             // SetMenuStateForSelection instead)
@@ -2233,6 +2240,11 @@ void OnAboutContextMenu(MainWindow* win, int x, int y) {
     ctx.filePath = path;
     HMENU popup = BuildMenuFromDef(menuDefContextStart, CreatePopupMenu(), &ctx);
     MenuSetChecked(popup, CmdPinSelectedDocument, fs->isPinned);
+    constexpr int kToggleCompleted = 1;
+    bool markCompleted = !fs->completed;
+    Str completedLabel = markCompleted ? Tr("Move to Completed Documents") : Tr("Return to Recent Documents");
+    InsertMenuW(popup, CmdPinSelectedDocument, MF_BYCOMMAND | MF_ENABLED | MF_STRING, kToggleCompleted,
+                CWStrTemp(completedLabel));
     // Del is home-page-only (not a global accelerator), so AppendAccelKey won't
     // pick it up — show it next to Remove From History explicitly
     MenuSetText(popup, CmdForgetSelectedDocument, str::JoinTemp(Tr("&Remove From History"), StrL("\tDel")));
@@ -2252,6 +2264,12 @@ void OnAboutContextMenu(MainWindow* win, int x, int y) {
     INT cmd = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, win->hwndFrame, nullptr);
     FreeMenuOwnerDrawInfoData(popup);
     DestroyMenu(popup);
+
+    if (kToggleCompleted == cmd) {
+        if (!IsMainWindowValidAndNotClosing(win)) return;
+        HomePageSetCompleted(win, path, markCompleted);
+        return;
+    }
 
     if (CmdOpenSelectedDocument == cmd) {
         LoadArgs args(path, win);
@@ -2818,7 +2836,7 @@ void MarkMenuOwnerDraw(HMENU hmenu, bool /*isMenuBar*/, MenuDrawScope scope) {
     // https://stackoverflow.com/questions/30353644/cmenu-border-color-on-mfc
     static HBRUSH hbrBrush = nullptr;
     static Color bgCol = (Color)-1;
-    Color col = ThemeMainWindowBackgroundColor();
+    Color col = ThemeWindowControlBackgroundColor();
     if (!hbrBrush) {
         bgCol = col;
         hbrBrush = ::CreateSolidBrush(col);
@@ -3014,7 +3032,7 @@ void MenuCustomDrawItem(HWND hwnd, DRAWITEMSTRUCT* dis) {
         delete gfx;
     };
 
-    Color bgCol = ThemeMainWindowBackgroundColor();
+    Color bgCol = ThemeWindowControlBackgroundColor();
     Color txtCol = ThemeWindowTextColor();
 
     bool isSelected = bit::IsMaskSet(dis->itemState, (uint)ODS_SELECTED);
@@ -3155,7 +3173,7 @@ void UpdateAppMenu(MainWindow* win, HMENU m) {
 void ToggleMenuBar(MainWindow* win, bool showTemporarily) {
     ReportIf(!win->menu);
 
-    if (win->presentation) {
+    if (win->presentation || win->annotationMode) {
         return;
     }
 
@@ -3542,7 +3560,7 @@ void CreateMenuBarRebar(MainWindow* win) {
 void ShowMenuBarRebar(MainWindow* win) {
     HWND hwnd = win ? win->hwndMenuReBar : nullptr;
     if (hwnd && ::IsWindow(hwnd)) {
-        ShowWindow(hwnd, SW_SHOW);
+        ShowWindow(hwnd, win->annotationMode ? SW_HIDE : SW_SHOW);
     }
 }
 
@@ -3582,7 +3600,7 @@ bool IsShowingMenuBarRebar(MainWindow* win) {
     if (gMyWindowWasEmbedded) {
         return false;
     }
-    if (win->presentation || win->isQuickLook) {
+    if (win->presentation || win->isQuickLook || win->annotationMode) {
         return false;
     }
     return true;

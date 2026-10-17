@@ -34,6 +34,9 @@ jobs:
         if: matrix.arch == 'x64'
         shell: pwsh
         run: ./tests/release-packaging.ps1
+      - name: Check release version generation
+        if: matrix.arch == 'x64'
+        run: bun tests/enhanced-version.ts
       - name: Generate Windows projects
         run: bun cmd/premake.ts
       - name: Build native installer

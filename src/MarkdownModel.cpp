@@ -121,6 +121,10 @@ static void DestroyOwnedTocTree(TocTree* tree);
 struct MarkdownCacheEntry {
     Str url;
     Str data;
+    ~MarkdownCacheEntry() {
+        str::Free(url);
+        str::Free(data);
+    }
 };
 
 struct MarkdownTocTraceItem {
@@ -873,15 +877,17 @@ Str MarkdownModel::GetDataForUrl(Str url) {
         }
         Str font = MarkdownFontResource(plainUrl);
         if (font) {
-            Str copy = str::Dup(poolAlloc, font);
-            str::Free(font);
-            VecAppend(fontDataCache, new MarkdownCacheEntry{str::Dup(poolAlloc, plainUrl), copy});
-            return copy;
+            VecAppend(fontDataCache, new MarkdownCacheEntry{str::Dup(plainUrl), font});
+            return font;
         }
         for (int i = 0; i < MarkdownFontCount(MarkdownFontKind::Text); i++) {
             if (str::Eq(plainUrl, fmt("https://sumatrapdf.markdown/_enhanced_fonts/style-%d.css", i))) {
-                return str::Dup(poolAlloc, MarkdownFontCss(MarkdownFontName(MarkdownFontKind::Text, i),
-                                                           gSettings ? gSettings->markdownUI.mathFontName : Str{}));
+                Str text =
+                    !i && gSettings ? gSettings->markdownUI.fontName : MarkdownFontName(MarkdownFontKind::Text, i);
+                if (auto* cached = FindDataForUrl(plainUrl)) return cached->data;
+                Str css = str::Dup(MarkdownFontCss(text, gSettings ? gSettings->markdownUI.mathFontName : Str{}));
+                VecAppend(urlDataCache, new MarkdownCacheEntry{str::Dup(plainUrl), css});
+                return css;
             }
         }
     }
@@ -891,38 +897,51 @@ Str MarkdownModel::GetDataForUrl(Str url) {
     }
 
     Str data;
-    // mermaid runtime from IDR_EMBEDDED_PAK for ```mermaid fences (see MarkdownToHtmlPage)
-    if (str::EndsWithI(plainUrl, StrL("/mermaid.min.js")) || str::EqI(plainUrl, StrL("mermaid.min.js"))) {
-        int n = 0;
-        u8* js = GetEmbeddedFileData(StrL("mermaid.min.js"), &n);
-        if (js && n > 0) {
-            data = str::Dup(poolAlloc, Str((const char*)js, n));
+    Str mathPrefix = StrL("https://sumatrapdf.markdown/katex/");
+    if (!isHtml && str::StartsWith(plainUrl, mathPrefix)) {
+        Str resource(plainUrl.s + kMdVirtualHostLen, len(plainUrl) - kMdVirtualHostLen);
+        if (str::Contains(resource, StrL("..")) || str::ContainsChar(resource, '\\')) return {};
+        int bytes = 0;
+        u8* content = GetEmbeddedFileData(str::ReplaceTemp(resource, StrL("/"), StrL("\\")), &bytes);
+        if (!content || bytes <= 0) {
+            free(content);
+            return {};
         }
-        free(js);
-    } else {
-        TempStr filePath = VirtualUrlToFileTemp(plainUrl);
-        // in html mode every resource (the page, images, linked pages) is served raw;
-        // in markdown mode .md/.markdown/.html are rendered to a styled page and other
-        // resources (images) are served raw
-        bool renderMd = !isHtml && filePath &&
-                        (str::EndsWithI(filePath, StrL(".md")) || str::EndsWithI(filePath, StrL(".markdown")) ||
-                         str::EndsWithI(filePath, StrL(".html")));
-        if (renderMd) {
-            Str md = file::ReadFile(filePath);
-            if (md) {
-                data = MarkdownToHtmlPage(md);
+        data = Str((const char*)content, bytes);
+    } else
+        // mermaid runtime from IDR_EMBEDDED_PAK for ```mermaid fences (see MarkdownToHtmlPage)
+        if (str::EndsWithI(plainUrl, StrL("/mermaid.min.js")) || str::EqI(plainUrl, StrL("mermaid.min.js"))) {
+            int n = 0;
+            u8* js = GetEmbeddedFileData(StrL("mermaid.min.js"), &n);
+            if (js && n > 0) {
+                data = Str((const char*)js, n);
+            } else {
+                free(js);
             }
-        } else if (filePath) {
-            data = file::ReadFile(filePath);
+        } else {
+            TempStr filePath = VirtualUrlToFileTemp(plainUrl);
+            // in html mode every resource (the page, images, linked pages) is served raw;
+            // in markdown mode .md/.markdown/.html are rendered to a styled page and other
+            // resources (images) are served raw
+            bool renderMd = !isHtml && filePath &&
+                            (str::EndsWithI(filePath, StrL(".md")) || str::EndsWithI(filePath, StrL(".markdown")) ||
+                             str::EndsWithI(filePath, StrL(".html")));
+            if (renderMd) {
+                Str md = file::ReadFile(filePath);
+                data = MarkdownToHtmlPage(md);
+                str::Free(md);
+            } else if (filePath) {
+                data = file::ReadFile(filePath);
+            }
         }
-    }
 
     if (len(data) == 0) {
+        str::Free(data);
         return {};
     }
 
-    Str urlDup = str::Dup(poolAlloc, plainUrl);
-    e = new MarkdownCacheEntry{urlDup, str::Dup(poolAlloc, data)};
+    Str urlDup = str::Dup(plainUrl);
+    e = new MarkdownCacheEntry{urlDup, data};
     VecAppend(urlDataCache, e);
     return e->data;
 }
@@ -994,6 +1013,46 @@ bool MarkdownModel::IsHtmlFileType(FileType kind) {
 }
 
 #if IS_DEBUG
+bool MarkdownModel_UnitTestResourceCache() {
+    struct Callback : DocControllerCallback {
+        void PageNoChanged(DocController*, int) override {}
+        void ZoomChanged(DocController*, float) override {}
+        void GotoLink(IPageDestination*) override {}
+        void Repaint() override {}
+        void UpdateScrollbars(DisplayModel*, Size) override {}
+        void RequestRendering(DisplayModel*, int) override {}
+        void RequestPredictiveRendering(DisplayModel*, int, const int*, int) override {}
+        void CleanUp(DisplayModel*) override {}
+        void RenderThumbnail(DisplayModel*, Size, const OnBitmapRendered*) override {}
+        void FocusFrame(bool) override {}
+        void SaveDownload(Str, Str) override {}
+        void FindResultReceived(int, int, int) override {}
+        void FindAllResultReceived(Str) override {}
+        void TocChanged(DocController*) override {}
+        void PagesRenumbered(DisplayModel*) override {}
+    } callback;
+    MarkdownModel model(&callback);
+    Str url = StrL("https://sumatrapdf.markdown/_enhanced_fonts/style-0.css");
+    Str first = model.GetDataForUrl(url);
+    if (len(first) == 0 || len(model.urlDataCache) != 1) return false;
+    for (int i = 0; i < 100; i++) {
+        Str repeated = model.GetDataForUrl(url);
+        if (repeated.s != first.s || len(model.urlDataCache) != 1) return false;
+    }
+    model.UpdateTheme();
+    if (len(model.urlDataCache) != 0) return false;
+    Str regenerated = model.GetDataForUrl(url);
+    if (len(regenerated) == 0 || len(model.urlDataCache) != 1) return false;
+    const char* resources[] = {"katex.min.js", "katex.min.css", "enhanced-math.js", "fonts/KaTeX_Main-Regular.woff2"};
+    for (const char* resource : resources) {
+        Str mathUrl = fmt("https://sumatrapdf.markdown/katex/%s", Str(resource));
+        Str data = model.GetDataForUrl(mathUrl);
+        if (len(data) == 0 || model.GetDataForUrl(mathUrl).s != data.s) return false;
+    }
+    model.UpdateTheme();
+    return len(model.urlDataCache) == 0;
+}
+
 bool MarkdownModel_UnitTestBrowserNavigationUrl() {
     Str url = StrL("https://sumatrapdf.markdown/issue-5842.html#target-heading");
     if (!str::Eq(MarkdownBrowserNavigationUrl(url), StrL("issue-5842.html#target-heading"))) {

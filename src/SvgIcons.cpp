@@ -6,6 +6,7 @@
    License: Simplified BSD (see COPYING.BSD) */
 
 #include "base/Base.h"
+#include "base/Win.h"
 #include "base/Pixmap.h"
 
 extern "C" {
@@ -17,6 +18,7 @@ extern "C" {
 #include "ImageReader.h"
 #include "EmbeddedResources.h"
 #include "Theme.h"
+#include "resource.h"
 #include "SvgIcons.h"
 
 // https://github.com/tabler/tabler-icons/blob/main/icons/outline/folder.svg
@@ -352,9 +354,8 @@ static const char* gIconPinRound =
 static const char* gIconPinSoft =
     R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(38 12 12)"><rect x="7" y="2" width="10" height="5" rx="2.5"/><path d="M9.5 7v4c0 1-3.5 1.5-3.5 4v1h12v-1c0-2.5-3.5-3-3.5-4V7M12 16v6"/></g></svg>)svg";
 
-const char* GetPinIconSvg() {
-    int style = gSettings ? gSettings->pinIconStyle : (int)PinIconStyle::Soft;
-    switch ((PinIconStyle)style) {
+const char* GetPinIconSvg(PinIconStyle style) {
+    switch (style) {
         case PinIconStyle::Solid:
             return gIconPinSolid;
         case PinIconStyle::Round:
@@ -362,6 +363,10 @@ const char* GetPinIconSvg() {
         default:
             return gIconPinSoft;
     }
+}
+
+const char* GetPinIconSvg() {
+    return GetPinIconSvg(gSettings ? (PinIconStyle)gSettings->pinIconStyle : PinIconStyle::Soft);
 }
 
 static const char* gIconColorClassic =
@@ -379,9 +384,8 @@ static const char* gIconColorWheel =
 static const char* gIconColorTiles =
     R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="19" height="19" rx="4"/><rect x="5" y="5" width="6" height="6" rx="1.4" fill="#f4515d" stroke="none"/><rect x="13" y="5" width="6" height="6" rx="1.4" fill="#ffc63a" stroke="none"/><rect x="5" y="13" width="6" height="6" rx="1.4" fill="#38c98b" stroke="none"/><rect x="13" y="13" width="6" height="6" rx="1.4" fill="#5a9fff" stroke="none"/></svg>)svg";
 
-const char* GetColorPickerIconSvg() {
-    int style = gSettings ? gSettings->colorPickerIconStyle : (int)ColorPickerIconStyle::Tiles;
-    switch ((ColorPickerIconStyle)style) {
+const char* GetColorPickerIconSvg(ColorPickerIconStyle style) {
+    switch (style) {
         case ColorPickerIconStyle::Classic:
             return gIconColorClassic;
         case ColorPickerIconStyle::Soft:
@@ -395,7 +399,50 @@ const char* GetColorPickerIconSvg() {
     }
 }
 
+const char* GetColorPickerIconSvg() {
+    return GetColorPickerIconSvg(gSettings ? (ColorPickerIconStyle)gSettings->colorPickerIconStyle
+                                           : ColorPickerIconStyle::Tiles);
+}
+
+TempStr GetActiveTabPreviewSvgTemp(int style, Color accent, Color background, Color foreground) {
+    Color fill = accent;
+    if (style == 3) {
+        int percent = IsLightColor(background) ? 19 : 35;
+        auto mix = [percent](int base, int tint) { return (u8)((base * (100 - percent) + tint * percent + 50) / 100); };
+        fill = MkRgb(mix(GetRed(background), GetRed(accent)), mix(GetGreen(background), GetGreen(accent)),
+                     mix(GetBlue(background), GetBlue(accent)));
+    }
+    Color ink = style == 3 ? foreground : (IsLightColor(fill) ? kColBlack : kColWhite);
+    auto rgb = [](Color color) { return fmt("#%02x%02x%02x", GetRed(color), GetGreen(color), GetBlue(color)); };
+    int inset = style == 4 ? 3 : 0;
+    return fmt(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 24"><rect x="%d" y="%d" width="%d" height="%d" rx="4" fill="%s" stroke="%s" stroke-width="1.5"/><path d="M8 10h9M8 14h6" stroke="%s" stroke-width="1.5" stroke-linecap="round"/><path d="m23 10 4 4m0-4-4 4" stroke="%s" stroke-width="1.2" stroke-linecap="round"/></svg>)svg",
+        1 + inset, 3 + inset, 30 - 2 * inset, 18 - 2 * inset, rgb(fill), rgb(style == 3 ? accent : fill), rgb(ink),
+        rgb(ink));
+}
+
 // PDF annotation tools, drawn in the same 24px stroke style as the toolbar's
+static const char* kPenCursorRollerball =
+    R"cursor(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g transform="translate(3 21) rotate(45)" stroke-linecap="round" stroke-linejoin="round"><path d="M0 0 L-1.7-4.5 V-19 A1.7 1.7 0 0 1 1.7-19 V-4.5 Z" fill="BG" stroke="BG" stroke-width="2.3"/><path d="M0 0 L-1.7-4.5 V-19 A1.7 1.7 0 0 1 1.7-19 V-4.5 Z" fill="ACCENT"/><path d="M0 0 L-.85-2.3 H.85 Z" fill="FG"/><path d="M-1.7-5.5 H1.7 M-1.7-16 H1.7" stroke="FG" stroke-width=".75"/><path d="M-.65-7 V-18.5" stroke="BG" stroke-width=".65"/><path d="M1.7-17.5 H2.8 V-12" fill="none" stroke="FG" stroke-width=".75"/></g></svg>)cursor";
+
+static const char* kPenCursorDrafting =
+    R"cursor(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g transform="translate(3 21) rotate(45)" stroke-linecap="round" stroke-linejoin="round"><path d="M0 0 L-1.5-5 V-18.5 L-.7-20.5 H.7 L1.5-18.5 V-5 Z" fill="BG" stroke="BG" stroke-width="2.3"/><path d="M0 0 L-1.5-5 V-18.5 L-.7-20.5 H.7 L1.5-18.5 V-5 Z" fill="FG"/><path d="M-1.5-5 V-11 H1.5 V-5 Z" fill="ACCENT"/><path d="M0 0 V-2.8" stroke="FG" stroke-width=".9"/><path d="M-1.5-6.5 H1.5 M-1.5-8.2 H1.5 M-1.5-9.8 H1.5" stroke="BG" stroke-width=".6"/><path d="M-.55-13 V-17.5" stroke="BG" stroke-width=".7"/></g></svg>)cursor";
+
+static const char* kPenCursorLacquer =
+    R"cursor(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g transform="translate(3 21) rotate(45)" stroke-linecap="round" stroke-linejoin="round"><path d="M0 0 L-1.25-4.8 L-1.65-8 V-19 A1.65 1.65 0 0 1 1.65-19 V-8 L1.25-4.8 Z" fill="BG" stroke="BG" stroke-width="2.3"/><path d="M-1.65-8 V-19 A1.65 1.65 0 0 1 1.65-19 V-8 Z" fill="FG"/><path d="M0 0 L-1.25-4.8 L-1.65-8 H1.65 L1.25-4.8 Z" fill="ACCENT"/><path d="M0 0 L-.45-1.6 H.45 Z" fill="FG"/><path d="M-1.65-9.3 H1.65 M-1.65-17.7 H1.65" stroke="ACCENT" stroke-width="1.1"/><path d="M-.6-5.5 L-.8-7" stroke="BG" stroke-width=".6"/></g></svg>)cursor";
+
+TempStr GetPenCursorSvgTemp(PenCursorStyle style, Color accent, Color foreground) {
+    const char* source = kPenCursorRollerball;
+    if (style == PenCursorStyle::Drafting) source = kPenCursorDrafting;
+    if (style == PenCursorStyle::Lacquer) source = kPenCursorLacquer;
+    bool lightInk = GetRed(foreground) + GetGreen(foreground) + GetBlue(foreground) > 384;
+    Color halo = lightInk ? MkRgb(32, 38, 46) : kColWhite;
+    auto rgb = [](Color color) { return fmt("#%02x%02x%02x", GetRed(color), GetGreen(color), GetBlue(color)); };
+    TempStr svg = str::ReplaceTemp(Str(source), StrL("ACCENT"), rgb(accent));
+    svg = str::ReplaceTemp(svg, StrL("FG"), rgb(foreground));
+    return str::ReplaceTemp(svg, StrL("BG"), rgb(halo));
+}
+
 // Tabler icons.
 const char* gIconEditAnnotations =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
@@ -672,6 +719,18 @@ struct SvgPixmapCacheEntry {
 };
 
 static SvgPixmapCacheEntry* gSvgPixmapCache = nullptr;
+static Pixmap* gFileIconPreviews[3]{};
+
+Pixmap* GetFileTypeIconPreview(int style) {
+    if (style < 1 || style > 3) return nullptr;
+    auto*& preview = gFileIconPreviews[style - 1];
+    if (preview) return preview;
+    const int resources[] = {FILE_ICON_PREVIEW_1, FILE_ICON_PREVIEW_2, FILE_ICON_PREVIEW_3};
+    LoadedDataResource data;
+    if (LockDataResource(resources[style - 1], &data))
+        preview = PixmapFromData(Str((const char*)data.data, data.dataSize));
+    return preview;
+}
 
 // Render `svg` at dx×dy in fg/bg (theme text/control colors if unset).
 // The Pixmap belongs to the cache and stays valid until the app exits.
@@ -713,6 +772,10 @@ Pixmap* GetCachedPixmapForSvg(Str svg, int dx, int dy, Color fg, Color bg) {
 // size and colors are part of the key, so new entries are rendered and the stale
 // ones are simply never looked up again.
 void DestroySvgPixmapIconsCache() {
+    for (auto*& preview : gFileIconPreviews) {
+        FreePixmap(preview);
+        preview = nullptr;
+    }
     ListDelete(gSvgPixmapCache);
     gSvgPixmapCache = nullptr;
 }
@@ -744,6 +807,8 @@ const char* gIconStudyExport =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8M13 3v5h5l-5-5M6 12h5M6 16h3M18 12v9m-3-3 3 3 3-3"/></svg>)";
 const char* gIconPresentation =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M12 16v5m-4 0h8M7 11l3-3 3 3 4-5"/></svg>)";
+const char* gIconAnnotationMode =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V3h5m8 0h5v5m0 8v5h-5M8 21H3v-5"/><path d="m8 16 1-4 6-6 3 3-6 6-4 1Zm6-9 3 3m-8 2 3 3"/></svg>)";
 const char* gIconLaserPointer =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m4 18 2 2 10-10-2-2-10 10Zm-1 3 3-1M16 6l2 2M18 3v2m3 1h-2"/><circle cx="20" cy="3" r="1" fill="currentColor" stroke="none"/></svg>)";
 const char* gIconLaserSolid =

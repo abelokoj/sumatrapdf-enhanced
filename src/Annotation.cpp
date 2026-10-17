@@ -204,6 +204,79 @@ AnnotationType Type(Annotation* annot) {
 
 static const char* kInteriorOpacityKey = "SumatraFillOpacity";
 static const char* kInteriorGraphicsState = "SumatraFillAlpha";
+static const char* kCornerRadiusKey = "SumatraCornerRadius";
+static const char* kMathShapeKey = "SumatraMathShape";
+
+static float ReadCornerRadius(fz_context* ctx, pdf_annot* annot) {
+    float radius = pdf_to_real(ctx, pdf_dict_gets(ctx, pdf_annot_obj(ctx, annot), kCornerRadiusKey));
+    return isfinite(radius) ? limitValue(radius, 0.f, 1000.f) : 0;
+}
+
+static void AppendAppearanceBytes(fz_context* ctx, fz_buffer* output, unsigned char* bytes, size_t size) {
+    fz_buffer* part = fz_new_buffer_from_shared_data(ctx, bytes, size);
+    fz_try(ctx) {
+        fz_append_buffer(ctx, output, part);
+    }
+    fz_always(ctx) {
+        fz_drop_buffer(ctx, part);
+    }
+    fz_catch(ctx) {
+        fz_rethrow(ctx);
+    }
+}
+
+static void ApplyCornerRadius(fz_context* ctx, pdf_annot* annot) {
+    if (pdf_annot_type(ctx, annot) != PDF_ANNOT_SQUARE) return;
+    float radius = ReadCornerRadius(ctx, annot);
+    if (radius <= 0) return;
+    pdf_obj* appearance = pdf_dict_getp(ctx, pdf_annot_obj(ctx, annot), "AP/N");
+    if (!pdf_is_stream(ctx, appearance)) return;
+    fz_buffer* original = nullptr;
+    fz_buffer* rounded = nullptr;
+    fz_var(original);
+    fz_var(rounded);
+    fz_try(ctx) {
+        original = pdf_load_stream(ctx, appearance);
+        unsigned char* bytes;
+        size_t size = fz_buffer_storage(ctx, original, &bytes);
+        for (size_t begin = 0; begin < size;) {
+            size_t end = begin;
+            while (end < size && bytes[end] != '\n') end++;
+            Str line((const char*)bytes + begin, (int)(end - begin));
+            float x, y, w, h;
+            int consumed = 0;
+            if (sscanf(CStrTemp(line), "%f %f %f %f re %n", &x, &y, &w, &h, &consumed) == 4 && consumed == len(line) &&
+                w > 0 && h > 0) {
+                float r = std::min(radius, std::min(w, h) / 2.f);
+                float c = r * .55228475f;
+                rounded = fz_new_buffer(ctx, size + 512);
+                AppendAppearanceBytes(ctx, rounded, bytes, begin);
+                fz_append_printf(ctx, rounded, "%g %g m\n%g %g l\n", x + r, y, x + w - r, y);
+                fz_append_printf(ctx, rounded, "%g %g %g %g %g %g c\n", x + w - r + c, y, x + w, y + r - c, x + w,
+                                 y + r);
+                fz_append_printf(ctx, rounded, "%g %g l\n%g %g %g %g %g %g c\n", x + w, y + h - r, x + w, y + h - r + c,
+                                 x + w - r + c, y + h, x + w - r, y + h);
+                fz_append_printf(ctx, rounded, "%g %g l\n%g %g %g %g %g %g c\n", x + r, y + h, x + r - c, y + h, x,
+                                 y + h - r + c, x, y + h - r);
+                fz_append_printf(ctx, rounded, "%g %g l\n%g %g %g %g %g %g c\nh\n", x, y + r, x, y + r - c, x + r - c,
+                                 y, x + r, y);
+                AppendAppearanceBytes(ctx, rounded, bytes + end, size - end);
+                pdf_update_stream(ctx, pdf_get_bound_document(ctx, appearance), appearance, rounded, 0);
+                pdf_clean_obj(ctx, pdf_annot_obj(ctx, annot));
+                pdf_set_annot_resynthesised(ctx, annot);
+                break;
+            }
+            begin = end + 1;
+        }
+    }
+    fz_always(ctx) {
+        fz_drop_buffer(ctx, original);
+        fz_drop_buffer(ctx, rounded);
+    }
+    fz_catch(ctx) {
+        fz_rethrow(ctx);
+    }
+}
 
 static void ApplyInteriorOpacity(fz_context* ctx, pdf_annot* annot) {
     pdf_obj* obj = pdf_annot_obj(ctx, annot);
@@ -261,8 +334,10 @@ static void ApplyInteriorOpacity(fz_context* ctx, pdf_annot* annot) {
 
 static void* ApplyPageFillOpacity(fz_context* ctx, fz_page* page, void*) {
     auto* pdfPage = pdf_page_from_fz_page(ctx, page);
-    for (pdf_annot* item = pdf_first_annot(ctx, pdfPage); item; item = pdf_next_annot(ctx, item))
+    for (pdf_annot* item = pdf_first_annot(ctx, pdfPage); item; item = pdf_next_annot(ctx, item)) {
+        ApplyCornerRadius(ctx, item);
         ApplyInteriorOpacity(ctx, item);
+    }
     return nullptr;
 }
 
@@ -282,6 +357,40 @@ static void UpdateAnnot(fz_context* ctx, pdf_annot* annot) {
         pdf_abandon_operation(ctx, document);
         fz_rethrow(ctx);
     }
+}
+
+float AnnotationCornerRadius(Annotation* annot) {
+    if (!AnnotationIsLive(annot) || annot->type != AnnotationType::Square) return 0;
+    auto* ctx = annot->engine->Ctx();
+    AutoUnlockRecursiveMutex lock(&annot->engine->docLock);
+    float radius = 0;
+    fz_try(ctx) {
+        radius = ReadCornerRadius(ctx, annot->pdfannot);
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+    }
+    return radius;
+}
+
+void SetAnnotationCornerRadius(Annotation* annot, float radius) {
+    if (!AnnotationIsLive(annot) || annot->type != AnnotationType::Square || !isfinite(radius)) return;
+    auto* e = annot->engine;
+    AutoEndEngineOperation operation(e, "Change rectangle corners");
+    auto* ctx = e->Ctx();
+    {
+        AutoUnlockRecursiveMutex lock(&e->docLock);
+        fz_try(ctx) {
+            pdf_dict_puts_drop(ctx, pdf_annot_obj(ctx, annot->pdfannot), kCornerRadiusKey,
+                               pdf_new_real(ctx, limitValue(radius, 0.f, 1000.f)));
+            pdf_annot_request_resynthesis(ctx, annot->pdfannot);
+            UpdateAnnot(ctx, annot->pdfannot);
+        }
+        fz_catch(ctx) {
+            fz_report_error(ctx);
+        }
+    }
+    MarkNotificationAsModified(e, annot);
 }
 
 bool AnnotationSupportsFillOpacity(AnnotationType type) {
@@ -2523,6 +2632,154 @@ int BorderWidth(Annotation* annot) {
     return (int)roundf(BorderWidthF(annot));
 }
 
+bool AnnotationSupportsDash(AnnotationType type) {
+    return type == AnnotationType::Line || type == AnnotationType::PolyLine || type == AnnotationType::Polygon ||
+           type == AnnotationType::Square || type == AnnotationType::Circle || type == AnnotationType::Ink;
+}
+
+static void ReadAnnotDash(Annotation* annot, int& style, Vec<float>& dash) {
+    if (!AnnotationIsLive(annot) || !AnnotationSupportsDash(annot->type)) return;
+    auto* engine = annot->engine;
+    auto* ctx = engine->Ctx();
+    AutoUnlockRecursiveMutex lock(&engine->docLock);
+    fz_try(ctx) {
+        style = pdf_annot_border_style(ctx, annot->pdfannot);
+        int count = pdf_annot_border_dash_count(ctx, annot->pdfannot);
+        for (int i = 0; i < count; i++) VecAppend(dash, pdf_annot_border_dash_item(ctx, annot->pdfannot, i));
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+    }
+}
+
+static void WriteAnnotDash(fz_context* ctx, pdf_annot* annot, int style, const Vec<float>& dash) {
+    pdf_clear_annot_border_dash(ctx, annot);
+    pdf_set_annot_border_style(ctx, annot, (pdf_border_style)style);
+    for (float length : dash) pdf_add_annot_border_dash_item(ctx, annot, length);
+}
+
+static void WriteLinePattern(fz_context* ctx, pdf_annot* annot, AnnotationLinePattern pattern) {
+    pdf_clear_annot_border_dash(ctx, annot);
+    bool solid = pattern == AnnotationLinePattern::Solid;
+    pdf_set_annot_border_style(ctx, annot, solid ? PDF_BORDER_STYLE_SOLID : PDF_BORDER_STYLE_DASHED);
+    if (solid) return;
+    float width = std::max(0.1f, pdf_annot_border_width(ctx, annot));
+    pdf_add_annot_border_dash_item(ctx, annot, pattern == AnnotationLinePattern::Dotted ? 0.f : 4 * width);
+    pdf_add_annot_border_dash_item(ctx, annot, pattern == AnnotationLinePattern::Dotted ? 2.5f * width : 2 * width);
+}
+
+AnnotationLinePattern BorderLinePattern(Annotation* annot) {
+    int style = PDF_BORDER_STYLE_SOLID;
+    Vec<float> dash;
+    ReadAnnotDash(annot, style, dash);
+    if (!len(dash)) return AnnotationLinePattern::Solid;
+    return dash[0] == 0 ? AnnotationLinePattern::Dotted : AnnotationLinePattern::Dashed;
+}
+
+bool SetBorderLinePattern(Annotation* annot, AnnotationLinePattern pattern) {
+    if (!AnnotationIsLive(annot) || !AnnotationSupportsDash(annot->type) ||
+        pattern == AnnotationLinePattern::Unspecified)
+        return false;
+    auto* engine = annot->engine;
+    AutoEndEngineOperation operation(engine, "Change line pattern");
+    auto* ctx = engine->Ctx();
+    bool changed = false;
+    {
+        AutoUnlockRecursiveMutex lock(&engine->docLock);
+        fz_try(ctx) {
+            WriteLinePattern(ctx, annot->pdfannot, pattern);
+            UpdateAnnot(ctx, annot->pdfannot);
+            changed = true;
+        }
+        fz_catch(ctx) {
+            fz_report_error(ctx);
+        }
+    }
+    if (changed) MarkNotificationAsModified(engine, annot);
+    return changed;
+}
+
+// Corner cutting keeps endpoints and caps point growth for long pen strokes.
+static Vec<PointF> SmoothPoints(const Vec<PointF>& points, bool closed) {
+    Vec<PointF> result = points;
+    if (len(points) < 3) return result;
+    constexpr int maxPoints = 16384;
+    int passes = len(points) <= maxPoints / 4 ? 2 : 1;
+    for (int pass = 0; pass < passes; pass++) {
+        Vec<PointF> next;
+        int n = len(result);
+        if (n > maxPoints / 2) {
+            for (int i = 0; i < n; i++) {
+                if (!closed && (i == 0 || i == n - 1)) {
+                    VecAppend(next, result[i]);
+                    continue;
+                }
+                PointF a = result[(i + n - 1) % n], b = result[i], c = result[(i + 1) % n];
+                VecAppend(next, {(a.x + 2 * b.x + c.x) / 4, (a.y + 2 * b.y + c.y) / 4});
+            }
+        } else {
+            if (!closed) VecAppend(next, result[0]);
+            int segments = closed ? n : n - 1;
+            for (int i = 0; i < segments; i++) {
+                PointF a = result[i], b = result[(i + 1) % n];
+                VecAppend(next, {0.75f * a.x + 0.25f * b.x, 0.75f * a.y + 0.25f * b.y});
+                VecAppend(next, {0.25f * a.x + 0.75f * b.x, 0.25f * a.y + 0.75f * b.y});
+            }
+            if (!closed) VecAppend(next, result[n - 1]);
+        }
+        result = std::move(next);
+    }
+    return result;
+}
+
+bool SmoothAnnotation(Annotation* annot) {
+    if (!AnnotationIsLive(annot)) return false;
+    bool ink = annot->type == AnnotationType::Ink;
+    bool polygon = annot->type == AnnotationType::Polygon;
+    if (!ink && !polygon && annot->type != AnnotationType::PolyLine) return false;
+    auto* engine = annot->engine;
+    AutoEndEngineOperation operation(engine, "Smooth annotation");
+    if (!ink) {
+        Vec<PointF> points = GetVertices(annot);
+        if (len(points) < 3) return false;
+        SetVertices(annot, SmoothPoints(points, polygon));
+        return true;
+    }
+    Vec<int> counts, smoothedCounts;
+    Vec<PointF> points;
+    GetInkList(annot, counts, points);
+    Vec<fz_point> smoothed;
+    int offset = 0;
+    bool changed = false;
+    for (int count : counts) {
+        Vec<PointF> stroke;
+        for (int i = 0; i < count; i++) VecAppend(stroke, points[offset++]);
+        Vec<PointF> smooth = SmoothPoints(stroke, false);
+        changed |= count >= 3;
+        VecAppend(smoothedCounts, len(smooth));
+        for (PointF point : smooth) VecAppend(smoothed, {point.x, point.y});
+    }
+    if (!changed) return false;
+    auto* ctx = engine->Ctx();
+    bool ok = true;
+    {
+        AutoUnlockRecursiveMutex lock(&engine->docLock);
+        fz_try(ctx) {
+            pdf_set_annot_ink_list(ctx, annot->pdfannot, len(smoothedCounts), smoothedCounts.els, smoothed.els);
+            UpdateAnnot(ctx, annot->pdfannot);
+        }
+        fz_catch(ctx) {
+            fz_report_error(ctx);
+            ok = false;
+        }
+    }
+    if (ok) {
+        annot->bounds = GetBounds(annot);
+        MarkNotificationAsModified(engine, annot);
+    }
+    return ok;
+}
+
 void SetBorderWidth(Annotation* annot, float newWidth) {
     ReportIf(!annot);
     if (!AnnotationIsLive(annot)) {
@@ -2749,6 +3006,91 @@ bool AnnotationSupportsOpacity(AnnotationType tp) {
     return IsAnnotationInList(tp, supportsOpacity, dimofi(supportsOpacity));
 }
 
+int MathShapeForCommand(int cmd) {
+    const int commands[] = {
+        CmdCreateAnnotParabola,   CmdCreateAnnotNegativeParabola,   CmdCreateAnnotCubic,  CmdCreateAnnotNegativeCubic,
+        CmdCreateAnnotReciprocal, CmdCreateAnnotNegativeReciprocal, CmdCreateAnnotAxes2D, CmdCreateAnnotAxes3D};
+    for (int i = 0; i < dimofi(commands); i++)
+        if (commands[i] == cmd) return i;
+    return -1;
+}
+
+bool BuildArrowHead(PointF start, PointF tip, float width, PointF& left, PointF& right) {
+    float dx = tip.x - start.x, dy = tip.y - start.y;
+    float distance = hypotf(dx, dy);
+    if (!isfinite(distance) || distance <= .001f || !isfinite(width)) return false;
+    dx /= distance;
+    dy /= distance;
+    // Match MuPDF's standard PDF ClosedArrow appearance.
+    float unit = std::max(1.f, width);
+    float length = 8.8f * unit, halfWidth = 4.5f * unit;
+    left = {tip.x - dx * length - dy * halfWidth, tip.y - dy * length + dx * halfWidth};
+    right = {tip.x - dx * length + dy * halfWidth, tip.y - dy * length - dx * halfWidth};
+    return true;
+}
+
+bool BuildMathShape(int shape, RectF rect, Vec<int>& counts, Vec<PointF>& points) {
+    VecReset(counts);
+    VecReset(points);
+    if (shape < 0 || shape > 7 || !isfinite(rect.x) || !isfinite(rect.y) || !isfinite(rect.dx) || !isfinite(rect.dy) ||
+        rect.dx <= 0 || rect.dy <= 0)
+        return false;
+    auto map = [&](float x, float y) -> PointF { return {rect.x + x * rect.dx, rect.y + y * rect.dy}; };
+    if (shape < 6) {
+        constexpr int samples = 97;
+        int branches = shape >= 4 ? 2 : 1;
+        for (int branch = 0; branch < branches; branch++) {
+            VecAppend(counts, samples);
+            for (int i = 0; i < samples; i++) {
+                float t = (float)i / (samples - 1);
+                float x = branches == 1 ? 2 * t - 1 : branch == 0 ? -1 + .85f * t : .15f + .85f * t;
+                float y = shape < 2 ? x * x : shape < 4 ? x * x * x : .15f / x;
+                if (shape & 1) y = -y;
+                float v = shape < 2 ? (shape & 1 ? -y : 1 - y) : (1 - y) / 2;
+                VecAppend(points, map((x + 1) / 2, v));
+            }
+        }
+        return true;
+    }
+    auto axis = [&](PointF start, PointF tip) {
+        VecAppend(counts, 2);
+        VecAppend(points, start);
+        VecAppend(points, tip);
+        float dx = tip.x - start.x, dy = tip.y - start.y;
+        float distance = hypotf(dx, dy);
+        float head = std::min(distance * .15f, std::min(rect.dx, rect.dy) * .08f);
+        dx /= distance;
+        dy /= distance;
+        VecAppend(counts, 3);
+        VecAppend(points, {tip.x - dx * head - dy * head * .5f, tip.y - dy * head + dx * head * .5f});
+        VecAppend(points, tip);
+        VecAppend(points, {tip.x - dx * head + dy * head * .5f, tip.y - dy * head - dx * head * .5f});
+    };
+    if (shape == 6) {
+        axis(map(.05f, .5f), map(.95f, .5f));
+        axis(map(.5f, .95f), map(.5f, .05f));
+    } else {
+        PointF origin = map(.42f, .56f);
+        axis(origin, map(.95f, .56f));
+        axis(origin, map(.42f, .05f));
+        axis(origin, map(.08f, .94f));
+    }
+    return true;
+}
+
+void ConfigureShapeCreateArgs(int cmd, AnnotCreateArgs& args) {
+    if (!gSettings) return;
+    if (cmd == CmdCreateAnnotSquare) {
+        float radius = gSettings->annotations.shapeCornerRadius;
+        args.cornerRadius = isfinite(radius) ? limitValue(radius, 0.f, 1000.f) : 0;
+    }
+    args.mathShape = MathShapeForCommand(cmd);
+    if (args.mathShape < 0) return;
+    args.col = *GetParsedColor(gSettings->annotations.lineColor);
+    float width = gSettings->annotations.lineBorderWidth;
+    args.borderWidth = isfinite(width) ? limitValue(width, 0.f, 64.f) : 1;
+}
+
 Annotation* EngineMupdfCreateAnnotation(EngineBase* engine, int pageNo, PointF pos, AnnotCreateArgs* args) {
     static const float black[3] = {0, 0, 0};
 
@@ -2775,12 +3117,20 @@ Annotation* EngineMupdfCreateAnnotation(EngineBase* engine, int pageNo, PointF p
             VecAppend(polyLinePoints, {point.x, point.y});
         }
     }
+    Vec<int> mathCounts;
+    Vec<PointF> mathPoints;
+    if (args->mathShape >= 0) {
+        RectF rect = args->hasRect ? args->rect : RectF{pos.x, pos.y, 120, 90};
+        if (!BuildMathShape(args->mathShape, rect, mathCounts, mathPoints)) return nullptr;
+    }
     Vec<int> inkStrokeCounts;
     Vec<fz_point> inkPoints;
-    bool hasInkList = args->inkStrokeCounts && args->inkPoints && len(*args->inkStrokeCounts) > 0;
+    const Vec<int>* createCounts = args->mathShape >= 0 ? &mathCounts : args->inkStrokeCounts;
+    const Vec<PointF>* createPoints = args->mathShape >= 0 ? &mathPoints : args->inkPoints;
+    bool hasInkList = createCounts && createPoints && len(*createCounts) > 0;
     int nInkPoints = 0;
     if (hasInkList) {
-        for (int count : *args->inkStrokeCounts) {
+        for (int count : *createCounts) {
             if (count <= 0) {
                 hasInkList = false;
                 break;
@@ -2788,9 +3138,9 @@ Annotation* EngineMupdfCreateAnnotation(EngineBase* engine, int pageNo, PointF p
             VecAppend(inkStrokeCounts, count);
             nInkPoints += count;
         }
-        hasInkList = hasInkList && nInkPoints == len(*args->inkPoints);
+        hasInkList = hasInkList && nInkPoints == len(*createPoints);
         if (hasInkList) {
-            for (PointF point : *args->inkPoints) {
+            for (PointF point : *createPoints) {
                 VecAppend(inkPoints, {point.x, point.y});
             }
         }
@@ -3054,6 +3404,15 @@ Annotation* EngineMupdfCreateAnnotation(EngineBase* engine, int pageNo, PointF p
                 int nInteriorCol = (interiorCol.pdfCol == 0) ? 0 : 3;
                 pdf_set_annot_interior_color(ctx, annot, nInteriorCol, interiorColor);
             }
+            if (typ == AnnotationType::Square && args->cornerRadius > 0 && isfinite(args->cornerRadius))
+                pdf_dict_puts_drop(ctx, pdf_annot_obj(ctx, annot), kCornerRadiusKey,
+                                   pdf_new_real(ctx, limitValue(args->cornerRadius, 0.f, 1000.f)));
+            if (typ == AnnotationType::Ink && args->mathShape >= 0)
+                pdf_dict_puts_drop(ctx, pdf_annot_obj(ctx, annot), kMathShapeKey, pdf_new_int(ctx, args->mathShape));
+            if (args->lineEndStyle >= 0 && typ == AnnotationType::Line)
+                pdf_set_annot_line_ending_styles(ctx, annot, PDF_ANNOT_LE_NONE, (pdf_line_ending)args->lineEndStyle);
+            if (args->linePattern != AnnotationLinePattern::Unspecified && AnnotationSupportsDash(typ))
+                WriteLinePattern(ctx, annot, args->linePattern);
             UpdateAnnot(ctx, annot);
         }
         fz_catch(ctx) {
@@ -3118,6 +3477,8 @@ struct AnnotationClipboard {
     bool hasTextColor = false;
     int opacity = 255;
     float borderWidth = -1;
+    int borderStyle = -1;
+    Vec<float> borderDash;
     int quadding = -1;
     int textSize = -1;
     int lineStartStyle = 0;
@@ -3129,42 +3490,61 @@ struct AnnotationClipboard {
     Vec<RectF> quads;
     Vec<int> inkStrokeCounts;
     Vec<PointF> inkPoints;
+    int inkPenStyle = -1;
+    float cornerRadius = 0;
+    int mathShape = -1;
     Pixmap* stampImage = nullptr;
 };
 
 static AnnotationClipboard gAnnotClipboard;
+static Vec<AnnotationClipboard*> gAnnotGroupClipboard;
+
+static void ClearAnnotSnapshot(AnnotationClipboard& clip) {
+    str::FreePtr(&clip.contents);
+    str::FreePtr(&clip.iconName);
+    str::FreePtr(&clip.fontFamily);
+    clip.fontStyle = 0;
+    FreePixmap(clip.stampImage);
+    clip.stampImage = nullptr;
+    clip.valid = false;
+    clip.type = AnnotationType::Unknown;
+    clip.rect = {};
+    clip.color = 0;
+    clip.hasColor = false;
+    clip.interiorColor = 0;
+    clip.hasInteriorColor = false;
+    clip.interiorOpacity = -1;
+    clip.textColor = 0;
+    clip.hasTextColor = false;
+    clip.opacity = 255;
+    clip.borderWidth = -1;
+    clip.borderStyle = -1;
+    VecReset(clip.borderDash);
+    clip.quadding = -1;
+    clip.textSize = -1;
+    clip.lineStartStyle = 0;
+    clip.lineEndStyle = 0;
+    clip.hasLine = false;
+    clip.lineStart = {};
+    clip.lineEnd = {};
+    VecReset(clip.vertices);
+    VecReset(clip.quads);
+    VecReset(clip.inkStrokeCounts);
+    VecReset(clip.inkPoints);
+    clip.inkPenStyle = -1;
+    clip.cornerRadius = 0;
+    clip.mathShape = -1;
+}
 
 static void ClearAnnotationClipboard() {
     gPendingCutAnnotation = nullptr;
-    str::FreePtr(&gAnnotClipboard.contents);
-    str::FreePtr(&gAnnotClipboard.iconName);
-    str::FreePtr(&gAnnotClipboard.fontFamily);
-    gAnnotClipboard.fontStyle = 0;
-    FreePixmap(gAnnotClipboard.stampImage);
-    gAnnotClipboard.stampImage = nullptr;
-    gAnnotClipboard.valid = false;
-    gAnnotClipboard.type = AnnotationType::Unknown;
-    gAnnotClipboard.rect = {};
-    gAnnotClipboard.color = 0;
-    gAnnotClipboard.hasColor = false;
-    gAnnotClipboard.interiorColor = 0;
-    gAnnotClipboard.hasInteriorColor = false;
-    gAnnotClipboard.interiorOpacity = -1;
-    gAnnotClipboard.textColor = 0;
-    gAnnotClipboard.hasTextColor = false;
-    gAnnotClipboard.opacity = 255;
-    gAnnotClipboard.borderWidth = -1;
-    gAnnotClipboard.quadding = -1;
-    gAnnotClipboard.textSize = -1;
-    gAnnotClipboard.lineStartStyle = 0;
-    gAnnotClipboard.lineEndStyle = 0;
-    gAnnotClipboard.hasLine = false;
-    gAnnotClipboard.lineStart = {};
-    gAnnotClipboard.lineEnd = {};
-    VecReset(gAnnotClipboard.vertices);
-    VecReset(gAnnotClipboard.quads);
-    VecReset(gAnnotClipboard.inkStrokeCounts);
-    VecReset(gAnnotClipboard.inkPoints);
+    VecReset(gPendingCutAnnotations);
+    ClearAnnotSnapshot(gAnnotClipboard);
+    for (auto* clip : gAnnotGroupClipboard) {
+        ClearAnnotSnapshot(*clip);
+        delete clip;
+    }
+    VecReset(gAnnotGroupClipboard);
 }
 
 static Pixmap* PixmapFromRgbFzPixmap(fz_context* ctx, fz_pixmap* src) {
@@ -3250,7 +3630,7 @@ static Pixmap* GetStampImage(Annotation* annot) {
 }
 
 bool HasCopiedAnnotation() {
-    return gAnnotClipboard.valid;
+    return gAnnotClipboard.valid || len(gAnnotGroupClipboard) > 0;
 }
 
 // gAnnotClipboard owns strings, Vecs and a stamp bitmap; free them at exit
@@ -3326,47 +3706,103 @@ bool EngineOwnsAnnotation(EngineBase* engine, Annotation* annot, int pageNo) {
 }
 
 // Snapshot a live annotation so PasteCopiedAnnotation can recreate it.
-bool CopyAnnotation(Annotation* annot) {
-    if (!AnnotationIsLive(annot) || !AnnotationCanBeCopied(annot->type)) {
+static bool SnapshotAnnotation(Annotation* annot, AnnotationClipboard& clip) {
+    if (!AnnotationIsLive(annot) || (!AnnotationCanBeCopied(annot->type) && !AnnotationIsTextMarkup(annot->type))) {
         return false;
     }
-    ClearAnnotationClipboard();
-    gAnnotClipboard.valid = true;
-    gAnnotClipboard.type = annot->type;
-    gAnnotClipboard.rect = GetAnnotRect(annot);
-    gAnnotClipboard.contents = str::Dup(Contents(annot));
-    gAnnotClipboard.iconName = str::Dup(IconName(annot));
-    gAnnotClipboard.opacity = Opacity(annot);
+    clip.valid = true;
+    clip.type = annot->type;
+    clip.rect = GetAnnotRect(annot);
+    clip.contents = str::Dup(Contents(annot));
+    clip.iconName = str::Dup(IconName(annot));
+    clip.opacity = Opacity(annot);
     if (AnnotationSupportsBorder(annot->type)) {
-        gAnnotClipboard.borderWidth = BorderWidthF(annot);
+        clip.borderWidth = BorderWidthF(annot);
     }
+    if (AnnotationSupportsDash(annot->type)) ReadAnnotDash(annot, clip.borderStyle, clip.borderDash);
     if (annot->type == AnnotationType::FreeText) {
-        gAnnotClipboard.quadding = Quadding(annot);
-        gAnnotClipboard.textSize = DefaultAppearanceTextSize(annot);
-        gAnnotClipboard.fontFamily = str::Dup(FreeTextFontFamily(annot));
-        gAnnotClipboard.fontStyle = FreeTextFontStyle(annot);
-        gAnnotClipboard.textColor = DefaultAppearanceTextColor(annot);
-        gAnnotClipboard.hasTextColor = true;
-        gAnnotClipboard.color = GetColor(annot);
-        gAnnotClipboard.hasColor = true;
+        clip.quadding = Quadding(annot);
+        clip.textSize = DefaultAppearanceTextSize(annot);
+        clip.fontFamily = str::Dup(FreeTextFontFamily(annot));
+        clip.fontStyle = FreeTextFontStyle(annot);
+        clip.textColor = DefaultAppearanceTextColor(annot);
+        clip.hasTextColor = true;
+        clip.color = GetColor(annot);
+        clip.hasColor = true;
     } else if (AnnotationSupportsColor(annot->type)) {
-        gAnnotClipboard.color = GetColor(annot);
-        gAnnotClipboard.hasColor = true;
+        clip.color = GetColor(annot);
+        clip.hasColor = true;
     }
     if (AnnotationSupportsInteriorColor(annot->type)) {
-        gAnnotClipboard.interiorColor = InteriorColor(annot);
-        gAnnotClipboard.hasInteriorColor = true;
-        gAnnotClipboard.interiorOpacity = InteriorOpacity(annot);
+        clip.interiorColor = InteriorColor(annot);
+        clip.hasInteriorColor = true;
+        clip.interiorOpacity = InteriorOpacity(annot);
     }
     if (annot->type == AnnotationType::Line || annot->type == AnnotationType::PolyLine)
-        GetLineEndingStyles(annot, &gAnnotClipboard.lineStartStyle, &gAnnotClipboard.lineEndStyle);
-    gAnnotClipboard.hasLine = GetLinePoints(annot, gAnnotClipboard.lineStart, gAnnotClipboard.lineEnd);
-    gAnnotClipboard.vertices = GetVertices(annot);
+        GetLineEndingStyles(annot, &clip.lineStartStyle, &clip.lineEndStyle);
+    clip.hasLine = GetLinePoints(annot, clip.lineStart, clip.lineEnd);
+    clip.vertices = GetVertices(annot);
     if (AnnotationIsTextMarkup(annot->type) || annot->type == AnnotationType::Redact)
-        gAnnotClipboard.quads = GetQuadPointsAsRect(annot);
-    GetInkList(annot, gAnnotClipboard.inkStrokeCounts, gAnnotClipboard.inkPoints);
-    gAnnotClipboard.stampImage = GetStampImage(annot);
+        clip.quads = GetQuadPointsAsRect(annot);
+    GetInkList(annot, clip.inkStrokeCounts, clip.inkPoints);
+    if (annot->type == AnnotationType::Ink) clip.inkPenStyle = InkPenStyleTag(annot);
+    clip.cornerRadius = AnnotationCornerRadius(annot);
+    if (annot->type == AnnotationType::Ink) {
+        auto* ctx = annot->engine->Ctx();
+        AutoUnlockRecursiveMutex lock(&annot->engine->docLock);
+        fz_try(ctx) {
+            pdf_obj* tag = pdf_dict_gets(ctx, pdf_annot_obj(ctx, annot->pdfannot), kMathShapeKey);
+            if (tag) clip.mathShape = pdf_to_int(ctx, tag);
+        }
+        fz_catch(ctx) {
+            fz_report_error(ctx);
+        }
+    }
+    clip.stampImage = GetStampImage(annot);
     return true;
+}
+
+bool CopyAnnotation(Annotation* annot) {
+    AnnotationClipboard next;
+    if (!SnapshotAnnotation(annot, next)) return false;
+    ClearAnnotationClipboard();
+    gAnnotClipboard = std::move(next);
+    return true;
+}
+
+bool CopyAnnotations(const Vec<Annotation*>& annotations) {
+    if (len(annotations) == 0) return false;
+    if (len(annotations) == 1) return CopyAnnotation(annotations[0]);
+    Vec<AnnotationClipboard*> snapshots;
+    for (auto* annot : annotations) {
+        auto* clip = new AnnotationClipboard();
+        if (!SnapshotAnnotation(annot, *clip)) {
+            ClearAnnotSnapshot(*clip);
+            delete clip;
+            for (auto* previous : snapshots) {
+                ClearAnnotSnapshot(*previous);
+                delete previous;
+            }
+            return false;
+        }
+        VecAppend(snapshots, clip);
+    }
+    ClearAnnotationClipboard();
+    gAnnotGroupClipboard = std::move(snapshots);
+    return true;
+}
+
+bool CutAnnotations(const Vec<Annotation*>& annotations) {
+    if (!CopyAnnotations(annotations)) return false;
+    gPendingCutAnnotations = annotations;
+    return true;
+}
+
+Vec<Annotation*> TakeCutAnnotations() {
+    Vec<Annotation*> result = gPendingCutAnnotations;
+    VecReset(gPendingCutAnnotations);
+    if (auto* single = TakeCutAnnotation()) VecAppend(result, single);
+    return result;
 }
 
 static void OffsetPoints(Vec<PointF>& pts, float dx, float dy) {
@@ -3384,12 +3820,11 @@ static void OffsetRects(Vec<RectF>& rects, float dx, float dy) {
 }
 
 // Recreate the copied annotation so its rect's top-left sits at topLeft.
-Annotation* PasteCopiedAnnotation(EngineBase* engine, int pageNo, PointF topLeft) {
-    if (!gAnnotClipboard.valid || !engine) {
+static Annotation* PasteAnnotSnapshot(EngineBase* engine, int pageNo, PointF topLeft, AnnotationClipboard& clip) {
+    if (!clip.valid || !engine) {
         return nullptr;
     }
     AutoEndEngineOperation op(engine, "Paste annotation");
-    AnnotationClipboard& clip = gAnnotClipboard;
     float dx = topLeft.x - clip.rect.x;
     float dy = topLeft.y - clip.rect.y;
     RectF newRect{topLeft.x, topLeft.y, clip.rect.dx, clip.rect.dy};
@@ -3425,6 +3860,8 @@ Annotation* PasteCopiedAnnotation(EngineBase* engine, int pageNo, PointF topLeft
         args.interiorOpacity = clip.interiorOpacity;
     }
     args.stampImage = clip.stampImage;
+    args.inkPenStyle = clip.inkPenStyle;
+    args.cornerRadius = clip.cornerRadius;
     if (clip.hasLine) {
         args.hasLineEnd = true;
         args.lineEnd = {clip.lineEnd.x + dx, clip.lineEnd.y + dy};
@@ -3450,6 +3887,17 @@ Annotation* PasteCopiedAnnotation(EngineBase* engine, int pageNo, PointF topLeft
     Annotation* annot = EngineMupdfCreateAnnotation(engine, pageNo, pos, &args);
     if (!annot) {
         return nullptr;
+    }
+    if (clip.mathShape >= 0) {
+        auto* ctx = annot->engine->Ctx();
+        AutoUnlockRecursiveMutex lock(&annot->engine->docLock);
+        fz_try(ctx) {
+            pdf_dict_puts_drop(ctx, pdf_annot_obj(ctx, annot->pdfannot), kMathShapeKey,
+                               pdf_new_int(ctx, clip.mathShape));
+        }
+        fz_catch(ctx) {
+            fz_report_error(ctx);
+        }
     }
     if (clip.iconName) {
         SetIconName(annot, clip.iconName);
@@ -3481,6 +3929,17 @@ Annotation* PasteCopiedAnnotation(EngineBase* engine, int pageNo, PointF topLeft
     if (AnnotationSupportsBorder(clip.type) && clip.borderWidth >= 0) {
         SetBorderWidth(annot, clip.borderWidth);
     }
+    if (clip.borderStyle >= 0) {
+        auto* ctx = annot->engine->Ctx();
+        AutoUnlockRecursiveMutex lock(&annot->engine->docLock);
+        fz_try(ctx) {
+            WriteAnnotDash(ctx, annot->pdfannot, clip.borderStyle, clip.borderDash);
+            UpdateAnnot(ctx, annot->pdfannot);
+        }
+        fz_catch(ctx) {
+            fz_report_error(ctx);
+        }
+    }
     if (len(quads) > 0) {
         SetQuadPointsAsRect(annot, quads);
     }
@@ -3501,6 +3960,25 @@ Annotation* PasteCopiedAnnotation(EngineBase* engine, int pageNo, PointF topLeft
     return annot;
 }
 
+Annotation* PasteCopiedAnnotation(EngineBase* engine, int pageNo, PointF topLeft) {
+    if (!engine) return nullptr;
+    if (len(gAnnotGroupClipboard) == 0) return PasteAnnotSnapshot(engine, pageNo, topLeft, gAnnotClipboard);
+    RectF bounds = gAnnotGroupClipboard[0]->rect;
+    for (auto* clip : gAnnotGroupClipboard) bounds = bounds.Union(clip->rect);
+    AutoEndEngineOperation operation(engine, "Paste annotation group");
+    Vec<Annotation*> pasted;
+    for (auto* clip : gAnnotGroupClipboard) {
+        PointF position{topLeft.x + clip->rect.x - bounds.x, topLeft.y + clip->rect.y - bounds.y};
+        auto* annot = PasteAnnotSnapshot(engine, pageNo, position, *clip);
+        if (!annot) {
+            for (auto* previous : pasted) DeleteAnnotation(previous);
+            return nullptr;
+        }
+        VecAppend(pasted, annot);
+    }
+    return pasted[0];
+}
+
 AnnotationType CmdIdToAnnotationType(int cmdId) {
     // clang-format off
     switch (cmdId) {
@@ -3508,6 +3986,16 @@ AnnotationType CmdIdToAnnotationType(int cmdId) {
         case CmdCreateAnnotLink:           return AnnotationType::Link;
         case CmdCreateAnnotFreeText:       return AnnotationType::FreeText;
         case CmdCreateAnnotLine:           return AnnotationType::Line;
+        case CmdCreateAnnotArrow:          return AnnotationType::Line;
+        case CmdCreateAnnotDashedLine:     return AnnotationType::Line;
+        case CmdCreateAnnotParabola:
+        case CmdCreateAnnotNegativeParabola:
+        case CmdCreateAnnotCubic:
+        case CmdCreateAnnotNegativeCubic:
+        case CmdCreateAnnotReciprocal:
+        case CmdCreateAnnotNegativeReciprocal:
+        case CmdCreateAnnotAxes2D:
+        case CmdCreateAnnotAxes3D:          return AnnotationType::Ink;
         case CmdCreateAnnotSquare:         return AnnotationType::Square;
         case CmdCreateAnnotCircle:         return AnnotationType::Circle;
         case CmdCreateAnnotPolygon:        return AnnotationType::Polygon;
@@ -3529,6 +4017,236 @@ AnnotationType CmdIdToAnnotationType(int cmdId) {
 }
 
 #if IS_DEBUG
+
+static bool RoundedAppearance(Annotation* annot) {
+    auto* ctx = annot->engine->Ctx();
+    fz_buffer* buffer = nullptr;
+    fz_var(buffer);
+    bool rounded = false;
+    fz_try(ctx) {
+        buffer = pdf_load_stream(ctx, pdf_dict_getp(ctx, pdf_annot_obj(ctx, annot->pdfannot), "AP/N"));
+        unsigned char* bytes;
+        size_t size = fz_buffer_storage(ctx, buffer, &bytes);
+        rounded = str::Contains(Str((const char*)bytes, (int)size), StrL(" c\n"));
+    }
+    fz_always(ctx) {
+        fz_drop_buffer(ctx, buffer);
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+    }
+    return rounded;
+}
+
+static bool TestShapePresets(EngineBase* engine) {
+    bool ok = true;
+    Vec<Annotation*> before;
+    EngineMupdfGetAnnotations(engine, before);
+    Vec<int> counts;
+    Vec<PointF> points, positive;
+    for (int shape = 0; shape < 8; shape++) {
+        ok &= BuildMathShape(shape, {20, 30, 160, 120}, counts, points);
+        int total = 0;
+        for (int count : counts) total += count;
+        ok &= total == len(points) && total > 0 && total <= 194;
+        for (PointF p : points)
+            ok &= isfinite(p.x) && isfinite(p.y) && p.x >= 19.99f && p.x <= 180.01f && p.y >= 29.99f && p.y <= 150.01f;
+        if (shape < 6) {
+            if ((shape & 1) == 0)
+                positive = points;
+            else
+                for (int i = 0; i < len(points); i++)
+                    ok &=
+                        fabsf(points[i].x - positive[i].x) < .001f && fabsf(points[i].y + positive[i].y - 180) < .001f;
+            ok &= len(counts) == (shape >= 4 ? 2 : 1);
+            if (shape >= 4) ok &= points[counts[0] - 1].x < 100 && points[counts[0]].x > 100;
+        }
+        AnnotCreateArgs args{AnnotationType::Ink};
+        args.mathShape = shape;
+        args.hasRect = true;
+        args.rect = {20.f + (shape % 3) * 185.f, 30.f + (shape / 3) * 160.f, 160, 120};
+        args.borderWidth = 2;
+        Annotation* annotation = EngineMupdfCreateAnnotation(engine, 1, {20, 30}, &args);
+        if (!annotation) return false;
+        Vec<int> savedCounts;
+        Vec<PointF> savedPoints, placedPoints;
+        Vec<int> placedCounts;
+        BuildMathShape(shape, args.rect, placedCounts, placedPoints);
+        GetInkList(annotation, savedCounts, savedPoints);
+        ok &= len(savedCounts) == len(placedCounts) && len(savedPoints) == len(placedPoints);
+        for (int i = 0; i < len(placedPoints) && i < len(savedPoints); i++)
+            ok &= fabsf(placedPoints[i].x - savedPoints[i].x) < .001f &&
+                  fabsf(placedPoints[i].y - savedPoints[i].y) < .001f;
+    }
+    ok &= !BuildMathShape(4, {0, 0, 0, 10}, counts, points) && !BuildMathShape(8, {0, 0, 10, 10}, counts, points);
+    for (int angle = 0; angle < 8; angle++) {
+        float a = angle * .785398163f;
+        PointF tip{100 * cosf(a), 100 * sinf(a)}, left, right;
+        ok &= BuildArrowHead({0, 0}, tip, 2, left, right);
+        float cx = (left.x + right.x) / 2, cy = (left.y + right.y) / 2;
+        ok &= fabsf(hypotf(tip.x - cx, tip.y - cy) - 17.6f) < .001f;
+        ok &= fabsf(hypotf(left.x - right.x, left.y - right.y) - 18.f) < .001f;
+    }
+    PointF left, right;
+    ok &= !BuildArrowHead({1, 1}, {1, 1}, 2, left, right);
+    AnnotCreateArgs square{AnnotationType::Square};
+    square.hasRect = true;
+    square.rect = {20, 530, 120, 70};
+    square.borderWidth = 2;
+    square.cornerRadius = 12;
+    Annotation* annot = EngineMupdfCreateAnnotation(engine, 1, {20, 200}, &square);
+    if (!annot) return false;
+    ok &= AnnotationCornerRadius(annot) == 12 && RoundedAppearance(annot);
+    SetBorderWidth(annot, 4);
+    ok &= RoundedAppearance(annot);
+    SetAnnotationCornerRadius(annot, 1000);
+    ok &= AnnotationCornerRadius(annot) == 1000 && RoundedAppearance(annot);
+    Vec<Annotation*> removed;
+    ok &= EngineMupdfUndo(engine, removed);
+    Vec<Annotation*> all;
+    EngineMupdfGetAnnotations(engine, all);
+    annot = VecLast(all);
+    ok &= AnnotationCornerRadius(annot) == 12 && RoundedAppearance(annot);
+    ok &= EngineMupdfRedo(engine, removed);
+    EngineMupdfGetAnnotations(engine, all);
+    annot = VecLast(all);
+    SetAnnotationCornerRadius(annot, 0);
+    ok &= AnnotationCornerRadius(annot) == 0 && !RoundedAppearance(annot);
+    SetAnnotationCornerRadius(annot, 12);
+    ok &= CopyAnnotation(annot);
+    auto* pasted = PasteCopiedAnnotation(engine, 1, {200, 530});
+    ok &= pasted && AnnotationCornerRadius(pasted) == 12 && RoundedAppearance(pasted);
+    auto* duplicate = DuplicateAnnotation(annot, {0, 100});
+    ok &= duplicate && AnnotationCornerRadius(duplicate) == 12 && RoundedAppearance(duplicate);
+    Str path = str::Dup(GetTempFilePathTemp(StrL("math-corners")));
+    ok &= EngineMupdfSaveCopy(engine, path);
+    Str bytes = file::ReadFile(path);
+    WCHAR directory[32768]{};
+    DWORD length = GetEnvironmentVariableW(L"ENHANCED_SHAPES_TEST_DIR", directory, dimof(directory));
+    if (length > 0 && length < dimof(directory))
+        ok &= file::WriteFile(path::JoinTemp(ToUtf8Temp(WStr(directory)), StrL("math-corners.pdf")), bytes);
+    EngineBase* reopened = bytes ? CreateEngineMupdfFromData(bytes, StrL("math-corners.pdf"), nullptr) : nullptr;
+    if (!reopened)
+        ok = false;
+    else {
+        EngineMupdfGetAnnotations(reopened, all);
+        ok &= len(all) == len(before) + 11;
+        int rounded = 0;
+        for (auto* item : all)
+            if (item->type == AnnotationType::Square)
+                rounded += AnnotationCornerRadius(item) == 12 && RoundedAppearance(item);
+        ok &= rounded == 3;
+        SafeEngineRelease(&reopened);
+    }
+    str::Free(bytes);
+    file::Delete(path);
+    str::Free(path);
+    return ok;
+}
+
+bool Annotation_TestStrokeTools() {
+    const char* objects[] = {"<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+                             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R 5 0 R] >>",
+                             "<< /Type /Annot /Subtype /Line /Rect [18 38 182 42] /L [20 40 180 40] /BS << /W 2 >> /C "
+                             "[0 0 0] /LE [/None /ClosedArrow] >>",
+                             "<< /Type /Annot /Subtype /Ink /Rect [18 113 182 142] /BS << /W 2 >> /C [0 0 0] /InkList "
+                             "[[20 120 50 130 80 115 110 140 140 125 180 130]] >>"};
+    str::Builder pdf;
+    pdf.Append(StrL("%PDF-1.4\n"));
+    Vec<int> offsets;
+    for (int i = 0; i < dimof(objects); i++) {
+        VecAppend(offsets, len(pdf));
+        pdf.Append(fmt("%d 0 obj\n%s\nendobj\n", i + 1, Str(objects[i])));
+    }
+    int xref = len(pdf);
+    pdf.Append(fmt("xref\n0 %d\n0000000000 65535 f \n", dimof(objects) + 1));
+    for (int offset : offsets) pdf.Append(fmt("%010d 00000 n \n", offset));
+    pdf.Append(fmt("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", dimof(objects) + 1, xref));
+    EngineBase* engine = CreateEngineMupdfFromData(ToStr(pdf), StrL("stroke-tools.pdf"), nullptr);
+    if (!engine) return false;
+    defer {
+        SafeEngineRelease(&engine);
+        FreeAnnotationClipboard();
+    };
+    Vec<Annotation*> annotations;
+    EngineMupdfGetAnnotations(engine, annotations);
+    if (len(annotations) != 2) return false;
+    auto* line = annotations[0];
+    auto* ink = annotations[1];
+    bool ok = SetBorderLinePattern(line, AnnotationLinePattern::Dashed) &&
+              SetBorderLinePattern(ink, AnnotationLinePattern::Dotted);
+    ok &= BorderLinePattern(line) == AnnotationLinePattern::Dashed &&
+          BorderLinePattern(ink) == AnnotationLinePattern::Dotted;
+    Vec<int> counts;
+    Vec<PointF> before, after;
+    GetInkList(ink, counts, before);
+    ok &= SmoothAnnotation(ink);
+    GetInkList(ink, counts, after);
+    ok &= len(after) > len(before) && after[0] == before[0] && VecLast(after) == VecLast(before);
+    Vec<Annotation*> removed;
+    ok &= EngineMupdfUndo(engine, removed);
+    EngineMupdfGetAnnotations(engine, annotations);
+    GetInkList(annotations[1], counts, after);
+    ok &= len(after) == len(before);
+    ok &= EngineMupdfRedo(engine, removed);
+    EngineMupdfGetAnnotations(engine, annotations);
+    ok &= CutAnnotations(annotations) && len(gPendingCutAnnotations) == 2;
+    ok &= PasteCopiedAnnotation(nullptr, 1, {250, 250}) == nullptr && len(gPendingCutAnnotations) == 2;
+    SafeEngineRelease(&engine);
+    ok &= len(gPendingCutAnnotations) == 0 && HasCopiedAnnotation();
+    engine = CreateEngineMupdfFromData(ToStr(pdf), StrL("stroke-target.pdf"), nullptr);
+    if (!engine) return false;
+    ok &= PasteCopiedAnnotation(engine, 1, {250, 250}) != nullptr;
+    EngineMupdfGetAnnotations(engine, annotations);
+    ok &= len(annotations) == 4;
+    if (len(annotations) != 4) return false;
+    ok &= BorderLinePattern(annotations[2]) == AnnotationLinePattern::Dashed &&
+          BorderLinePattern(annotations[3]) == AnnotationLinePattern::Dotted;
+    int start, end;
+    GetLineEndingStyles(annotations[2], &start, &end);
+    ok &= end == PDF_ANNOT_LE_CLOSED_ARROW;
+    auto* ctx = annotations[3]->engine->Ctx();
+    fz_buffer* appearance = nullptr;
+    fz_pixmap* bitmap = nullptr;
+    fz_var(appearance);
+    fz_var(bitmap);
+    fz_try(ctx) {
+        appearance = pdf_load_stream(ctx, pdf_dict_getp(ctx, pdf_annot_obj(ctx, annotations[3]->pdfannot), "AP/N"));
+        unsigned char* bytes;
+        size_t size = fz_buffer_storage(ctx, appearance, &bytes);
+        ok &= str::Contains(Str((const char*)bytes, (int)size), StrL("1 J"));
+        bitmap = pdf_new_pixmap_from_annot(ctx, annotations[3]->pdfannot, fz_identity, fz_device_rgb(ctx), nullptr, 0);
+        int pixels = 0;
+        for (int y = 0; y < bitmap->h; y++) {
+            const u8* row = bitmap->samples + y * bitmap->stride;
+            for (int x = 0; x < bitmap->w; x++) pixels += row[x * bitmap->n] < 128;
+        }
+        ok &= pixels > 20 && pixels < bitmap->w * bitmap->h / 2;
+    }
+    fz_always(ctx) {
+        fz_drop_buffer(ctx, appearance);
+        fz_drop_pixmap(ctx, bitmap);
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+        ok = false;
+    }
+    Str saved = str::Dup(GetTempFilePathTemp(StrL("stroke-tools")));
+    ok &= EngineMupdfSaveCopy(engine, saved);
+    SafeEngineRelease(&engine);
+    Str data = file::ReadFile(saved);
+    engine = CreateEngineMupdfFromData(data, StrL("reopened-strokes.pdf"), nullptr);
+    str::Free(data);
+    file::Delete(saved);
+    str::Free(saved);
+    if (!engine) return false;
+    EngineMupdfGetAnnotations(engine, annotations);
+    ok &= len(annotations) == 4;
+    if (len(annotations) == 4)
+        ok &= BorderLinePattern(annotations[2]) == AnnotationLinePattern::Dashed &&
+              BorderLinePattern(annotations[3]) == AnnotationLinePattern::Dotted;
+    return ok && TestShapePresets(engine);
+}
 
 static bool TestShapeAppearance(Annotation* annot, bool checkPixels) {
     auto* ctx = annot->engine->Ctx();
@@ -3832,6 +4550,76 @@ static bool TestInkSegmentGeometry() {
     VecAppend(counts, 3);
     VecAppend(points, {1, 1});
     ok = ok && !EraseInkSegments(counts, points, {1, 1}, 1) && len(counts) == 1 && len(points) == 1;
+    return ok;
+}
+
+bool Annotation_UnitTestNoteAppearance() {
+    const char* objects[] = {
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Text /Name /Note /Rect [72 700 92 720] /C [1 0.94 0.67] "
+        "/T (Author) /Contents (Pinned note body.) >>",
+    };
+    str::Builder pdf;
+    pdf.Append(StrL("%PDF-1.7\n"));
+    Vec<int> offsets;
+    for (int i = 0; i < dimof(objects); i++) {
+        VecAppend(offsets, len(pdf));
+        pdf.Append(fmt("%d 0 obj\n%s\nendobj\n", i + 1, Str(objects[i])));
+    }
+    int xref = len(pdf);
+    pdf.Append(fmt("xref\n0 %d\n0000000000 65535 f \n", dimof(objects) + 1));
+    for (int offset : offsets) pdf.Append(fmt("%010d 00000 n \n", offset));
+    pdf.Append(fmt("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", dimof(objects) + 1, xref));
+    EngineBase* engine = CreateEngineMupdfFromData(ToStr(pdf), StrL("note.pdf"), nullptr);
+    if (!engine) return false;
+    defer {
+        SafeEngineRelease(&engine);
+    };
+    Vec<Annotation*> annotations;
+    EngineMupdfGetAnnotations(engine, annotations);
+    if (len(annotations) != 1) return false;
+    SetContents(annotations[0], StrL("Pinned note body. Select and copy this text."));
+    WCHAR directory[32768]{};
+    DWORD count = GetEnvironmentVariableW(L"ENHANCED_SHAPES_TEST_DIR", directory, dimof(directory));
+    bool retain = count > 0 && count < dimof(directory);
+    Str path = str::Dup(retain ? path::JoinTemp(ToUtf8Temp(WStr(directory)), StrL("note-appearance.pdf"))
+                               : GetTempFilePathTemp(StrL("pinned-note")));
+    defer {
+        if (!retain) file::Delete(path);
+        str::Free(path);
+    };
+    if (!EngineMupdfSaveCopy(engine, path)) return false;
+    SafeEngineRelease(&engine);
+    Str data = file::ReadFile(path);
+    engine = CreateEngineMupdfFromData(data, StrL("note-reopened.pdf"), nullptr);
+    str::Free(data);
+    if (!engine) return false;
+    EngineMupdfGetAnnotations(engine, annotations);
+    if (len(annotations) != 1 || Type(annotations[0]) != AnnotationType::Text ||
+        !str::Eq(IconName(annotations[0]), StrL("Note")) || !str::Eq(Author(annotations[0]), StrL("Author")) ||
+        !str::Eq(Contents(annotations[0]), StrL("Pinned note body. Select and copy this text.")))
+        return false;
+    auto* annot = annotations[0];
+    auto* ctx = annot->engine->Ctx();
+    AutoUnlockRecursiveMutex lock(&annot->engine->docLock);
+    fz_buffer* buffer = nullptr;
+    fz_var(buffer);
+    bool ok = false;
+    fz_try(ctx) {
+        buffer = pdf_load_stream(ctx, pdf_dict_getp(ctx, pdf_annot_obj(ctx, annot->pdfannot), "AP/N"));
+        unsigned char* bytes;
+        size_t size = fz_buffer_storage(ctx, buffer, &bytes);
+        Str appearance((const char*)bytes, (int)size);
+        ok = str::Contains(appearance, StrL("EnhancedPinnedNote")) && str::Contains(appearance, StrL("0.901961"));
+    }
+    fz_always(ctx) {
+        fz_drop_buffer(ctx, buffer);
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+    }
     return ok;
 }
 

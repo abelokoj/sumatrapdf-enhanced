@@ -601,6 +601,9 @@ const markdownUI: Field[] = [
   ),
   field("FontName", Str, "", "Markdown text font; empty follows the interface font"),
   field("MathFontName", Str, "", "Markdown MathML font; empty uses the companion of the text font"),
+  field("ReadingWidth", Float, 0, "browser Markdown reading width percentage; 0 preserves the supplied layout"),
+  field("LeftMargin", Float, 10, "browser Markdown left margin percentage when a custom reading width is used"),
+  field("RightMargin", Float, 10, "browser Markdown right margin percentage; width plus margins must total 100"),
 ];
 
 const dictionaryUI: Field[] = [
@@ -611,6 +614,8 @@ const dictionaryUI: Field[] = [
     "dictionary reading font; empty follows the interface font; accepts any installed Windows font",
   ),
   field("LineSpacing", Float, 1.15, "dictionary line-height multiplier; greater than 0 and at most 100"),
+  field("FontScale", Float, 100, "dictionary text scale as a percentage of interface text, 50 through 300"),
+  field("LearningHubScale", Float, 100, "Learning Hub text scale as a percentage of interface text, 50 through 300"),
 ];
 
 const htmlUI: Field[] = [
@@ -837,6 +842,10 @@ const annotationToolPreset: Field[] = [
   field("Tool", Str, "ballpoint", "annotation tool identifier"),
   field("Color", Str, "#000000", "pinned tool color"),
   field("Width", Float, 2, "pinned stroke width in PDF points"),
+  field("ShapeStyle", Bool, false, "whether this preset includes the complete shape appearance"),
+  field("FillColor", Str, "", "pinned shape fill color; empty means no fill"),
+  field("FillOpacity", Int, -1, "pinned shape fill opacity, 0 through 100; -1 means a legacy border-only preset"),
+  field("CornerRadius", Float, 0, "pinned rectangle corner radius in PDF points"),
 ];
 
 function inkPenProfile(name: string, opacity: number): Field {
@@ -855,6 +864,13 @@ function inkPenProfile(name: string, opacity: number): Field {
 }
 
 const annotations: Field[] = [
+  field(
+    "ShapeTool",
+    Int,
+    2,
+    "last shape selected: 0 = line, 1 = polyline, 2 = rectangle, 3 = ellipse, 4 = polygon, 5 = arrow, 6 = dashed line, 7 = parabola, 8 = negative parabola, 9 = cubic, 10 = negative cubic, 11 = reciprocal, 12 = negative reciprocal, 13 = 2D axes, 14 = 3D axes",
+  ),
+  field("ShapeCornerRadius", Float, 0, "rectangle corner radius in PDF points; 0 keeps square corners"),
   inkPenProfile("InkBallpoint", 100),
   inkPenProfile("InkFountain", 100),
   inkPenProfile("InkBrush", 100),
@@ -923,39 +939,77 @@ const annotations: Field[] = [
     "color of newly created line annotations. If not set, the PDF engine's default (red) is used",
   ).ver("3.7"),
   field("LineInteriorColor", Color, "", "fill color of newly created line annotations; unset means no fill").ver("3.7"),
-  field("LineInteriorOpacity", Int, 100, "fill opacity of newly created line annotations, from 0 to 100 percent").ver("3.7"),
+  field("LineBorderWidth", Float, 1, "default border thickness for line annotations in points, from 0 to 64"),
+  field("LineInteriorOpacity", Int, 100, "fill opacity of newly created line annotations, from 0 to 100 percent").ver(
+    "3.7",
+  ),
   field(
     "PolyLineColor",
     Color,
     "",
     "color of newly created polyline annotations. If not set, the PDF engine's default (red) is used",
   ).ver("3.7"),
-  field("PolyLineInteriorColor", Color, "", "fill color of newly created polyline annotations; unset means no fill").ver("3.7"),
-  field("PolyLineInteriorOpacity", Int, 100, "fill opacity of newly created polyline annotations, from 0 to 100 percent").ver("3.7"),
+  field(
+    "PolyLineInteriorColor",
+    Color,
+    "",
+    "fill color of newly created polyline annotations; unset means no fill",
+  ).ver("3.7"),
+  field("PolyLineBorderWidth", Float, 1, "default border thickness for polyline annotations in points, from 0 to 64"),
+  field(
+    "PolyLineInteriorOpacity",
+    Int,
+    100,
+    "fill opacity of newly created polyline annotations, from 0 to 100 percent",
+  ).ver("3.7"),
   field(
     "SquareColor",
     Color,
     "",
     "color of newly created square annotations. If not set, the PDF engine's default (red) is used",
   ).ver("3.7"),
-  field("SquareInteriorColor", Color, "", "fill color of newly created square annotations; unset means no fill").ver("3.7"),
-  field("SquareInteriorOpacity", Int, 100, "fill opacity of newly created square annotations, from 0 to 100 percent").ver("3.7"),
+  field("SquareInteriorColor", Color, "", "fill color of newly created square annotations; unset means no fill").ver(
+    "3.7",
+  ),
+  field("SquareBorderWidth", Float, 1, "default border thickness for square annotations in points, from 0 to 64"),
+  field(
+    "SquareInteriorOpacity",
+    Int,
+    100,
+    "fill opacity of newly created square annotations, from 0 to 100 percent",
+  ).ver("3.7"),
   field(
     "CircleColor",
     Color,
     "",
     "color of newly created circle annotations. If not set, the PDF engine's default (red) is used",
   ).ver("3.7"),
-  field("CircleInteriorColor", Color, "", "fill color of newly created circle annotations; unset means no fill").ver("3.7"),
-  field("CircleInteriorOpacity", Int, 100, "fill opacity of newly created circle annotations, from 0 to 100 percent").ver("3.7"),
+  field("CircleInteriorColor", Color, "", "fill color of newly created circle annotations; unset means no fill").ver(
+    "3.7",
+  ),
+  field("CircleBorderWidth", Float, 1, "default border thickness for circle annotations in points, from 0 to 64"),
+  field(
+    "CircleInteriorOpacity",
+    Int,
+    100,
+    "fill opacity of newly created circle annotations, from 0 to 100 percent",
+  ).ver("3.7"),
   field(
     "PolygonColor",
     Color,
     "",
     "color of newly created polygon annotations. If not set, the PDF engine's default (red) is used",
   ).ver("3.7"),
-  field("PolygonInteriorColor", Color, "", "fill color of newly created polygon annotations; unset means no fill").ver("3.7"),
-  field("PolygonInteriorOpacity", Int, 100, "fill opacity of newly created polygon annotations, from 0 to 100 percent").ver("3.7"),
+  field("PolygonInteriorColor", Color, "", "fill color of newly created polygon annotations; unset means no fill").ver(
+    "3.7",
+  ),
+  field("PolygonBorderWidth", Float, 1, "default border thickness for polygon annotations in points, from 0 to 64"),
+  field(
+    "PolygonInteriorOpacity",
+    Int,
+    100,
+    "fill opacity of newly created polygon annotations, from 0 to 100 percent",
+  ).ver("3.7"),
   field(
     "InkColor",
     Color,
@@ -1101,6 +1155,7 @@ const fileState: Field[] = [
     "if true, the document can no longer be found. State worth keeping is still " +
       "remembered, so the entry is hidden rather than removed",
   ).doc("if true, the file is considered missing and won't be shown in any list"),
+  field("Completed", Bool, false, "show this document in the home page Completed Documents section"),
   field(
     "OpenCount",
     Int,
@@ -1247,6 +1302,7 @@ const fileStateLayout = [
   "ScrollPos",
   "WindowPos",
   "IsPinned",
+  "Completed",
   "IsMissing",
   "UseDefaultState",
   "ShowToc",
@@ -1383,6 +1439,14 @@ const globalPrefs: Field[] = [
     .ver("3.7")
     .doc("valid values: thumbnails, list"),
   field("HomePageMaxRecentItems", Int, 30, "maximum recent documents shown on the home page, from 1 to 200"),
+  field("HomePageFixedHeader", Bool, false, "keep the home page header visible while recent documents scroll"),
+  field("HomePageFullPageThumbnails", Bool, false, "show whole document pages instead of cropped home page previews"),
+  field(
+    "HomePageThumbnailPadding",
+    Bool,
+    true,
+    "show framed cards and padding around home page thumbnails; false places previews and filenames directly on the home page",
+  ),
   field("TabListVisibleItems", Int, 10, "maximum visible rows in the open-file tab list, from 1 to 50"),
   field("ScrollbarWidth", Int, 30, "app scrollbar width in logical pixels, from 8 to 60"),
   field("ScrollbarWidthExpanded", Bool, false, "saved scrollbar width has been expanded once").internal(),
@@ -1819,6 +1883,30 @@ const globalPrefs: Field[] = [
     "if true, the toolbar has a Read Aloud button (with a drop-down for voice, speed and " +
       "what to read). Read Aloud is still reachable from the Read Aloud menu when this is false",
   ).ver("3.7"),
+  field("AnnotationToolbarColumns", Int, 1, "number of icon columns in the side toolbar in Annotation Mode (1-3)"),
+  field(
+    "AnnotationToolbarStyle",
+    Int,
+    1,
+    "layout of the vertical Annotation Mode toolbar with 2 or 3 columns: 1 = grouped (default), " +
+      "2 = continuous rail. Does not change single-column or horizontal toolbars",
+  ),
+  field("AnnotationModeIconStyle", Int, 1, "Annotation Mode icon pen style: 1 = solid, 2 = fine tip"),
+  field(
+    "AnnotationPageNumberStyle",
+    Int,
+    1,
+    "page number layout in the vertical Annotation Mode toolbar: 1 = short separator (default), " +
+      "2 = one divided box, 3 = two stacked boxes. The current page is above the last page",
+  ),
+  field(
+    "AnnotationThreeColumnPageStyle",
+    Int,
+    1,
+    "page number layout only in the three-column vertical Annotation Mode toolbar: " +
+      "1 = current stacked layout (default), 2 = full-width horizontal page row, " +
+      "3 = compact horizontal page field between Previous and Next. Other toolbar layouts are unchanged",
+  ),
   field(
     "ToolbarSize",
     Int,
@@ -1848,11 +1936,50 @@ const globalPrefs: Field[] = [
     "pin icon design: 10 = soft outline (default), 3 = solid, 4 = round head; all use the same diagonal angle",
   ),
   field(
+    "FileTypeIconStyle",
+    Int,
+    3,
+    "Windows file icons: 3 = outlined pages (included, default), 1 = folded pages, 2 = color covers. Alternatives download from GitHub after confirmation. Applies to this app's file associations; does not change default apps",
+  ),
+  field(
+    "LiveAppearancePreview",
+    Bool,
+    false,
+    "preview appearance colors and icon styles while choosing them in settings; Cancel restores the saved appearance. Does not download assets or change Windows associations before saving",
+  ),
+  field(
+    "SettingsBackupMode",
+    Str,
+    "automatic",
+    "settings backups: automatic backs up changed saved preferences in the background and keeps the latest 20 copies; manual uses Back Up Now",
+  ),
+  field(
+    "SettingsBackupDirectory",
+    Str,
+    "",
+    "folder for settings backups; empty uses the Backups folder beside the settings file",
+  ),
+  field(
     "ColorPickerIconStyle",
     Int,
     8,
     "color picker icon design: 8 = color tiles (default), 1 = classic palette, 2 = soft palette, 6 = palette and dropper, 5 = color wheel",
   ),
+  field(
+    "PenCursorStyle",
+    Int,
+    11,
+    "drawing cursor design: 11 = rollerball, 12 = drafting pen, 9 = lacquer pen with conical tip",
+  ),
+  field(
+    "PenCursorSize",
+    Int,
+    20,
+    "drawing cursor size in logical pixels, from 0 to 100; 0 hides the drawing cursor; scales with monitor DPI, independently of interface and toolbar size",
+  ),
+  field("PenCursorAccent", Color, "#2675e8", "accent color of the drawing cursor; independent of annotation ink color"),
+  field("ActiveTabStyle", Int, 3, "active tab design: 3 = outlined (default), 1 = solid color, 4 = inset"),
+  field("ActiveTabAccent", Color, "#2675e8", "active tab accent color; a file's Change Tab Color overrides it"),
   field("InterfaceScale", Int, 100, "overall interface scale, from 50 to 250 percent; document zoom is independent"),
   field("UIFontFamily", Str, "system", "interface font: system, Manrope, Pretendard Std or Public Sans"),
   field(
@@ -2158,6 +2285,9 @@ const globalPrefsLayout = [
   "HomePageViewMode",
   "HomePageThumbnailSize",
   "HomePageMaxRecentItems",
+  "HomePageFixedHeader",
+  "HomePageFullPageThumbnails",
+  "HomePageThumbnailPadding",
   "TabListVisibleItems",
   "ScrollbarWidth",
   "FilePicker",
@@ -2213,9 +2343,23 @@ const globalPrefsLayout = [
   "LaserColors",
   "PinnedAnnotationTools",
   "TocDy",
+  "AnnotationToolbarColumns",
+  "AnnotationToolbarStyle",
+  "AnnotationModeIconStyle",
+  "AnnotationPageNumberStyle",
+  "AnnotationThreeColumnPageStyle",
   "ToolbarSize",
   "PinIconStyle",
+  "FileTypeIconStyle",
+  "LiveAppearancePreview",
+  "SettingsBackupMode",
+  "SettingsBackupDirectory",
   "ColorPickerIconStyle",
+  "PenCursorStyle",
+  "PenCursorSize",
+  "PenCursorAccent",
+  "ActiveTabStyle",
+  "ActiveTabAccent",
   "TreeFontSize",
   "UIFontSize",
   "UIFontFamily",

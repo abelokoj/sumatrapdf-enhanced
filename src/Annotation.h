@@ -69,6 +69,7 @@ AnnotationType AnnotationTypeFromName(Str);
 // (PdfFilter / PdfPreview), which don't link Annotation.cpp.
 struct Annotation;
 inline Annotation* gPendingCutAnnotation = nullptr;
+inline Vec<Annotation*> gPendingCutAnnotations;
 
 // an user annotation on page
 // It abstracts over pdf_annot so that we don't have to
@@ -89,7 +90,16 @@ struct Annotation {
         if (this == gPendingCutAnnotation) {
             gPendingCutAnnotation = nullptr;
         }
+        int index = VecFind(gPendingCutAnnotations, this);
+        if (index >= 0) VecRemoveAt(gPendingCutAnnotations, index);
     }
+};
+
+enum class AnnotationLinePattern {
+    Unspecified = -1,
+    Solid,
+    Dashed,
+    Dotted
 };
 
 struct AnnotCreateArgs {
@@ -116,13 +126,24 @@ struct AnnotCreateArgs {
     Pixmap* stampImage = nullptr;
     bool hasLineEnd = false;
     PointF lineEnd;
+    int lineEndStyle = -1;
+    AnnotationLinePattern linePattern = AnnotationLinePattern::Unspecified;
     const Vec<PointF>* polyLinePoints = nullptr;
     bool hasRect = false;
     RectF rect;
     const Vec<int>* inkStrokeCounts = nullptr;
     const Vec<PointF>* inkPoints = nullptr;
     int inkPenStyle = -1;
+    float cornerRadius = 0;
+    int mathShape = -1;
 };
+
+int MathShapeForCommand(int);
+bool BuildMathShape(int, RectF, Vec<int>&, Vec<PointF>&);
+bool BuildArrowHead(PointF, PointF, float, PointF&, PointF&);
+void ConfigureShapeCreateArgs(int, AnnotCreateArgs&);
+float AnnotationCornerRadius(Annotation*);
+void SetAnnotationCornerRadius(Annotation*, float);
 
 int PageNo(Annotation*);
 RectF GetBounds(Annotation*);
@@ -241,15 +262,25 @@ bool AnnotationCanBeResized(AnnotationType);
 bool AnnotationCanBeCopied(AnnotationType);
 bool AnnotationSupportsColor(AnnotationType);
 bool AnnotationSupportsBorder(AnnotationType);
+bool AnnotationSupportsDash(AnnotationType);
+AnnotationLinePattern BorderLinePattern(Annotation*);
+bool SetBorderLinePattern(Annotation*, AnnotationLinePattern);
+bool SmoothAnnotation(Annotation*);
 bool AnnotationSupportsInteriorColor(AnnotationType);
 bool AnnotationSupportsOpacity(AnnotationType);
 
 bool CopyAnnotation(Annotation*);
 bool CutAnnotation(Annotation*);
+bool CopyAnnotations(const Vec<Annotation*>&);
+bool CutAnnotations(const Vec<Annotation*>&);
 Annotation* TakeCutAnnotation();
+Vec<Annotation*> TakeCutAnnotations();
 bool EngineOwnsAnnotation(EngineBase*, Annotation*, int pageNo = 0);
 bool HasCopiedAnnotation();
 void FreeAnnotationClipboard();
 Annotation* PasteCopiedAnnotation(EngineBase*, int pageNo, PointF topLeft);
 
 AnnotationType CmdIdToAnnotationType(int cmdId);
+#if IS_DEBUG
+bool Annotation_TestStrokeTools();
+#endif

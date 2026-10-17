@@ -7,6 +7,36 @@ $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $testRoot = [IO.Path]::GetFullPath((Join-Path $tempRoot ('sumatra-release-tests-' + [Guid]::NewGuid())))
 if (-not $testRoot.StartsWith($tempRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar)) { throw 'Invalid test directory' }
 New-Item -ItemType Directory -Path $testRoot | Out-Null
+$fixtureRoot = Join-Path $testRoot 'fixture'
+New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'cmd/helper'),(Join-Path $fixtureRoot 'docs/releases') | Out-Null
+Copy-Item -LiteralPath (Join-Path $repoRoot 'cmd/publish-enhanced.ps1') -Destination (Join-Path $fixtureRoot 'cmd')
+Copy-Item -LiteralPath (Join-Path $repoRoot 'cmd/helper/enhanced-version.ps1') -Destination (Join-Path $fixtureRoot 'cmd/helper')
+Copy-Item -LiteralPath (Join-Path $repoRoot 'enhanced-upstream.json') -Destination $fixtureRoot
+$fixtureNotes = "# SumatraPDF Enhanced $version`n"
+foreach ($arch in @('x64','arm64')) {
+    foreach ($kind in @('install.exe','portable.exe','portable.zip')) {
+        $fixtureNotes += "`nhttps://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-$version/SumatraPDF-Enhanced-$version-$arch-$kind"
+    }
+}
+[IO.File]::WriteAllText((Join-Path $fixtureRoot "docs/releases/$version.md"),$fixtureNotes)
+. (Join-Path $repoRoot 'cmd/helper/enhanced-version.ps1')
+foreach ($valid in @('2026-10-16.5','2024-02-29.65535','2000-01-01.1')) { Assert-EnhancedVersion $valid }
+foreach ($invalid in @('v0.1.2','2026-02-29.5','2026-04-31.5','2026-10-16.0','2026-10-16.65536','2026-10-16.05','0000-01-01.1','1999-12-31.1','2026-1-16.5','2026-10-16.5-preview','../2026-10-16.5')) {
+    $rejected = $false
+    try { Assert-EnhancedVersion $invalid } catch { $rejected = $true }
+    if (-not $rejected) { throw "Invalid release version accepted: $invalid" }
+}
+$history = @(for ($i = 1; $i -le 201; $i++) { @{ tag_name = "enhanced-2026-10-01.$i"; draft = $false } })
+$pagesJson = ConvertTo-Json -InputObject @($history[0..99],$history[100..199],@($history[200])) -Depth 5
+$pages = $pagesJson | ConvertFrom-Json
+$allReleases = @($pages | ForEach-Object { $_ })
+$allReleases += @{ tag_name = 'enhanced-2026-10-16.999'; draft = $true }
+$allReleases += @{ tag_name = 'markdown-fonts-v1'; draft = $false }
+Assert-EnhancedReleaseSequence '2026-10-16.202' $allReleases
+$rejected = $false
+try { Assert-EnhancedReleaseSequence '2026-10-16.101' $allReleases } catch { $rejected = $_.Exception.Message -match 'counter must be 202' }
+if (-not $rejected) { throw 'Release sequence was truncated or included unpublished/font releases' }
+Assert-EnhancedReleaseSequence '2026-10-16.3' @(@{ tag_name = 'enhanced-v0.1.0-preview.1'; draft = $false },@{ tag_name = 'enhanced-v0.1.1'; draft = $false })
 $savedRunnerTemp = $env:RUNNER_TEMP
 $savedRepo = $env:GH_REPO
 $env:RUNNER_TEMP = Join-Path $testRoot 'notes'
@@ -14,9 +44,18 @@ $env:GH_REPO = 'abelokoj/sumatrapdf-enhanced'
 New-Item -ItemType Directory -Path $env:RUNNER_TEMP | Out-Null
 $global:ReleasePackagingTestCommands = [Collections.Generic.List[object]]::new()
 $global:ReleasePackagingWrongTag = $false
+$global:ReleasePackagingBadSequence = $false
 function gh {
     if ($args[0] -eq 'release' -and $args[1] -eq 'view') { $global:LASTEXITCODE = 1; return }
     if ($args[0] -eq 'api') {
+        if ($args -contains '--paginate') {
+            if ($args -notcontains '--slurp') { throw 'Release sequence must include all pages' }
+            $counter = [int]$version.Split('.')[-1]
+            $history = @(for ($i = 1; $i -lt $counter; $i++) { @{ tag_name = "enhanced-2026-10-01.$i"; draft = $false } })
+            if ($global:ReleasePackagingBadSequence) { $history += @{ tag_name = "enhanced-2026-10-15.$counter"; draft = $false } }
+            $global:LASTEXITCODE = 0
+            return (ConvertTo-Json -InputObject @($history,@(@{ tag_name = "enhanced-$version"; draft = $true })) -Depth 5)
+        }
         if ($args -contains 'POST') { $global:ReleasePackagingTestCommands.Add(@($args)); $global:LASTEXITCODE = 0; return }
         if ($args[1] -match '/git/ref/tags/') { $global:LASTEXITCODE = 0; return (@{ object = @{ type = 'commit'; sha = $(if ($global:ReleasePackagingWrongTag) { 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } else { $source }) } } | ConvertTo-Json) }
         $assets = @(Get-ChildItem -LiteralPath $testRoot -File | ForEach-Object {
@@ -29,7 +68,7 @@ function gh {
     $global:LASTEXITCODE = 0
 }
 function Invoke-Publisher {
-    & (Join-Path $repoRoot 'cmd/publish-enhanced.ps1') -Version $version -PackageDirectory $testRoot -SourceCommit $source
+    & (Join-Path $fixtureRoot 'cmd/publish-enhanced.ps1') -Version $version -PackageDirectory $testRoot -SourceCommit $source
 }
 function Expect-Rejection([string]$pattern) {
     $global:ReleasePackagingTestCommands.Clear()
@@ -104,6 +143,9 @@ try {
     $env:GH_REPO = 'abelokoj/sumatrapdf'
     Expect-Rejection 'canonical Enhanced repository'
     $env:GH_REPO = 'abelokoj/sumatrapdf-enhanced'
+    $global:ReleasePackagingBadSequence = $true
+    Expect-Rejection 'release counter must be'
+    $global:ReleasePackagingBadSequence = $false
     $global:ReleasePackagingWrongTag = $true
     $held = $false
     try { Invoke-Publisher } catch { $held = $_.Exception.Message -match 'Release tag belongs to different source' }
@@ -119,7 +161,7 @@ try {
     if ($edit[1] -ne 'edit' -or $edit -notcontains '--draft=false') { throw 'Draft not promoted' }
     $notes = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'enhanced-public-release-notes.md') -Raw
     if ($notes -notmatch [Regex]::Escape($upstream.commit) -or $notes -notmatch [Regex]::Escape($upstream.commitDateUtc) -or $notes -notmatch 'unsigned') { throw 'Missing upstream source/date or unsigned status' }
-    $approved = (Get-Content -LiteralPath (Join-Path $repoRoot "docs/releases/$version.md") -Raw).Trim()
+    $approved = $fixtureNotes.Trim()
     $visible = [regex]::Replace($notes,'(?s)\s*<!-- enhanced-release-provenance.*?-->\s*$','').Trim()
     if ($visible -cne $approved) { throw 'Visible notes differ from the approved document' }
     if (-not $notes.Contains("Enhanced source: $source")) { throw 'Missing Enhanced source identity' }

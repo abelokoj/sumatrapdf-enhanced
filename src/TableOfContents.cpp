@@ -1163,7 +1163,8 @@ void LoadTocTree(MainWindow* win) {
         return;
     }
 
-    if (win->tocLoaded && win->tocTreeView && win->tocTreeView->treeModel) {
+    // An empty filtered result has no native model but is still loaded.
+    if (win->tocLoaded) {
         return;
     }
 
@@ -1219,7 +1220,10 @@ void RefreshTocTreeIfNeeded(MainWindow* win) {
     if (!p || HwndClientRect(p->hwnd).IsEmpty() || !HwndIsVisible(p->hwnd)) {
         return;
     }
-    win->tocTreeView->SetTreeModel(tab->currToc);
+    TreeView* treeView = win->tocTreeView;
+    if (treeView->treeModel && treeView->needsVisibleRebuild) {
+        treeView->SetTreeModel(treeView->treeModel);
+    }
 }
 
 static TocItem* FindTocItemByTitleAndPage(TocItem* item, Str title, int pageNo) {
@@ -1700,11 +1704,13 @@ static void ApplyTocFilter(MainWindow* win, Str filter) {
     if (!tab || !tab->currToc) {
         return;
     }
-    // free previous filtered tree
+    TreeView* treeView = win->tocTreeView;
+    // Remove native item pointers before freeing their filtered model.
+    treeView->Clear();
+    VecReset(win->tocMatchingItems);
     delete win->tocFilteredTree;
     win->tocFilteredTree = nullptr;
 
-    TreeView* treeView = win->tocTreeView;
     TocTree* origTree = tab->currToc;
 
     StrVec words;

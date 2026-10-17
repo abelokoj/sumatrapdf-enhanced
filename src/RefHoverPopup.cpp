@@ -125,6 +125,7 @@ static void RefHoverSelectVisible(RefHoverState* s) {
     s->selection = new TextSelection(s->hitEngine);
     s->selection->StartAt(s->displayed.destPage, first);
     s->selection->SelectUpTo(s->displayed.destPage, last + 1);
+    KillTimer(s->hwndCanvas, kRefHoverTimerID);
     KillTimer(s->hwndCanvas, kRefHoverHideTimerID);
     HwndInvalidate(s->hwndPopup, false);
 }
@@ -192,7 +193,8 @@ static void RefHoverDrawEdge(HDC hdc, HWND hwnd) {
     Gdiplus::Graphics gfx(hdc);
     gfx.SetPageUnit(Gdiplus::UnitPixel);
     gfx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    Gdiplus::Pen edge(Gdiplus::Color(255, 255, 0, 0), width);
+    Color edgeCol = ThemeEdgeColor();
+    Gdiplus::Pen edge(Gdiplus::Color(255, GetRValue(edgeCol), GetGValue(edgeCol), GetBValue(edgeCol)), width);
     if (diameter <= 0.f) {
         gfx.DrawRectangle(&edge, inset, inset, dx, dy);
         return;
@@ -263,7 +265,9 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     }
     if (msg == WM_PAINT) {
         PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
+        HDC paintDC = BeginPaint(hwnd, &ps);
+        DoubleBuffer buffer(hwnd, HwndClientRect(hwnd));
+        HDC hdc = buffer.GetDC();
 
         Color background =
             state && state->pageBackground != kColorUnset ? state->pageBackground : ThemeWindowControlBackgroundColor();
@@ -288,6 +292,7 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
 
         RefHoverPaintSelection(hdc, state);
         RefHoverDrawEdge(hdc, hwnd);
+        buffer.Flush(paintDC);
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -320,6 +325,7 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             state->selection->SelectUpTo(state->displayed.destPage, page.x, page.y);
         state->selectionPress = point;
         state->selecting = true;
+        KillTimer(state->hwndCanvas, kRefHoverTimerID);
         KillTimer(state->hwndCanvas, kRefHoverHideTimerID);
         SetFocus(hwnd);
         SetCapture(hwnd);
@@ -685,6 +691,14 @@ void RefHoverPopup_UnitTests() {
     utassert(state.displayed.destPage == 2 && state.renderGen == generation);
     SendMessageW(state.hwndPopup, WM_EXITSIZEMOVE, 0, 0);
     utassert(!state.resizing);
+    state.pending.destPage = -1;
+    state.selecting = true;
+    RefHoverSchedule(&state, canvas, 0, {120, 130}, 3, 0, 0, 1, 1, {10, 10, 20, 20}, {0, 0, 600, 500});
+    utassert(state.pending.destPage == -1);
+    utassert(RefHoverOnCanvasTimer(&state, canvas, nullptr, kRefHoverTimerID));
+    utassert(state.selecting);
+    state.selecting = false;
+    KillTimer(canvas, kRefHoverTimerID);
     DestroyWindow(state.hwndPopup);
     KillTimer(canvas, kRefHoverHideTimerID);
     DestroyWindow(canvas);

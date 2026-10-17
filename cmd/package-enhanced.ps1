@@ -1,8 +1,10 @@
 param(
     [ValidateSet('x64','arm64')][string]$Architecture = 'x64',
-    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '../enhanced-version.txt') -Raw).Trim()
+    [string]$Version = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '../enhanced-version.txt') -Raw).Trim()
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'helper/enhanced-version.ps1')
+Assert-EnhancedVersion $Version
 $repoDir = Split-Path $PSScriptRoot -Parent
 $binaryDir = Join-Path $repoDir $(if ($Architecture -eq 'arm64') { 'out/arm64' } else { 'out/rel64' })
 $stageDir = Join-Path $repoDir "dist/stage-$Architecture/SumatraPDF-Enhanced-$Version"
@@ -28,7 +30,9 @@ foreach ($name in @('SumatraPDF.exe','libsumatrapdf.dll','PdfFilter.dll','PdfPre
     if ([BitConverter]::ToUInt16($bytes,$offset + 4) -ne $machine) { throw "Wrong binary architecture: $name" }
     if ($name -in @('SumatraPDF.exe','SumatraPDF-static.exe')) {
         $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($source)
-        if ($info.ProductName -ne 'SumatraPDF Enhanced' -or $info.ProductVersion -ne $Version.TrimStart('v')) { throw "Product identity/version mismatch: $name" }
+        if ($info.ProductName -ne 'SumatraPDF Enhanced' -or $info.ProductVersion -ne $Version) { throw "Product identity/version mismatch: $name" }
+        $numeric = ($Version -split '[-.]' | ForEach-Object { [int]$_ }) -join '.'
+        if ("$($info.ProductMajorPart).$($info.ProductMinorPart).$($info.ProductBuildPart).$($info.ProductPrivatePart)" -ne $numeric -or "$($info.FileMajorPart).$($info.FileMinorPart).$($info.FileBuildPart).$($info.FilePrivatePart)" -ne $numeric) { throw "Numeric version mismatch: $name" }
     }
     $signature = Get-AuthenticodeSignature -LiteralPath $source
     if ($signature.Status -notin @('Valid','NotSigned')) { throw "Invalid Authenticode status: $name ($($signature.Status))" }

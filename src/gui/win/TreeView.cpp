@@ -333,6 +333,7 @@ static void CancelInProgressInteraction(HWND hwnd) {
 
 void TreeView::Clear() {
     treeModel = nullptr;
+    needsVisibleRebuild = false;
 
     HWND hwnd = this->hwnd;
     CancelInProgressInteraction(hwnd);
@@ -482,6 +483,7 @@ void TreeView::SetTreeModel(TreeModel* tm) {
         return;
     }
 
+    needsVisibleRebuild = !IsWindowVisible(hwnd) || HwndClientRect(hwnd).IsEmpty();
     CancelInProgressInteraction(hwnd);
     SuspendRedraw();
 

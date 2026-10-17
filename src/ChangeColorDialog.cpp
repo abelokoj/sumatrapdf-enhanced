@@ -905,10 +905,13 @@ void ChangeColorWnd::NotifyColorsArgs(CloseAction action) {
     }
     ChangeColorsArgs* args = colorsArgs;
     colorsArgs = nullptr;
+    Vec<Color> unshown;
+    for (int i = kMaxCustomColors; i < len(args->colors); i++) VecAppend(unshown, args->colors[i]);
     VecClear(args->colors);
     for (int i = 0; i < nCustom; i++) {
         VecAppend(args->colors, customColors[i]);
     }
+    for (Color color : unshown) VecAppend(args->colors, color);
     args->color = isCheckered ? kColorUnset : currentColor;
     args->didSelect = (action == CloseAction::Select);
     if (args->didSelect && withOpacity) args->opacityPercent = OpacityPercent(opacity);
@@ -1573,7 +1576,27 @@ static bool CheckCustomColorOpacity() {
     return true;
 }
 
+static void CapturePickerColors(Vec<Color>* result, ChangeColorsArgs* args) {
+    for (Color color : args->colors) VecAppend(*result, color);
+}
+
+static bool PickerPaletteOverflowTest() {
+    ChangeColorWnd wnd;
+    auto* args = new ChangeColorsArgs();
+    Vec<Color> result;
+    for (int i = 0; i < kMaxCustomColors + 5; i++) VecAppend(args->colors, MkRgb((u8)i, 83, 151));
+    args->onClose = MkFunc1(CapturePickerColors, &result);
+    wnd.SetTargetColors(args);
+    wnd.LoadColors();
+    wnd.customColorsChanged = true;
+    wnd.customColors[0] = kColRed;
+    wnd.NotifyColorsArgs(CloseAction::Select);
+    return len(result) == kMaxCustomColors + 5 && result[0] == kColRed &&
+           result[kMaxCustomColors + 4] == MkRgb(kMaxCustomColors + 4, 83, 151);
+}
+
 bool ChangeColor_UnitTestsOpacity() {
+    if (!PickerPaletteOverflowTest()) return false;
     if (!CheckCustomColorOpacity()) return false;
     OpacityPickerReply missingOwnerReply;
     auto* missingOwnerArgs = new ChangeColorsArgs();

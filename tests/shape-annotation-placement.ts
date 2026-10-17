@@ -11,6 +11,8 @@ import {
   clientToScreen,
   getClassName,
   getClientRect,
+  getWindowRect,
+  findTopWindow,
   getFocusedHwnd,
   getRootWindow,
   MK_LBUTTON,
@@ -36,6 +38,7 @@ import {
   killAndWait,
   launchControlled,
   scrollToolbarToCommand,
+  selectToolbarShape,
   pressEscape,
   sendCommand,
   sendCommandSync,
@@ -259,16 +262,7 @@ export async function testit(): Promise<void> {
 
     sendCommandSync(frame, cmdId("CmdToggleEditPDF"));
     const toolbar = findChildByClass(frame, "SUMATRA_VIRT_TOOLBAR");
-    const clickSquareToolbar = async () => {
-      const toolbarDump = await scrollToolbarToCommand(client, frame, "CmdCreateAnnotSquare");
-      const squareButton = toolbarButtonRect(toolbarDump, "CmdCreateAnnotSquare");
-      await clickAt(
-        toolbar,
-        squareButton.x + Math.floor(squareButton.dx / 2),
-        squareButton.y + Math.floor(squareButton.dy / 2),
-        0,
-      );
-    };
+    const clickSquareToolbar = () => selectToolbarShape(client, frame, proc.pid!, cmdId("CmdCreateAnnotSquare"));
 
     await clickSquareToolbar();
     let state = await waitForPlacement(client, true);

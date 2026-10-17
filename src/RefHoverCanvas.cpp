@@ -131,6 +131,10 @@ void RefHoverOnCanvasLeftButtonDown(RefHoverState* s, HWND hwndCanvas) {
 
 bool RefHoverOnCanvasTimer(RefHoverState* s, HWND hwndCanvas, DisplayModel* dm, UINT_PTR timerId) {
     if (timerId == kRefHoverTimerID) {
+        if (s && (s->resizing || s->selecting || RefHoverHasSelection(s))) {
+            KillTimer(hwndCanvas, kRefHoverTimerID);
+            return true;
+        }
         int destPage = s ? s->pending.destPage : -1;
         if (!dm || !dm->ValidPageNo(destPage)) {
             KillTimer(hwndCanvas, kRefHoverTimerID);

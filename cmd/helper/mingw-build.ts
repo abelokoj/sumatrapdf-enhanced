@@ -275,6 +275,8 @@ const sumatraFiles: FileGroup[] = [
       "MergePdf.*",
       "AnnotPlacement.*",
       "AnnotRecovery.*",
+      "AnnotationTransfer.*",
+      "AnnotationTransferDialog.*",
       "AnnotTextPopup.*",
       "AnnotEditToolbar.*",
       "AnnotFilterToolbar.*",
@@ -312,6 +314,7 @@ const sumatraFiles: FileGroup[] = [
       "MarkdownModel.*",
       "MarkdownToc.*",
       "MarkdownFonts.*",
+      "FileTypeIcons.*",
       "NavFilesInFolder.*",
       "SelectionTranslate.*",
       "GrokBuild.*",
@@ -622,7 +625,8 @@ void TestPreview(WStr) {}
   const rcObjAbsolute = join(process.cwd(), rcObj);
   // Create a modified .rc with forward slashes (macOS windres can't handle backslashes)
   const rcOriginal = await readFile("src/SumatraPDF.rc", "utf-8");
-  const rcFixed = rcOriginal.replace(/\\\\/g, "/");
+  const fileIcons = await readFile("src/gfx/filetype-icons.rcinc", "utf-8");
+  const rcFixed = rcOriginal.replace('#include "gfx/filetype-icons.rcinc"', fileIcons).replace(/\\\\/g, "/");
   const rcTmpPath = join(outDir, "obj", "sumatrapdf", "SumatraPDF_mingw.rc");
   await writeFile(rcTmpPath, rcFixed);
   const rcTmpAbsolute = join(process.cwd(), rcTmpPath);

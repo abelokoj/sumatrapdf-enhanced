@@ -2,6 +2,8 @@
 
 - [ ] Edit Markdown files directly within the app.
 - [ ] Create PDF notebooks for handwritten college or student notes.
+- [ ] Evaluate [gpui-kit-cpp](https://github.com/kjk/gpui-kit-cpp) in one isolated dialog before broader adoption. Compare visual consistency, scrolling responsiveness, keyboard access, startup time, and installer size with the current interface.
+- [x] Export PDF annotations and import them into a revised document, with page matching and review.
 
 # epub hyphenation
 

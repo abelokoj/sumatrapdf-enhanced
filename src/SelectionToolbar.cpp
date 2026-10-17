@@ -6,11 +6,13 @@
 #include "base/Win.h"
 #include "gui/Dpi.h"
 #include "base/Pixmap.h"
+#include "base/UITask.h"
 
 #include "gui/UIModels.h"
 #include "gui/Layout.h"
 #include "gui/win/WinGui.h"
 #include "gui/PlatformFont.h"
+#include "gui/PlatformWindow.h"
 #include "gui/Gfx.h"
 #include "gui/GuiColors.h"
 #include "gui/VirtCtrl.h"
@@ -21,6 +23,7 @@
 #include "EngineBase.h"
 #include "DisplayModel.h"
 #include "TextSelection.h"
+#include "Annotation.h"
 #include "SumatraPDF.h"
 #include "MainWindow.h"
 #include "WindowTab.h"
@@ -34,6 +37,7 @@
 #include "SvgIcons.h"
 #include "Toolbar.h"
 #include "Notifications.h"
+#include "Menu.h"
 #include "SelectionToolbar.h"
 
 #if IS_DEBUG
@@ -78,6 +82,7 @@ struct SelectionToolbar {
     PlatformFont* layoutFont = nullptr;
     int layoutIconSize = 0;
     int layoutDpi = 0;
+    int layoutWidth = 0;
     Color layoutBackground = kColorUnset;
     Color layoutForeground = kColorUnset;
     Color layoutMuted = kColorUnset;
@@ -88,9 +93,44 @@ struct SelectionToolbar {
     DWORD lastPositionUpdateTick = 0;
     // an action was picked for the current selection: stay hidden until it changes
     bool dismissed = false;
+    bool lassoMode = false;
+    Rect colorAnchor;
     Vec<SelectionToolbarButton> buttons;
     Func1List<MainWindow*> onWindowMoved;
 };
+
+constexpr int kLassoMoreId = CmdLast + 72;
+constexpr int kLassoPatternId = CmdLast + 73;
+constexpr int kLassoSmoothId = CmdLast + 74;
+
+static bool HasLassoSelection(MainWindow* win) {
+    if (!win || !win->annotationLasso.active) return false;
+    AnnotationLassoCanRotate(win);
+    return win->annotationLasso.tab == win->CurrentTab() && len(win->annotationLasso.selected) > 0;
+}
+
+static void InitLassoButtons(SelectionToolbar* tb, MainWindow* win) {
+    bool copy = AnnotationLassoCanCopy(win), color = false, width = false, dash = false, smooth = false;
+    for (auto* annot : win->annotationLasso.selected) {
+        color |= AnnotationSupportsColor(annot->type) || annot->type == AnnotationType::FreeText;
+        width |= AnnotationSupportsBorder(annot->type);
+        dash |= AnnotationSupportsDash(annot->type);
+        smooth |= annot->type == AnnotationType::Ink || annot->type == AnnotationType::PolyLine ||
+                  annot->type == AnnotationType::Polygon;
+    }
+    auto add = [&](int cmd, Str label, const char* icon = nullptr) {
+        VecAppend(tb->buttons, SelectionToolbarButton{cmd, label, {}, icon ? Str(icon) : Str{}});
+    };
+    if (copy) add(CmdCutAnnotation, TrN("Cut selected annotations (Ctrl+X)"));
+    if (copy) add(CmdLassoDuplicate, TrN("Duplicate selection"), gIconCopy);
+    if (color) add(CmdLassoRecolor, TrN("Selection color"), GetColorPickerIconSvg());
+    if (width) add(CmdLassoThinner, TrN("Thinner strokes"));
+    if (width) add(CmdLassoThicker, TrN("Thicker strokes"));
+    if (smooth) add(kLassoSmoothId, TrN("Smooth selected strokes"));
+    if (dash) add(kLassoPatternId, TrN("Line pattern: solid, dashed or dotted"));
+    if (copy || AnnotationLassoCanRotate(win)) add(kLassoMoreId, TrN("More selection actions"));
+    add(CmdLassoDelete, TrN("Delete selected annotations"), gIconTrash);
+}
 
 // candidate buttons; per-window visibility/enabled state comes from
 // GetCommandVisibility (hidden buttons are dropped, disabled ones grayed)
@@ -222,6 +262,11 @@ static void NormalizeSelectionToolbarSeparators(Vec<SelectionToolbarButton>& but
 static void InitButtons(SelectionToolbar* tb, MainWindow* win) {
     AppCommandCtx ctx = NewAppCommandCtx(win);
     VecReset(tb->buttons);
+    tb->lassoMode = HasLassoSelection(win);
+    if (tb->lassoMode) {
+        InitLassoButtons(tb, win);
+        return;
+    }
     Vec<int> ids;
     CollectBuiltInSelectionToolbarCmds(ids);
     for (int i = 0; i < len(ids); i++) {
@@ -257,7 +302,8 @@ constexpr DWORD kSelTbPositionUpdateMinMs = 32;
 
 static bool IsActivelySelecting(MainWindow* win) {
     MouseAction ma = win->mouseAction;
-    return ma == MouseAction::Selecting || ma == MouseAction::SelectingText;
+    return ma == MouseAction::Selecting || ma == MouseAction::SelectingText || win->annotationLasso.drawing ||
+           win->annotationLasso.transforming;
 }
 
 static int SelectionBoundsSlack() {
@@ -348,6 +394,7 @@ struct SelToolbarTextButton : VirtButton {
 };
 
 struct SelToolbarIconButton : VirtIconButton {
+    int nativeIcon = 0;
     SelToolbarIconButton() {
         SetColor(kColIconBtnBgHover, kColorTransparent);
         SetColor(kColIconBtnBgSelected, kColorTransparent);
@@ -358,6 +405,45 @@ struct SelToolbarIconButton : VirtIconButton {
             ctx.gfx->FillRoundedRect(ctx.bounds, radius, hoverBg);
         }
         VirtIconButton::Paint(ctx);
+        if (!nativeIcon) return;
+        Color color = IsEnabled() ? SelBarTextColor() : SelBarMutedTextColor();
+        int size = ToolbarIconSize();
+        int x = ctx.bounds.x + (ctx.bounds.dx - size) / 2, y = ctx.bounds.y + (ctx.bounds.dy - size) / 2;
+        auto point = [&](float px, float py) {
+            return Point{x + (int)roundf(px * size / 24), y + (int)roundf(py * size / 24)};
+        };
+        auto line = [&](Point a, Point b, float width = 1.75f) { ctx.gfx->DrawLineAA(a, b, color, width * size / 24); };
+        if (nativeIcon == kLassoMoreId) {
+            int dot = std::max(2, size / 8);
+            for (int px : {5, 12, 19}) {
+                Point p = point((float)px, 12);
+                ctx.gfx->FillEllipse({p.x - dot / 2, p.y - dot / 2, dot, dot}, color);
+            }
+        } else if (nativeIcon == kLassoPatternId) {
+            for (int px : {3, 10, 17}) line(point((float)px, 12), point((float)px + 4, 12));
+        } else if (nativeIcon == kLassoSmoothId) {
+            Point previous = point(2, 14);
+            for (int i = 1; i <= 20; i++) {
+                float px = 2.f + i;
+                float py = 12.f + 5.f * sinf(px * 3.14159265f / 10.f);
+                Point next = point(px, py);
+                line(previous, next);
+                previous = next;
+            }
+        } else if (nativeIcon == CmdCutAnnotation) {
+            int diameter = std::max(2, size / 4);
+            for (int py : {7, 17}) {
+                Point p = point(6, (float)py);
+                ctx.gfx->FillRoundedRect({p.x - diameter / 2, p.y - diameter / 2, diameter, diameter}, diameter / 2,
+                                         kColorTransparent, color, 1.75f * size / 24);
+            }
+            line(point(8, 9), point(21, 21));
+            line(point(8, 15), point(21, 3));
+        } else {
+            line(point(4, 17), point(20, 17), nativeIcon == CmdLassoThinner ? 1.2f : 3.5f);
+            line(point(8, 7), point(16, 7));
+            if (nativeIcon == CmdLassoThicker) line(point(12, 3), point(12, 11));
+        }
     }
     // square, as tall as the row: the icon is centered in it
     Size GetIdealSize() override { return {sideLen, sideLen}; }
@@ -386,6 +472,65 @@ static VirtCtrl* MakeSelectionToolbarSeparator(int rowDy) {
 
 static bool GetSelectionEndPoint(MainWindow* win, Point& out);
 
+static void LassoColorPicked(MainWindow* win, Color color) {
+    if (!IsMainWindowValidAndNotClosing(win)) return;
+    RecolorAnnotationLasso(win, color);
+}
+
+static void OpenLassoColor(MainWindow* win) {
+    if (!IsMainWindowValidAndNotClosing(win) || !HasLassoSelection(win) || !win->selectionToolbar) return;
+    Annotation* annot = win->annotationLasso.selected[0];
+    PdfColor current = annot->type == AnnotationType::FreeText ? DefaultAppearanceTextColor(annot) : GetColor(annot);
+    u8 r, g, b, alpha;
+    UnpackPdfColor(current, r, g, b, alpha);
+    ShowAnnotColorPopup(win, win->selectionToolbar->colorAnchor, MkRgb(r, g, b), false, Tr("Selection color"),
+                        MkFunc1(LassoColorPicked, win));
+}
+
+static void ShowLassoMore(SelectionToolbar* tb) {
+    auto* win = tb->win;
+    HMENU menu = CreatePopupMenu();
+    if (AnnotationLassoCanCopy(win)) AppendMenuW(menu, MF_STRING, CmdCopyAnnotation, CWStrTemp(Tr("Copy selection")));
+    if (AnnotationLassoCanRotate(win)) {
+        AppendMenuW(menu, MF_STRING, CmdLassoRotateLeft, CWStrTemp(Tr("Rotate selection left")));
+        AppendMenuW(menu, MF_STRING, CmdLassoRotateRight, CWStrTemp(Tr("Rotate selection right")));
+    }
+    MarkMenuOwnerDraw(menu);
+    Rect anchor = tb->host->ScreenRect();
+    int picked =
+        TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, anchor.x, anchor.Bottom(), 0, win->hwndFrame, nullptr);
+    FreeMenuOwnerDrawInfoData(menu);
+    DestroyMenu(menu);
+    if (picked && IsMainWindowValidAndNotClosing(win)) HwndPostCommand(win->hwndFrame, picked);
+}
+
+static void ShowLassoPattern(SelectionToolbar* tb) {
+    auto* win = tb->win;
+    HMENU menu = CreatePopupMenu();
+    const Str labels[] = {Tr("Solid line"), Tr("Dashed line"), Tr("Dotted line")};
+    int current = -1;
+    bool first = true;
+    for (auto* annot : win->annotationLasso.selected) {
+        if (!AnnotationSupportsDash(annot->type)) continue;
+        int pattern = (int)BorderLinePattern(annot);
+        if (first)
+            current = pattern;
+        else if (current != pattern)
+            current = -1;
+        first = false;
+    }
+    for (int i = 0; i < dimof(labels); i++)
+        AppendMenuW(menu, MF_STRING | (current == i ? MF_CHECKED : 0), i + 1, CWStrTemp(labels[i]));
+    MarkMenuOwnerDraw(menu);
+    Rect anchor = tb->host->ScreenRect();
+    int picked =
+        TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, anchor.x, anchor.Bottom(), 0, win->hwndFrame, nullptr);
+    FreeMenuOwnerDrawInfoData(menu);
+    DestroyMenu(menu);
+    if (picked && IsMainWindowValidAndNotClosing(win))
+        SetAnnotationLassoPattern(win, (AnnotationLinePattern)(picked - 1));
+}
+
 // The toolbar has done its job once an action is picked, so hide it until the
 // selection changes. Sticky-note placement records the selection end first,
 // because the command drops the selection.
@@ -394,6 +539,24 @@ static void InvokeSelectionToolbarCommand(SelectionToolbar* tb, int cmdId) {
         return;
     }
     MainWindow* win = tb->win;
+    if (tb->lassoMode) {
+        if (!HasLassoSelection(win)) return;
+        if (cmdId == kLassoMoreId) {
+            ShowLassoMore(tb);
+        } else if (cmdId == kLassoPatternId) {
+            ShowLassoPattern(tb);
+        } else if (cmdId == kLassoSmoothId) {
+            SmoothAnnotationLasso(win);
+        } else if (cmdId == CmdLassoRecolor) {
+            tb->colorAnchor = tb->host->ScreenRect();
+            HideSelectionToolbar(win);
+            tb->dismissed = true;
+            uitask::Post(MkFunc0(OpenLassoColor, win), "Lasso selection color");
+        } else {
+            HwndPostCommand(win->hwndFrame, cmdId);
+        }
+        return;
+    }
     LPARAM commandPoint = 0;
     if (cmdId == CmdCreateAnnotText) {
         Point selectionEnd;
@@ -437,7 +600,7 @@ static void OnSelToolbarButtonClicked(SelectionToolbar* tb, VirtMouseEvent* ev) 
 static void LayoutToolbar(SelectionToolbar* tb) {
     int padX = DpiScale(kBtnPadX);
     int padY = DpiScale(kBtnPadY);
-    int margin = DpiScale(kMargin);
+    int margin = DpiScale(tb->lassoMode ? 3 : kMargin);
     int gap = DpiScale(kBtnGap);
 
     Color bgCol = SelBarBg();
@@ -450,19 +613,36 @@ static void LayoutToolbar(SelectionToolbar* tb) {
     int rowDy = std::max(textDy, iconSize) + (2 * padY);
     UpdateButtonIcons(tb, iconSize);
 
+    auto* rows = new VBox();
+    rows->gap = gap;
     auto* box = new HBox();
     box->alignCross = CrossAxisAlign::Stretch;
+    int maxColumns = len(tb->buttons);
+    if (tb->lassoMode) {
+        Rect work = PlatformWindowWorkArea(tb->win->hwndFrame);
+        int available = std::max(1, std::min(tb->win->canvasRc.dx, work.dx) - 2 * margin);
+        maxColumns = std::max(1, available / (rowDy + gap));
+    }
+    int column = 0;
     bool isFirst = true;
     for (SelectionToolbarButton& b : tb->buttons) {
+        if (tb->lassoMode && column == maxColumns) {
+            rows->AddChild(box);
+            box = new HBox();
+            box->alignCross = CrossAxisAlign::Stretch;
+            column = 0;
+            isFirst = true;
+        }
         VirtCtrl* w;
         if (b.cmdId == 0) {
             w = MakeSelectionToolbarSeparator(rowDy);
-        } else if (b.svgIcon) {
+        } else if (b.svgIcon || tb->lassoMode) {
             auto* ib = new SelToolbarIconButton();
             ib->pixmap = b.icon;
             ib->pixmapDisabled = b.iconDisabled;
             ib->sideLen = rowDy;
             ib->hoverBg = hoverBg;
+            if (len(b.svgIcon) == 0) ib->nativeIcon = b.cmdId;
             ib->SetTooltip(ButtonLabel(b));
             ib->onClick = MkFunc1(OnSelToolbarButtonClicked, tb);
             w = ib;
@@ -486,12 +666,15 @@ static void LayoutToolbar(SelectionToolbar* tb) {
         }
         isFirst = false;
         box->AddChild(child);
+        column++;
     }
-    auto* content = new Padding(box, Insets{margin, margin, margin, margin});
+    rows->AddChild(box);
+    auto* content = new Padding(rows, Insets{margin, margin, margin, margin});
     tb->size = tb->host->SetLayoutSizedToContent(content);
     tb->layoutFont = tb->font;
     tb->layoutIconSize = iconSize;
     tb->layoutDpi = DpiGet();
+    tb->layoutWidth = tb->lassoMode ? tb->win->canvasRc.dx : 0;
     tb->layoutBackground = bgCol;
     tb->layoutForeground = textCol;
     tb->layoutMuted = mutedCol;
@@ -502,10 +685,11 @@ static bool RefreshToolbarButtons(SelectionToolbar* tb, MainWindow* win) {
     tb->font = GetScaledPlatformFont(GetAppFont(), kToolbarFontPct);
     SelectionToolbar next;
     InitButtons(&next, win);
-    bool same = tb->host->layout && len(tb->buttons) == len(next.buttons) && tb->layoutFont == tb->font &&
-                tb->layoutIconSize == ToolbarIconSize() && tb->layoutDpi == DpiGet() &&
-                tb->layoutBackground == SelBarBg() && tb->layoutForeground == SelBarTextColor() &&
-                tb->layoutMuted == SelBarMutedTextColor() && tb->layoutHover == SelBarHoverBg(SelBarBg());
+    bool same = tb->host->layout && tb->lassoMode == next.lassoMode && len(tb->buttons) == len(next.buttons) &&
+                tb->layoutFont == tb->font && tb->layoutIconSize == ToolbarIconSize() && tb->layoutDpi == DpiGet() &&
+                tb->layoutWidth == (next.lassoMode ? win->canvasRc.dx : 0) && tb->layoutBackground == SelBarBg() &&
+                tb->layoutForeground == SelBarTextColor() && tb->layoutMuted == SelBarMutedTextColor() &&
+                tb->layoutHover == SelBarHoverBg(SelBarBg());
     for (int i = 0; same && i < len(next.buttons); i++) {
         const auto& old = tb->buttons[i];
         const auto& current = next.buttons[i];
@@ -513,6 +697,7 @@ static bool RefreshToolbarButtons(SelectionToolbar* tb, MainWindow* win) {
                str::Eq(old.userLabel, current.userLabel) && str::Eq(old.svgIcon, current.svgIcon);
     }
     if (same) return false;
+    tb->lassoMode = next.lassoMode;
     VecReset(tb->buttons);
     for (const auto& button : next.buttons) VecAppend(tb->buttons, button);
     LayoutToolbar(tb);
@@ -523,9 +708,16 @@ static bool RefreshToolbarButtons(SelectionToolbar* tb, MainWindow* win) {
 // Ported from dengxibo/sumatrapdf-plus 89e4edfed.
 static bool GetSelectionEndPoint(MainWindow* win, Point& out) {
     DisplayModel* dm = win->AsFixed();
-    if (!dm || !dm->textSelection || dm->textSelection->result.len <= 0) {
+    if (!dm || !dm->textSelection) {
         return false;
     }
+    if (IsRectangularSelection(win)) {
+        Rect bounds = GetRectangularSelectionScreenRect(win);
+        if (bounds.IsEmpty()) return false;
+        out = {bounds.Right(), bounds.Bottom()};
+        return true;
+    }
+    if (dm->textSelection->result.len <= 0) return false;
     TextSel& result = dm->textSelection->result;
     int i = result.len - 1;
     Rect r = dm->CvtToScreen(result.pages[i], ToRectF(result.rects[i]));
@@ -549,6 +741,10 @@ static bool GetSelectionBounds(MainWindow* win, Rect& out) {
     DisplayModel* dm = win->AsFixed();
     if (!dm) {
         return false;
+    }
+    if (HasLassoSelection(win)) {
+        out = dm->CvtToScreen(win->annotationLasso.pageNo, win->annotationLasso.bounds).Intersect(win->canvasRc);
+        return !out.IsEmpty();
     }
     WindowTab* tab = win->CurrentTab();
     if (!tab || !tab->selectionOnPage) {
@@ -684,7 +880,7 @@ TempStr SelectionToolbarLayoutDumpTemp() {
                    tb->size.dx, tb->size.dy, ToolbarIconSize()));
     for (int i = 0; i < len(tb->buttons); i++) {
         const SelectionToolbarButton& b = tb->buttons[i];
-        Str kind = b.cmdId == 0 ? StrL("separator") : (b.svgIcon ? StrL("icon") : StrL("text"));
+        Str kind = b.cmdId == 0 ? StrL("separator") : ((b.svgIcon || tb->lassoMode) ? StrL("icon") : StrL("text"));
         int iconDx = b.icon ? b.icon->width : 0;
         int iconDy = b.icon ? b.icon->height : 0;
         out.Append(
@@ -708,7 +904,14 @@ TempStr SelectionToolbarClickTemp(Str cmdName, int* exitCodeOut) {
     if (!tb || !tb->host || !tb->host->IsVisible()) {
         return finish(StrL("ERROR toolbar-not-visible\n"), 1);
     }
-    int cmdId = GetCommandIdByName(cmdName);
+    int cmdId = str::Eq(cmdName, StrL("Smooth")) ? kLassoSmoothId : GetCommandIdByName(cmdName);
+    if (str::Eq(cmdName, StrL("Solid")) || str::Eq(cmdName, StrL("Dashed")) || str::Eq(cmdName, StrL("Dotted"))) {
+        AnnotationLinePattern pattern = str::Eq(cmdName, StrL("Solid"))    ? AnnotationLinePattern::Solid
+                                        : str::Eq(cmdName, StrL("Dashed")) ? AnnotationLinePattern::Dashed
+                                                                           : AnnotationLinePattern::Dotted;
+        SetAnnotationLassoPattern(win, pattern);
+        return finish(StrL("OK\n"), 0);
+    }
     if (cmdId <= 0) {
         return finish(fmt("ERROR unknown-cmd %s\n", cmdName), 1);
     }
@@ -730,7 +933,7 @@ TempStr SelectionToolbarClickTemp(Str cmdName, int* exitCodeOut) {
 // nothing if the feature is disabled (Annotations.SelectionToolbar) or there
 // is no on-screen text selection in a fixed-page document.
 static void ShowSelectionToolbarNow(MainWindow* win) {
-    if (!win || !gSettings->selectionToolbar) {
+    if (!win || (!gSettings->selectionToolbar && !HasLassoSelection(win))) {
         return;
     }
     // Do not check IsActivelySelecting here: OnSelectionStop schedules the show
@@ -742,7 +945,7 @@ static void ShowSelectionToolbarNow(MainWindow* win) {
     if (!dm) {
         return;
     }
-    if (dm->textSelection->result.len <= 0) {
+    if (!HasLassoSelection(win) && dm->textSelection->result.len <= 0 && !IsRectangularSelection(win)) {
         return;
     }
     Rect sel;
@@ -785,7 +988,7 @@ static void CancelPendingShow(MainWindow* win) {
 // of pushing it back, so a stream of canvas repaints (UpdateSelectionToolbarPosition
 // asks on every one) can't starve the timer.
 void ShowSelectionToolbar(MainWindow* win, SelToolbarShow when) {
-    if (!win || !win->hwndCanvas || !gSettings->selectionToolbar) {
+    if (!win || !win->hwndCanvas || (!gSettings->selectionToolbar && !HasLassoSelection(win))) {
         return;
     }
     if (win->selectionToolbar && win->selectionToolbar->dismissed) {
@@ -801,6 +1004,12 @@ void ShowSelectionToolbar(MainWindow* win, SelToolbarShow when) {
     }
     win->selectionToolbarShowPending = true;
     SetTimer(win->hwndCanvas, kSelectionToolbarShowTimerID, kSelectionToolbarShowDelayInMs, nullptr);
+}
+
+void ShowLassoSelectionToolbar(MainWindow* win) {
+    if (!HasLassoSelection(win)) return;
+    ResetSelectionToolbarDismissed(win);
+    ShowSelectionToolbar(win, SelToolbarShow::Now);
 }
 
 // fired by kSelectionToolbarShowTimerID
@@ -834,7 +1043,7 @@ void UpdateSelectionToolbarPosition(MainWindow* win) {
     }
     SelectionToolbar* tb = win->selectionToolbar;
     if (!tb || !tb->host || !tb->host->IsVisible()) {
-        if (win->showSelection) {
+        if (win->showSelection || HasLassoSelection(win)) {
             ShowSelectionToolbar(win, SelToolbarShow::Settled);
         }
         return;
@@ -858,6 +1067,10 @@ void UpdateSelectionToolbarPosition(MainWindow* win) {
     // on this path; those are what jittered the bar (plus 3229c8b2c).
     int slack = SelectionBoundsSlack();
     if (!SelectionBoundsChanged(sel, tb->lastSelBounds, slack)) {
+        if (tb->lassoMode && tb->layoutWidth != win->canvasRc.dx) {
+            RefreshToolbarButtons(tb, win);
+            tb->host->Invalidate(false);
+        }
         PositionToolbar(tb, sel);
         return;
     }

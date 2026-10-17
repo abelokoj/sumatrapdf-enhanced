@@ -106,3 +106,6 @@ struct Print_Advanced_Data {
 };
 
 HPROPSHEETPAGE CreatePrintAdvancedPropSheet(Print_Advanced_Data* data);
+#if IS_DEBUG
+void AdvancedAppearancePreviewTest();
+#endif

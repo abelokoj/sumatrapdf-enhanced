@@ -34,10 +34,12 @@ function fontCombo(pid: number): { window: number; combo: number } {
     // Materialize lazy native fields through their normal accessibility entry point.
     sendMessage(window, 0x003d, 0, -25);
     enumChildWindows(window, (combo) => {
-      if (getClassName(combo) !== "ComboBox" || Number(sendMessage(combo, CB_GETCOUNT, 0, 0)) !== 10) return true;
+      if (getClassName(combo) !== "ComboBox") return true;
       const text = new Uint16Array(256);
-      const count = Number(sendMessage(combo, CB_GETLBTEXT, 1, ptr(text)));
-      if (String.fromCharCode(...text.subarray(0, count)) !== "Lora") return true;
+      const count = Number(sendMessage(combo, CB_GETLBTEXT, 0, ptr(text)));
+      if (String.fromCharCode(...text.subarray(0, count)) !== "Follow interface font") return true;
+      const sectionCount = Number(sendMessage(combo, CB_GETLBTEXT, 1, ptr(text)));
+      if (String.fromCharCode(...text.subarray(0, sectionCount)) !== "Downloadable fonts") return true;
       result = { window, combo };
       return false;
     });
@@ -73,7 +75,7 @@ async function chooseFont(pid: number, frame: number): Promise<{ window: number;
     (result) => !!result.combo,
     { error: "font dropdown did not appear" },
   );
-  sendMessage(controls.combo, CB_SETCURSEL, 1, 0);
+  sendMessage(controls.combo, CB_SETCURSEL, 2, 0);
   postMessage(controls.window, WM_KEYDOWN, VK_RETURN, 0);
   return controls;
 }

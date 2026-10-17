@@ -200,6 +200,8 @@ void SetFullscreenToolbarMode(int mode);
 // toolbar position values: "top\0bottom\0"
 constexpr int kToolbarTop = 0;
 constexpr int kToolbarBottom = 1;
+constexpr int kToolbarLeft = 2;
+constexpr int kToolbarRight = 3;
 extern SeqStrings gToolbarPositionNames;
 int ToolbarPositionFromPrefs();
 bool ToolbarAtBottom();
@@ -208,6 +210,7 @@ void ReloadDocument(MainWindow* win, bool autoRefresh, bool canAskForPassword = 
 bool AutoReloadFileStillChanging(WindowTab* tab);
 void DeleteControllerAsync(DocController* ctrl);
 void ToggleFullScreen(MainWindow* win, bool presentation = false);
+void ToggleAnnotationMode(MainWindow* win);
 
 // flags for ScheduleUiUpdate
 // relayout unless nothing layout-affecting changed (RelayoutFrame compares

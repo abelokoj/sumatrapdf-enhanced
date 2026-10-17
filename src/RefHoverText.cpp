@@ -29,13 +29,14 @@ TempWStr RefHoverPageTextToWStrTemp(Str text) {
 }
 
 // === Plain-text citation lookup cache ===
-// Keyed by (surname, year, srcPage) so the same citation hovered repeatedly
+// Keyed by (surname, year, srcPage, srcRect) so the same citation hovered repeatedly
 // is resolved instantly. Negative results (citation not found) are also
 // cached to avoid re-scanning the document on each hover.
 struct CitationCacheEntry {
     Str surname; // owned UTF-8
     int year;
-    int srcPage;  // page where the lookup was issued (so cap at srcPage works per-page)
+    int srcPage; // page where the lookup was issued (so cap at srcPage works per-page)
+    Rect srcRect;
     int destPage; // -1 if not found
     float destX;
     float destY;
@@ -45,20 +46,21 @@ struct RefLookupCache {
     Vec<CitationCacheEntry> entries;
 };
 
-static const CitationCacheEntry* CacheLookup(RefLookupCache* c, Str surname, int year, int srcPage) {
+static const CitationCacheEntry* CacheLookup(RefLookupCache* c, Str surname, int year, int srcPage, Rect srcRect) {
     if (!c) {
         return nullptr;
     }
     for (int i = 0; i < len(c->entries); i++) {
         const CitationCacheEntry& e = c->entries[i];
-        if (e.year == year && e.srcPage == srcPage && str::Eq(e.surname, surname)) {
+        if (e.year == year && e.srcPage == srcPage && e.srcRect == srcRect && str::Eq(e.surname, surname)) {
             return &e;
         }
     }
     return nullptr;
 }
 
-static void CacheInsert(RefLookupCache* c, Str surname, int year, int srcPage, int destPage, float destX, float destY) {
+static void CacheInsert(RefLookupCache* c, Str surname, int year, int srcPage, Rect srcRect, int destPage, float destX,
+                        float destY) {
     if (!c) {
         return;
     }
@@ -66,6 +68,7 @@ static void CacheInsert(RefLookupCache* c, Str surname, int year, int srcPage, i
     e.surname = str::Dup(surname);
     e.year = year;
     e.srcPage = srcPage;
+    e.srcRect = srcRect;
     e.destPage = destPage;
     e.destX = destX;
     e.destY = destY;
@@ -118,8 +121,8 @@ static bool DetectCitationAtCursor(EngineBase* engine, int srcPage, Point pagePo
 
 // Walk pages from pageCount → srcPage looking for a bibliography entry that
 // matches the surname + year. Returns true on hit.
-static bool FindReferenceLocation(EngineBase* engine, int srcPage, Str surname, int year, int* destPageOut,
-                                  float* destXOut, float* destYOut) {
+static bool FindReferenceLocation(EngineBase* engine, int srcPage, Rect srcRect, Str surname, int year,
+                                  int* destPageOut, float* destXOut, float* destYOut) {
     if (!engine || len(surname) == 0) {
         return false;
     }
@@ -140,7 +143,7 @@ static bool FindReferenceLocation(EngineBase* engine, int srcPage, Str surname, 
         Str textUtf8 = engine->GetTextForPage(p, &textLen, &coords);
         TempWStr text = RefHoverPageTextToWStrTemp(textUtf8);
         float x = 0, y = 0;
-        if (FindSurnameInPageText(text, coords, textLen, surnameW, year, &x, &y)) {
+        if (FindSurnameInPageText(text, coords, textLen, surnameW, year, &x, &y, p == srcPage ? srcRect : Rect{})) {
             *destPageOut = p;
             *destXOut = x;
             *destYOut = y;
@@ -153,9 +156,9 @@ static bool FindReferenceLocation(EngineBase* engine, int srcPage, Str surname, 
 
 // Look up `surname` in the cache; on miss, do a fresh document scan and
 // insert the result (positive or negative). Returns true on positive hit.
-static bool LookupOrSearch(RefHoverState* s, EngineBase* engine, int srcPage, Str surname, int year, int& destPageOut,
-                           float& destXOut, float& destYOut) {
-    const CitationCacheEntry* hit = CacheLookup(s->lookupCache, surname, year, srcPage);
+static bool LookupOrSearch(RefHoverState* s, EngineBase* engine, int srcPage, Rect srcRect, Str surname, int year,
+                           int& destPageOut, float& destXOut, float& destYOut) {
+    const CitationCacheEntry* hit = CacheLookup(s->lookupCache, surname, year, srcPage, srcRect);
     if (hit) {
         if (hit->destPage > 0) {
             destPageOut = hit->destPage;
@@ -167,14 +170,14 @@ static bool LookupOrSearch(RefHoverState* s, EngineBase* engine, int srcPage, St
     }
     int destPage = -1;
     float destX = -1.f, destY = -1.f;
-    if (FindReferenceLocation(engine, srcPage, surname, year, &destPage, &destX, &destY)) {
-        CacheInsert(s->lookupCache, surname, year, srcPage, destPage, destX, destY);
+    if (FindReferenceLocation(engine, srcPage, srcRect, surname, year, &destPage, &destX, &destY)) {
+        CacheInsert(s->lookupCache, surname, year, srcPage, srcRect, destPage, destX, destY);
         destPageOut = destPage;
         destXOut = destX;
         destYOut = destY;
         return true;
     }
-    CacheInsert(s->lookupCache, surname, year, srcPage, -1, 0.f, 0.f);
+    CacheInsert(s->lookupCache, surname, year, srcPage, srcRect, -1, 0.f, 0.f);
     return false;
 }
 
@@ -182,10 +185,10 @@ static bool LookupOrSearch(RefHoverState* s, EngineBase* engine, int srcPage, St
 // citations, using a pseudo-surname "[N]" and year=num so the two keyspaces
 // never collide. On miss, scans pages pageCount → srcPage for a reference list
 // line starting with "[num]".
-static bool LookupOrSearchNumeric(RefHoverState* s, EngineBase* engine, int srcPage, int num, int& destPageOut,
-                                  float& destXOut, float& destYOut) {
+static bool LookupOrSearchNumeric(RefHoverState* s, EngineBase* engine, int srcPage, Rect srcRect, int num,
+                                  int& destPageOut, float& destXOut, float& destYOut) {
     TempStr key = fmt("[%d]", num);
-    const CitationCacheEntry* hit = CacheLookup(s->lookupCache, key, num, srcPage);
+    const CitationCacheEntry* hit = CacheLookup(s->lookupCache, key, num, srcPage, srcRect);
     if (hit) {
         if (hit->destPage > 0) {
             destPageOut = hit->destPage;
@@ -208,7 +211,7 @@ static bool LookupOrSearchNumeric(RefHoverState* s, EngineBase* engine, int srcP
         Str textUtf8 = engine->GetTextForPage(p, &textLen, &coords);
         TempWStr text = RefHoverPageTextToWStrTemp(textUtf8);
         float x = 0, y = 0;
-        if (FindNumericReferenceInPageText(text, coords, textLen, num, &x, &y)) {
+        if (FindNumericReferenceInPageText(text, coords, textLen, num, &x, &y, p == srcPage ? srcRect : Rect{})) {
             destPage = p;
             destX = x;
             destY = y;
@@ -217,13 +220,13 @@ static bool LookupOrSearchNumeric(RefHoverState* s, EngineBase* engine, int srcP
         }
     }
     if (found) {
-        CacheInsert(s->lookupCache, key, num, srcPage, destPage, destX, destY);
+        CacheInsert(s->lookupCache, key, num, srcPage, srcRect, destPage, destX, destY);
         destPageOut = destPage;
         destXOut = destX;
         destYOut = destY;
         return true;
     }
-    CacheInsert(s->lookupCache, key, num, srcPage, -1, 0.f, 0.f);
+    CacheInsert(s->lookupCache, key, num, srcPage, srcRect, -1, 0.f, 0.f);
     return false;
 }
 
@@ -256,7 +259,7 @@ bool RefHoverTryPlainText(RefHoverState* s, EngineBase* engine, int srcPage, Poi
         TempWStr text = RefHoverPageTextToWStrTemp(textUtf8);
         int num = 0;
         if (DetectNumericCitationInPageText(text, coords, textLen, pagePos, &num, &srcRect)) {
-            if (LookupOrSearchNumeric(s, engine, srcPage, num, destPageOut, destXOut, destYOut)) {
+            if (LookupOrSearchNumeric(s, engine, srcPage, srcRect, num, destPageOut, destXOut, destYOut)) {
                 srcRectOut = RectF{(float)srcRect.x, (float)srcRect.y, (float)srcRect.dx, (float)srcRect.dy};
                 return true;
             }
@@ -268,7 +271,7 @@ bool RefHoverTryPlainText(RefHoverState* s, EngineBase* engine, int srcPage, Poi
         return false;
     }
 
-    bool result = LookupOrSearch(s, engine, srcPage, cite.surname, cite.year, destPageOut, destXOut, destYOut);
+    bool result = LookupOrSearch(s, engine, srcPage, srcRect, cite.surname, cite.year, destPageOut, destXOut, destYOut);
 
     // Fallback: if surname has multiple space-separated parts and the full
     // form didn't match, try each part as a prefix in descending-length
@@ -313,7 +316,8 @@ bool RefHoverTryPlainText(RefHoverState* s, EngineBase* engine, int srcPage, Poi
             }
         }
         for (int i = 0; i < nParts && !result; i++) {
-            result = LookupOrSearch(s, engine, srcPage, parts[i].s, cite.year, destPageOut, destXOut, destYOut);
+            result =
+                LookupOrSearch(s, engine, srcPage, srcRect, parts[i].s, cite.year, destPageOut, destXOut, destYOut);
         }
     }
 

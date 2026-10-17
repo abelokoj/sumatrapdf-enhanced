@@ -14,6 +14,8 @@
 
 import { cmdId, drainProcStderr, EXE, setFailureContext, SLOW_BUILD_FACTOR } from "./util.ts";
 import {
+  findTopWindow,
+  isWindowVisible,
   testWindowPos,
   waitForWindowIdle,
   enumWindows,
@@ -531,4 +533,59 @@ export function findSubMenu(items: MenuItem[], label: string): MenuItem | null {
     }
   }
   return null;
+}
+
+export async function selectToolbarShape(
+  client: ControlClient,
+  frame: number,
+  pid: number,
+  command: number,
+  keepOpen = false,
+): Promise<number> {
+  const dump = await scrollToolbarToCommand(client, frame, "CmdAnnotationShapes");
+  const group = new RegExp(
+    `annotation-idx=\\d+ cmd=${cmdId("CmdAnnotationShapes")} hidden=0 enabled=1 rect=(-?\\d+),(-?\\d+),(-?\\d+),(-?\\d+)`,
+  ).exec(dump);
+  if (!group) throw new Error("Grouped Shapes toolbar button is missing");
+  let popup = findTopWindow(pid, "SumatraToolbarHoverMenu");
+  if (!popup || !isWindowVisible(popup)) {
+    const toolbar = findChildByClass(frame, "SUMATRA_VIRT_TOOLBAR");
+    await clickAt(toolbar, Math.floor((+group[1]! + +group[3]!) / 2), Math.floor((+group[2]! + +group[4]!) / 2), 0);
+  } else {
+    sendCommandSync(frame, cmdId("CmdAnnotationShapes"));
+  }
+  const deadline = Date.now() + 8000 * SLOW_BUILD_FACTOR;
+  for (;;) {
+    popup = findTopWindow(pid, "SumatraToolbarHoverMenu");
+    const raw = String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? "");
+    const item = new RegExp(
+      `dropdown-item idx=\\d+ cmd=${command} current=\\d+ rect=(-?\\d+),(-?\\d+),(-?\\d+),(-?\\d+) text=(Line|Polyline|Rectangle|Ellipse|Polygon|Arrow|Dashed line)`,
+    ).exec(raw);
+    if (popup && item) {
+      const rect = getWindowRect(popup);
+      const origin = clientToScreen(popup, 0, 0);
+      await clickAt(
+        popup,
+        Math.floor((+item[1]! + +item[3]!) / 2) - origin.x,
+        Math.floor((+item[2]! + +item[4]!) / 2) - origin.y,
+        0,
+      );
+      await sleep(40);
+      const after = getWindowRect(popup);
+      if (
+        after.left !== rect.left ||
+        after.top !== rect.top ||
+        after.right !== rect.right ||
+        after.bottom !== rect.bottom
+      )
+        throw new Error("Shape picker moved or resized while choosing a shape");
+      if (!keepOpen) {
+        sendMessage(popup, 0x10, 0, 0);
+        await sleep(40);
+      }
+      return popup;
+    }
+    if (Date.now() > deadline) throw new Error(`Shape option ${command} is missing: ${raw}`);
+    await sleep(40);
+  }
 }

@@ -2,8 +2,8 @@
 #include "../Version.h"
 
 VS_VERSION_INFO    VERSIONINFO     MOVEABLE IMPURE LOADONCALL DISCARDABLE
-  FILEVERSION    VER_RESOURCE
-  PRODUCTVERSION VER_RESOURCE
+  FILEVERSION    ENHANCED_VERSION_RESOURCE
+  PRODUCTVERSION ENHANCED_VERSION_RESOURCE
   FILEFLAGS     0
   FILEOS        VOS_NT_WINDOWS32
   FILETYPE      VFT_DLL
@@ -16,11 +16,11 @@ BEGIN
 
     BEGIN
       VALUE "FileDescription",  "SumatraPDF Enhanced Preview Shell Extension"
-      VALUE "FileVersion",      VER_RESOURCE_STR
+      VALUE "FileVersion",      ENHANCED_VERSION_STRA
       VALUE "LegalCopyright",   kCopyrightStr
       VALUE "OriginalFilename", "PdfPreview.dll"
       VALUE "ProductName",      "SumatraPDF Enhanced"
-      VALUE "ProductVersion",   VER_RESOURCE_STR
+      VALUE "ProductVersion",   ENHANCED_VERSION_STRA
     END
   END
   BLOCK "VarFileInfo"

@@ -24,8 +24,14 @@ function item(combo: number, index: number): string {
   const size = Number(sendMessage(combo, 0x148, index, ptr(buffer)));
   return size >= 0 ? String.fromCharCode(...buffer.subarray(0, size)) : "";
 }
-function controls(pid: number): { window: number; font: number; spacing: number } {
-  const result = { window: 0, font: 0, spacing: 0 };
+function controls(pid: number): {
+  window: number;
+  font: number;
+  spacing: number;
+  dictionaryScale: number;
+  learningScale: number;
+} {
+  const result = { window: 0, font: 0, spacing: 0, dictionaryScale: 0, learningScale: 0 };
   enumWindows((window) => {
     if (getWindowPid(window) !== pid || !isWindowVisible(window) || !getWindowText(window).includes("Settings"))
       return true;
@@ -33,7 +39,11 @@ function controls(pid: number): { window: number; font: number; spacing: number 
     result.window = window;
     enumChildWindows(window, (combo) => {
       if (getClassName(combo) !== "ComboBox") return true;
-      if (item(combo, 1) === "Manrope" && item(combo, 4) === "Lora") result.font = combo;
+      if (item(combo, 0) === "Follow interface font" && item(combo, 1) === "App fonts") result.font = combo;
+      if (item(combo, 0) === "75" && item(combo, 5) === "300") {
+        if (!result.dictionaryScale) result.dictionaryScale = combo;
+        else result.learningScale = combo;
+      }
       if (item(combo, 0) === "0.8") result.spacing = combo;
       return true;
     });
@@ -101,12 +111,19 @@ export async function testit(): Promise<void> {
       sendCommandSync(app.frame, cmdId("CmdOptions"));
       const ui = await pollUntil(
         () => controls(app.proc.pid!),
-        (v) => !!v.font && !!v.spacing,
+        (v) => !!v.font && !!v.spacing && !!v.dictionaryScale && !!v.learningScale,
         { error: "dictionary controls missing" },
       );
       assert(Number(sendMessage(ui.font, 0x146, 0, 0)) > 17, "installed system fonts were omitted");
       text(ui.font, selected);
       text(ui.spacing, "0.875");
+      text(ui.dictionaryScale, "137.5%");
+      text(ui.learningScale, "85%");
+      const labels = Array.from({ length: Number(sendMessage(ui.font, 0x146, 0, 0)) }, (_, i) => item(ui.font, i));
+      assert(
+        labels.includes("System fonts") && labels.indexOf("System fonts") > labels.indexOf("Lora"),
+        "font groups are missing",
+      );
       postMessage(ui.window, 0x100, 13, 0);
       const updated = await pollUntil(
         () => state(app.client),
@@ -123,7 +140,10 @@ export async function testit(): Promise<void> {
         { error: "Settings did not reopen" },
       );
       assert(
-        readText(reopened.font) === selected && readText(reopened.spacing) === "0.875",
+        readText(reopened.font) === selected &&
+          readText(reopened.spacing) === "0.875" &&
+          Number(readText(reopened.dictionaryScale).replace("%", "")) === 137.5 &&
+          Number(readText(reopened.learningScale).replace("%", "")) === 85,
         `Settings reopened with stale values: ${readText(reopened.font)} / ${readText(reopened.spacing)}`,
       );
       sendMessage(reopened.window, 0x10, 0, 0);
@@ -134,7 +154,11 @@ export async function testit(): Promise<void> {
         new RegExp(`DictionaryUI \\[\\s*FontName = ${selected}\\s*LineSpacing = 0\\.875`).test(saved),
         "dictionary preferences were not saved",
       );
-      console.log(`Saved dictionary font ${selected}, spacing 0.875`);
+      assert(
+        /FontScale = 137\.5/.test(saved) && /LearningHubScale = 85/.test(saved),
+        "independent text scales were not saved",
+      );
+      console.log(`Saved dictionary font ${selected}, spacing 0.875, dictionary scale 137.5%, Learning Hub scale 85%`);
     } finally {
       app.client.close();
       await killAndWait(app.proc);

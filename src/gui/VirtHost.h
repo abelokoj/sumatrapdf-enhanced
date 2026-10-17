@@ -151,6 +151,7 @@ extern void (*gUiInstallScrollbar)(HWND hwnd);
 extern int (*gUiScrollbarTrackPos)(HWND hwnd, int fallback, int bar);
 extern int (*gUiScrollbarInset)(HWND hwnd);
 extern int (*gUiScrollbarWidth)(int dpi);
+extern TempStr (*gUiScrollbarCssTemp)();
 int UiScrollbarWidth(int dpi);
 Color UiScrollbarHoverColor(Color track);
 Color UiScrollbarHoverEdge(Color track);

@@ -66,20 +66,51 @@ struct EnhancedRelease {
 static bool gEnhancedUpdateBusy = false;
 static EnhancedRelease* gEnhancedPending = nullptr;
 
-static bool EnhancedVersionParts(Str s, int out[3]) {
+static bool EnhancedVersionParts(Str s, int out[4], bool* calendar = nullptr) {
+    if (calendar) *calendar = false;
+    bool date = len(s) > 4 && s.s[4] == '-';
+    int count = date ? 4 : 3;
     int at = 0;
-    for (int part = 0; part < 3; part++) {
+    for (int part = 0; part < count; part++) {
         if (at >= len(s) || s.s[at] < '0' || s.s[at] > '9') return false;
         int start = at, value = 0;
         while (at < len(s) && s.s[at] >= '0' && s.s[at] <= '9') {
             value = value * 10 + s.s[at++] - '0';
             if (value > 65535) return false;
         }
-        if (at - start > 1 && s.s[start] == '0') return false;
+        int width = at - start;
+        if (date && part < 3) {
+            if (width != (part == 0 ? 4 : 2)) return false;
+        } else if (width > 1 && s.s[start] == '0')
+            return false;
         out[part] = value;
-        if (part < 2 && (at >= len(s) || s.s[at++] != '.')) return false;
+        char separator = date && part < 2 ? '-' : '.';
+        if (part < count - 1 && (at >= len(s) || s.s[at++] != separator)) return false;
     }
-    return at == len(s);
+    if (at != len(s)) return false;
+    if (!date) {
+        out[3] = 0;
+        return true;
+    }
+    int year = out[0], month = out[1], day = out[2];
+    if (year < 2000 || month < 1 || month > 12 || day < 1 || out[3] == 0) return false;
+    const int days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    bool leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    if (day > days[month - 1] + (month == 2 && leap ? 1 : 0)) return false;
+    if (calendar) *calendar = true;
+    return true;
+}
+
+static int EnhancedCompareVersion(Str left, Str right) {
+    int a[4]{}, b[4]{};
+    bool aDate = false, bDate = false;
+    if (!EnhancedVersionParts(left, a, &aDate) || !EnhancedVersionParts(right, b, &bDate)) return 0;
+    // Every calendar release follows the original Enhanced semantic versions.
+    if (aDate != bDate) return aDate ? 1 : -1;
+    for (int i = 0; i < dimof(a); i++) {
+        if (a[i] != b[i]) return a[i] > b[i] ? 1 : -1;
+    }
+    return 0;
 }
 
 static bool EnhancedDigestValid(Str digest) {
@@ -146,20 +177,22 @@ static EnhancedRelease* ParseEnhancedRelease(Str jsonText, Str arch, bool instal
     if (len(jsonText) == 0 || len(jsonText) > kEnhancedMaxMetadata) return nullptr;
     auto* r = new EnhancedRelease();
     bool ok = json::Parse(jsonText, MkFunc1<EnhancedRelease, json::Value*>(EnhancedVisit, r));
-    if (!ok || r->invalid || r->seen != 7 || r->draft || r->prerelease ||
-        !str::StartsWith(r->tag, StrL("enhanced-v"))) {
+    if (!ok || r->invalid || r->seen != 7 || r->draft || r->prerelease || !str::StartsWith(r->tag, StrL("enhanced-"))) {
         delete r;
         return nullptr;
     }
-    r->version = Str(r->tag.s + 10, len(r->tag) - 10);
-    int parts[3];
-    if (!EnhancedVersionParts(r->version, parts)) {
+    bool legacy = str::StartsWith(r->tag, StrL("enhanced-v"));
+    int prefix = legacy ? 10 : 9;
+    r->version = Str(r->tag.s + prefix, len(r->tag) - prefix);
+    int parts[4];
+    bool calendar = false;
+    if (!EnhancedVersionParts(r->version, parts, &calendar) || legacy == calendar) {
         delete r;
         return nullptr;
     }
     if (!str::Eq(arch, StrL("x64")) && !str::Eq(arch, StrL("arm64"))) return r;
-    TempStr name =
-        fmt("SumatraPDF-Enhanced-v%s-%s-%s.exe", r->version, arch, installed ? StrL("install") : StrL("portable"));
+    TempStr name = fmt("SumatraPDF-Enhanced-%s%s-%s-%s.exe", legacy ? StrL("v") : StrL(""), r->version, arch,
+                       installed ? StrL("install") : StrL("portable"));
     TempStr url = fmt("%s%s/%s", kEnhancedDownloadRoot, r->tag, name);
     for (auto& a : r->assets) {
         if (!str::Eq(a.name, name)) continue;
@@ -208,13 +241,15 @@ static bool EnhancedFileIdentity(Str path, Str version) {
     bool ok = GetFileVersionInfoW(CWStrTemp(path), 0, size, bytes) != FALSE;
     VS_FIXEDFILEINFO* fixed = nullptr;
     UINT infoSize = 0;
-    int parts[3];
+    int parts[4];
     ok = ok && EnhancedVersionParts(version, parts) && VerQueryValueW(bytes, L"\\", (void**)&fixed, &infoSize) &&
          infoSize >= sizeof(*fixed);
     if (ok)
         ok = fixed->dwSignature == 0xFEEF04BD && HIWORD(fixed->dwProductVersionMS) == parts[0] &&
              LOWORD(fixed->dwProductVersionMS) == parts[1] && HIWORD(fixed->dwProductVersionLS) == parts[2] &&
-             LOWORD(fixed->dwProductVersionLS) == 0;
+             LOWORD(fixed->dwProductVersionLS) == parts[3] && HIWORD(fixed->dwFileVersionMS) == parts[0] &&
+             LOWORD(fixed->dwFileVersionMS) == parts[1] && HIWORD(fixed->dwFileVersionLS) == parts[2] &&
+             LOWORD(fixed->dwFileVersionLS) == parts[3];
     WCHAR* product = nullptr;
     if (ok)
         ok = VerQueryValueW(bytes, L"\\StringFileInfo\\040904E4\\ProductName", (void**)&product, &infoSize) &&
@@ -402,7 +437,7 @@ static void EnhancedCheckDone(EnhancedJob* job) {
         gEnhancedUpdateBusy = false;
         return;
     }
-    if (CompareProgramVersion(job->release->version, StrL(ENHANCED_VERSION_STRA)) <= 0) {
+    if (EnhancedCompareVersion(job->release->version, StrL(ENHANCED_VERSION_STRA)) <= 0) {
         delete gEnhancedPending;
         gEnhancedPending = nullptr;
         RemoveNotificationsForGroup(win->hwndCanvas, kEnhancedAvailableNotice);
@@ -487,12 +522,16 @@ void DownloadEnhancedUpdate(MainWindow* win) {
 
 #if IS_DEBUG
 
-static TempStr EnhancedTestJson(Str arch, bool installed, Str digest, Str url = {}) {
-    TempStr name = fmt("SumatraPDF-Enhanced-v0.2.3-%s-%s.exe", arch, installed ? StrL("install") : StrL("portable"));
-    TempStr expected = fmt("%senhanced-v0.2.3/%s", kEnhancedDownloadRoot, name);
+static TempStr EnhancedTestJson(Str arch, bool installed, Str digest, Str url = {}, Str version = StrL("0.2.3"),
+                                bool calendar = false) {
+    Str v = calendar ? StrL("") : StrL("v");
+    TempStr name =
+        fmt("SumatraPDF-Enhanced-%s%s-%s-%s.exe", v, version, arch, installed ? StrL("install") : StrL("portable"));
+    TempStr tag = fmt("enhanced-%s%s", v, version);
+    TempStr expected = fmt("%s%s/%s", kEnhancedDownloadRoot, tag, name);
     return fmt(
-        R"({"tag_name":"enhanced-v0.2.3","draft":false,"prerelease":false,"assets":[{"name":"%s","state":"uploaded","size":8192,"digest":"%s","browser_download_url":"%s"}]})",
-        name, digest, len(url) > 0 ? url : expected);
+        R"({"tag_name":"%s","draft":false,"prerelease":false,"assets":[{"name":"%s","state":"uploaded","size":8192,"digest":"%s","browser_download_url":"%s"}]})",
+        tag, name, digest, len(url) > 0 ? url : expected);
 }
 
 void EnhancedUpdate_UnitTests() {
@@ -536,10 +575,70 @@ void EnhancedUpdate_UnitTests() {
             delete release;
         }
     }
-    int parts[3];
+    for (Str arch : arches) {
+        for (int choice = 0; choice < 2; choice++) {
+            bool installed = choice != 0;
+            Str version = StrL("2026-10-16.5");
+            auto* release =
+                ParseEnhancedRelease(EnhancedTestJson(arch, installed, digest, {}, version, true), arch, installed);
+            utassert(release && release->selected && str::Eq(release->version, version));
+            delete release;
+            Str evilURLs[] = {
+                StrL("https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-2026-10-16.5/../"
+                     "file.exe"),
+                StrL("https://github.com/other/sumatrapdf-enhanced/releases/download/enhanced-2026-10-16.5/file.exe"),
+                StrL(
+                    "http://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-2026-10-16.5/file.exe")};
+            for (Str url : evilURLs) {
+                release = ParseEnhancedRelease(EnhancedTestJson(arch, installed, digest, url, version, true), arch,
+                                               installed);
+                utassert(!release);
+                delete release;
+            }
+            release = ParseEnhancedRelease(EnhancedTestJson(arch, installed, StrL("sha256:bad"), {}, version, true),
+                                           arch, installed);
+            utassert(!release);
+            delete release;
+        }
+    }
+    int parts[4];
     utassert(EnhancedVersionParts(StrL("0.10.12"), parts) && parts[1] == 10);
-    Str badVersions[] = {StrL("1.2"),    StrL("1.2.3.4"),   StrL("01.2.3"),    StrL("1.2.3-beta"),
-                         StrL("1.2.-3"), StrL("1.2.65536"), StrL("1.2.3/../a")};
+    utassert(EnhancedVersionParts(StrL("2026-10-16.5"), parts) && parts[0] == 2026 && parts[1] == 10 &&
+             parts[2] == 16 && parts[3] == 5);
+    utassert(EnhancedVersionParts(StrL("2024-02-29.65535"), parts));
+    utassert(EnhancedVersionParts(StrL("2000-02-29.1"), parts));
+    utassert(EnhancedCompareVersion(StrL("2026-10-16.5"), StrL("0.1.2")) > 0);
+    utassert(EnhancedCompareVersion(StrL("65535.0.0"), StrL("2026-10-16.5")) < 0);
+    utassert(EnhancedCompareVersion(StrL("0.10.12"), StrL("0.2.3")) > 0);
+    utassert(EnhancedCompareVersion(StrL("2026-10-16.10"), StrL("2026-10-16.9")) > 0);
+    utassert(EnhancedCompareVersion(StrL("2026-11-01.11"), StrL("2026-10-31.10")) > 0);
+    utassert(EnhancedCompareVersion(StrL("2027-01-01.12"), StrL("2026-12-31.11")) > 0);
+    utassert(EnhancedCompareVersion(StrL("2026-10-16.5"), StrL("2026-10-16.5")) == 0);
+    utassert(EnhancedCompareVersion(StrL("2026-10-11.4"), StrL("2026-10-16.5")) < 0);
+    Str badVersions[] = {StrL("1.2"),
+                         StrL("1.2.3.4"),
+                         StrL("01.2.3"),
+                         StrL("1.2.3-beta"),
+                         StrL("1.2.-3"),
+                         StrL("1.2.65536"),
+                         StrL("1.2.3/../a"),
+                         StrL("2026-02-29.5"),
+                         StrL("2100-02-29.5"),
+                         StrL("2026-04-31.5"),
+                         StrL("2026-00-01.5"),
+                         StrL("2026-13-01.5"),
+                         StrL("2026-10-00.5"),
+                         StrL("2026-1-16.5"),
+                         StrL("2026-10-6.5"),
+                         StrL("26-10-16.5"),
+                         StrL("2026-10-16.0"),
+                         StrL("2026-10-16.05"),
+                         StrL("2026-10-16.65536"),
+                         StrL("2026-10-16.5.1"),
+                         StrL("2026-10-16.5-preview"),
+                         StrL("2026-10-16.5/../a"),
+                         StrL("2026.10.16.5"),
+                         StrL("2026-10-16.999999999999999999999999")};
     for (Str version : badVersions) utassert(!EnhancedVersionParts(version, parts));
     Str badJSON[] = {
         StrL("{}"),
@@ -548,6 +647,9 @@ void EnhancedUpdate_UnitTests() {
         StrL(R"({"tag_name":"enhanced-v0.2.3","draft":true,"prerelease":false})"),
         StrL(R"({"tag_name":"enhanced-v0.2.3","draft":false,"prerelease":true})"),
         StrL(R"({"tag_name":"enhanced-v0.2.3","draft":"false","prerelease":false})"),
+        StrL(R"({"tag_name":"enhanced-2026-10-16.5","draft":false,"prerelease":true})"),
+        StrL(R"({"tag_name":"enhanced-v2026-10-16.5","draft":false,"prerelease":false})"),
+        StrL(R"({"tag_name":"enhanced-0.2.3","draft":false,"prerelease":false})"),
         StrL(R"({"tag_name":"v3.7","draft":false,"prerelease":false})"),
         StrL(R"({"tag_name":"enhanced-v0.2.3","tag_name":"enhanced-v0.2.4","draft":false,"prerelease":false})")};
     for (Str value : badJSON) {

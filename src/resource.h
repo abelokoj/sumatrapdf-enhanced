@@ -34,6 +34,9 @@
 // the installer payload: libsumatrapdf.dll, PdfFilter.dll, PdfPreview.dll,
 // sumatrapdf-tool.exe. Packed by cmd/pack-embedded-prebuild.cmd.
 #define IDR_EMBEDDED_PAK 1
+#define FILE_ICON_PREVIEW_1 3001
+#define FILE_ICON_PREVIEW_2 3002
+#define FILE_ICON_PREVIEW_3 3003
 
 // Next default values for new objects
 //

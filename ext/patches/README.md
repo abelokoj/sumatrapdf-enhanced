@@ -49,6 +49,9 @@ relative to `ext/mupdf`, so `-p1` from inside that directory.
 | `0046-grep-keep-page-of-pending-line` | `grep` read a text page the search had already dropped (#6276) |
 | `0047-jpeg-xl-pdf` | JPEG XL images and PDF `/JXLDecode` via jxldec (`src/mupdf/load-jxl.cpp`) |
 | `0048-pdf-snapshot-preserve-increments` | recovery snapshots keep the live incremental xref and annotation undo/redo intact |
+| `0049-pdf-rounded-highlight-corners` | rounded corners inside text/block highlight quads, without side bulges |
+| `0050-pdf-dotted-border-round-caps` | zero-length annotation dash segments render as round dots |
+| `0051-pdf-pinned-note-appearance` | original pinned-paper appearance for standard Text/Note annotations |
 
 That is the whole list: `ext/mupdf` is byte-for-byte `1.28.5` plus these
 patches, and nothing else.

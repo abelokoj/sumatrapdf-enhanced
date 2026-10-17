@@ -27,6 +27,8 @@
 #include "MainWindow.h"
 #include "WindowTab.h"
 
+#include "SvgIcons.h"
+#include "PinnedNoteIcon.h"
 #include "AnnotTextPopup.h"
 
 // A floating card with the annotation's whole text, opened by clicking the
@@ -39,7 +41,7 @@ constexpr const WCHAR* kAnnotTextPopupClassName = L"SumatraAnnotTextPopup";
 constexpr int kMargin = 8;
 constexpr int kGap = 5;
 // between the author and the date on the header line
-constexpr int kHeaderGap = 12;
+constexpr int kHeaderGap = 8;
 // between the header line and the rule under it
 constexpr int kRuleGap = 4;
 constexpr int kCornerRadius = 6;
@@ -49,8 +51,8 @@ constexpr int kMaxLineChars = 80;
 constexpr int kMinWidth = 120;
 // how much of the canvas the card may cover before the text starts scrolling
 constexpr int kMaxHeightPercent = 60;
-// a card shorter than this looks like a glitch, however short the comment
-constexpr int kMinLines = 3;
+// Short notes should fit their text instead of reserving empty lines.
+constexpr int kMinLines = 1;
 
 // Native read-only edit hosted in the VirtHost; the layout slot positions its
 // HWND, the way the contents editor's does
@@ -119,6 +121,7 @@ struct AnnotPopupHeader : VirtCustom {
     Str date;
     PlatformFont* authorFont = nullptr;
     PlatformFont* dateFont = nullptr;
+    bool isNote = false;
 
     ~AnnotPopupHeader() override {
         str::Free(author);
@@ -133,11 +136,19 @@ static void PaintPopupHeader(AnnotPopupHeader* h, VirtPaintCtx* ctx) {
     if (textDy <= 0) {
         return;
     }
+    int iconDy = std::min(textDy, PlatformFontLineHeight(h->authorFont));
+    int iconDx = h->isNote ? iconDy * 32 / 38 : iconDy;
+    auto* icon = GetCachedPixmapForSvg(Str(h->isNote ? kPinnedNoteSvg : gIconAnnotText), iconDx, iconDy,
+                                       h->isNote ? kColorUnset : PopupText());
+    if (icon) ctx->gfx->DrawPixmap(icon, {r.x, r.y + (textDy - iconDy) / 2, iconDx, iconDy});
+    int inset = iconDx + DpiScale(kHeaderGap);
+    r.x += inset;
+    r.dx = std::max(0, r.dx - inset);
     int dateDx = 0;
     if (len(h->date) > 0) {
-        dateDx = ctx->gfx->MeasureText(h->date, h->dateFont).dx;
+        dateDx = std::min(ctx->gfx->MeasureText(h->date, h->dateFont).dx, r.dx * 45 / 100);
         Rect dr{r.x + r.dx - dateDx, r.y, dateDx, textDy};
-        ctx->gfx->DrawText(h->date, dr, gfxTextRight | gfxTextVCenter, h->dateFont, PopupMutedText());
+        ctx->gfx->DrawText(h->date, dr, gfxTextRight | gfxTextVCenter | gfxTextEllipsis, h->dateFont, PopupMutedText());
     }
     int authorDx = r.dx - dateDx - (dateDx > 0 ? DpiScale(kHeaderGap) : 0);
     if (authorDx > 0 && len(h->author) > 0) {
@@ -149,7 +160,7 @@ static void PaintPopupHeader(AnnotPopupHeader* h, VirtPaintCtx* ctx) {
 
 static void PaintPopupBg(AnnotTextPopup*, VirtHostPaintEvent* ev) {
     int radius = UiCornerDiameter(DpiGetForHwnd(ev->host->native), kCornerRadius);
-    ev->host->cornerBorder = ThemeEdgeColor();
+    ev->host->cornerBorder = PopupRuleColor();
     ev->gfx->FillRoundedRect(ev->clientRect, radius, PopupBg(), kColorTransparent);
 }
 
@@ -268,16 +279,6 @@ static int LongestLineDx(PlatformFont* font, Str s) {
     return dx;
 }
 
-// who wrote the comment; the annotation's type name when it has no author, so
-// the header never comes up empty
-static TempStr PopupAuthorTemp(Annotation* annot) {
-    Str author = Author(annot);
-    if (len(author) == 0) {
-        return AnnotationReadableNameTemp(Type(annot));
-    }
-    return str::DupTemp(author);
-}
-
 // local time, like other apps show comment timestamps
 static TempStr PopupDateTemp(Annotation* annot) {
     time_t secs = ModificationDate(annot);
@@ -296,11 +297,15 @@ static TempStr PopupDateTemp(Annotation* annot) {
 // the header's ideal width fits author and date without eliding
 static AnnotPopupHeader* MakePopupHeader(AnnotTextPopup* popup, Annotation* annot) {
     auto* h = new AnnotPopupHeader();
-    h->author = str::Dup(PopupAuthorTemp(annot));
+    h->isNote = Type(annot) == AnnotationType::Text && str::Eq(IconName(annot), StrL("Note"));
+    Str author = Author(annot);
+    Str kind = h->isNote ? Tr("Note") : AnnotationReadableNameTemp(Type(annot));
+    h->author = str::Dup(len(author) ? fmt("%s \xC2\xB7 %s", kind, author) : kind);
     h->date = str::Dup(PopupDateTemp(annot));
     h->authorFont = GetBoldPlatformFont(popup->font);
     h->dateFont = popup->font;
-    int dx = PlatformFontMeasureText(h->authorFont, h->author).dx;
+    int dx = PlatformFontMeasureText(h->authorFont, h->author).dx + PlatformFontLineHeight(popup->font) +
+             DpiScale(kHeaderGap);
     if (len(h->date) > 0) {
         dx += DpiScale(kHeaderGap) + PlatformFontMeasureText(h->dateFont, h->date).dx;
     }
@@ -423,6 +428,7 @@ bool ShowAnnotationTextPopup(MainWindow* win, Annotation* annot) {
         return false;
     }
     HideAnnotationTextPopup(win); // start from a clean card, keep the host
+    popup->font = GetAppFontForDpi(DpiGetForHwnd(win->hwndCanvas));
 
     Edit::CreateArgs args;
     args.parent = popup->host->native;

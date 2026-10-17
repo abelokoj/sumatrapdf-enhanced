@@ -13,8 +13,10 @@
 #include "Settings.h"
 #include "Theme.h"
 #include "AppSettings.h"
+#include "OverlayScrollbar.h"
 #include "GumboHtmlParser.h"
 #include "MarkdownFonts.h"
+#include "MarkdownLayout.h"
 
 extern "C" {
 #include "cmark-gfm.h"
@@ -22,6 +24,7 @@ extern "C" {
 #include "node.h"
 }
 #include "MarkdownToc.h"
+#include "MarkdownMath.h"
 
 static bool IsMarkdownExt(Str path) {
     return str::EndsWithI(path, StrL(".md")) || str::EndsWithI(path, StrL(".markdown"));
@@ -414,22 +417,6 @@ math { font-family: var(--enhanced-markdown-math-font-family); }
 
 )";
 
-static const char* kMarkdownScrollbarCss = R"(
-::-webkit-scrollbar { width: var(--scrollbar-size); height: var(--scrollbar-size); }
-::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: var(--scrollbar-track); }
-::-webkit-scrollbar-thumb { background: #8b8b8b; border: 2px solid var(--scrollbar-track); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active {
-  background: var(--scrollbar-hover); box-shadow: inset 0 0 0 1px var(--scrollbar-hover-edge); }
-::-webkit-scrollbar-button:single-button:hover, ::-webkit-scrollbar-button:single-button:active {
-  background-color: var(--scrollbar-hover); }
-::-webkit-scrollbar-button:single-button { display: block; width: var(--scrollbar-size); height: var(--scrollbar-size);
-  background-color: var(--scrollbar-track); background-repeat: no-repeat; background-position: center; background-size: 50%; }
-::-webkit-scrollbar-button:vertical:decrement { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath fill='%238b8b8b' d='M0 8L5 2L10 8Z'/%3E%3C/svg%3E"); }
-::-webkit-scrollbar-button:vertical:increment { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath fill='%238b8b8b' d='M0 2L5 8L10 2Z'/%3E%3C/svg%3E"); }
-::-webkit-scrollbar-button:horizontal:decrement { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath fill='%238b8b8b' d='M8 0L2 5L8 10Z'/%3E%3C/svg%3E"); }
-::-webkit-scrollbar-button:horizontal:increment { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath fill='%238b8b8b' d='M2 0L8 5L2 10Z'/%3E%3C/svg%3E"); }
-)";
-
 // cmark emits <pre><code class="language-mermaid">…</code></pre> for ```mermaid
 // fences. mermaid.js looks for <pre class="mermaid"> (or elements with that class).
 // Returns how many blocks were rewritten.
@@ -546,8 +533,12 @@ static TempStr MarkdownPageCssTemp() {
             ColorToCssTemp(ThemeGetCount() ? ThemeControlBackgroundColor() : bgCol),
             ColorToCssTemp(UiScrollbarHoverColor(ThemeGetCount() ? ThemeControlBackgroundColor() : bgCol)),
             ColorToCssTemp(UiScrollbarHoverEdge(ThemeGetCount() ? ThemeControlBackgroundColor() : bgCol)));
+    TempStr layout = gSettings
+                         ? MarkdownLayoutCssTemp(gSettings->markdownUI.readingWidth, gSettings->markdownUI.leftMargin,
+                                                 gSettings->markdownUI.rightMargin)
+                         : Str{};
     return str::JoinTemp(MarkdownSuppliedCss(dark), fmt(kMarkdownPageCssFmt, cssVars, GetUiFontCssTemp()),
-                         Str(kMarkdownScrollbarCss));
+                         str::JoinTemp(AppScrollbarCss(), layout));
 }
 
 // Markdown pages are exposed to WebView2 as generated .html resources. Keep
@@ -745,16 +736,18 @@ static void AddHeadingAnchors(cmark_node* doc) {
 }
 
 static char* MarkdownToHtmlBody(Str markdown) {
-    if (len(markdown) == 0) {
-        return nullptr;
-    }
-
     EnsureCmarkPluginsRegistered();
 
     int options = CMARK_OPT_DEFAULT;
     cmark_parser* parser = cmark_parser_new(options);
     AttachGfmExtensions(parser);
-    cmark_parser_feed(parser, markdown.s, (size_t)markdown.len);
+    Vec<MarkdownMathItem> mathItems;
+    Str protectedSource = ProtectMarkdownMath(markdown, mathItems);
+    defer {
+        str::Free(protectedSource);
+        FreeMarkdownMath(mathItems);
+    };
+    cmark_parser_feed(parser, protectedSource.s, (size_t)len(protectedSource));
     cmark_node* doc = cmark_parser_finish(parser);
     if (!doc) {
         cmark_parser_free(parser);
@@ -764,6 +757,7 @@ static char* MarkdownToHtmlBody(Str markdown) {
     RewriteMarkdownLinks(doc);
     PreserveSafeEmptyAnchors(doc);
     AddHeadingAnchors(doc);
+    RestoreMarkdownMath(doc, mathItems);
 
     // Render before cmark_parser_free(); the extensions list is owned by the parser.
     cmark_llist* extensions = cmark_parser_get_syntax_extensions(parser);
@@ -799,6 +793,15 @@ Str MarkdownToHtmlPage(Str markdown) {
     html.Append(StrL("<main id='enhanced-markdown-content'>"));
     html.Append(ToStr(rewritten));
     html.Append(StrL("</main>"));
+    if (str::Contains(ToStr(rewritten), StrL("class=\"enhanced-math"))) {
+        html.Append(
+            StrL("<link rel='stylesheet' href='https://sumatrapdf.markdown/katex/katex.min.css'>"
+                 "<style>.enhanced-math-display{display:block;overflow-x:auto;max-width:100%;}"
+                 ".enhanced-math-error{outline:1px dotted currentColor;}"
+                 ".katex{color:inherit;}</style>"
+                 "<script src='https://sumatrapdf.markdown/katex/katex.min.js'></script>"
+                 "<script src='https://sumatrapdf.markdown/katex/enhanced-math.js'></script>"));
+    }
     // Mermaid diagrams need JS (WebView2). Fixed-page MuPDF path has no scripts.
     if (nMermaid > 0) {
         html.Append(Str(kMermaidBootstrap, (int)(sizeof(kMermaidBootstrap) - 1)));
@@ -809,6 +812,10 @@ Str MarkdownToHtmlPage(Str markdown) {
 }
 
 bool MarkdownToc_UnitTestHtmlLinks() {
+    if (ValidMarkdownLayout(0, 10, 10) || ValidMarkdownLayout(80, -10, 30) || ValidMarkdownLayout(80, 20, 20) ||
+        !ValidMarkdownLayout(80, 10, 10) || !ValidMarkdownLayout(85, 10, 5) || len(MarkdownLayoutCssTemp(0, 10, 10)) ||
+        !str::Contains(MarkdownLayoutCssTemp(80, 10, 10), StrL("width:80.0000%")))
+        return false;
     Str scrollbarPage = MarkdownToHtmlPage(StrL("# Scrollbar\n\nText"));
     bool scrollbarOk = str::Contains(scrollbarPage, StrL("--scrollbar-size:")) &&
                        str::Contains(scrollbarPage, StrL("data:image/svg+xml,%3Csvg")) &&
@@ -926,6 +933,23 @@ bool MarkdownToc_UnitTestHtmlHeadings() {
 // mermaid.min.js when any were rewritten (#5927). Avoid MarkdownToHtmlPage here
 // — it needs a live theme for CSS (not set up in -unit-tests).
 bool MarkdownToc_UnitTestMermaid() {
+    Vec<MarkdownMathItem> items;
+    Str protectedMath = ProtectMarkdownMath(StrL("Inline $x^2$ and \\(\\frac{1}{2}\\).\n"
+                                                 "\n$$\\sum_{i=1}^{n} i$$\n\n`$code$`\n\n```tex\n$x$\n```\n"
+                                                 "    $indented$\nPrice \\$5 and $10 and $20.\n"),
+                                            items);
+    bool mathOk = len(items) == 3 && str::Eq(items[0].source, StrL("x^2")) &&
+                  str::Eq(items[1].source, StrL("\\frac{1}{2}")) && items[2].display &&
+                  str::Contains(protectedMath, StrL("`$code$`")) && str::Contains(protectedMath, StrL("$indented$"));
+    str::Free(protectedMath);
+    FreeMarkdownMath(items);
+    if (!mathOk) return false;
+    Str mathPage = MarkdownToHtmlPage(StrL("# Math\n\n$\\frac{a<b}{c&d}$\n\n`$x$`\n"));
+    mathOk = str::Contains(mathPage, StrL("katex/katex.min.js")) &&
+             str::Contains(mathPage, StrL("\\frac{a&lt;b}{c&amp;d}")) &&
+             str::Contains(mathPage, StrL("<code>$x$</code>"));
+    str::Free(mathPage);
+    if (!mathOk) return false;
     Str md = StrL("before\n\n```mermaid\nflowchart TD\n    A --> B\n```\n\nafter\n");
     char* body = MarkdownToHtmlBody(md);
     if (!body) {

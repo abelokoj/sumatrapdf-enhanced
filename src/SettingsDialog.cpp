@@ -43,10 +43,14 @@
 #include "WindowTab.h"
 #include "RenderCache.h"
 #include "SvgIcons.h"
+#include "Commands.h"
+#include "Toolbar.h"
 #include "PdfDarkMode.h"
 #include "RefHover.h"
 #include "MarkdownFonts.h"
 #include "MarkdownModel.h"
+#include "FileTypeIcons.h"
+#include "Installer.h"
 #include <commdlg.h>
 
 #if IS_DEBUG
@@ -76,6 +80,46 @@ static TempStr SerializeSelectionColor(Color color) {
     return fmt("#%02x%02x%02x%02x", GetAlpha(color), GetRed(color), GetGreen(color), GetBlue(color));
 }
 
+static constexpr int kActiveTabStyles[] = {3, 1, 4};
+static const char* kTabAccentNames[] = {"Blue", "Red", "Teal", "Violet", "Amber"};
+static const char* kTabAccentValues[] = {"#2675e8", "#ad344a", "#087969", "#7451ba", "#c38913"};
+
+static const char* kPenAccentNames[] = {"Blue", "Red"};
+static const char* kPenAccentValues[] = {"#2675e8", "#e43d46"};
+static constexpr PenCursorStyle kPenCursorChoices[] = {PenCursorStyle::Rollerball, PenCursorStyle::Drafting,
+                                                       PenCursorStyle::Lacquer};
+
+static bool ReadPenAccent(Str text, Color& color) {
+    text = str::DupTemp(text);
+    str::TrimWSInPlace(text, str::TrimOpt::Both);
+    for (int i = 0; i < dimofi(kPenAccentNames); i++)
+        if (str::EqI(text, Tr(kPenAccentNames[i]))) {
+            text = Str(kPenAccentValues[i]);
+            break;
+        }
+    if (len(text) != 7 || text.s[0] != '#' || !ParseColor(&color, text) || color == kColorUnset) return false;
+    return true;
+}
+
+static bool ReadTabAccent(Str text, Color& color) {
+    text = str::DupTemp(text);
+    str::TrimWSInPlace(text, str::TrimOpt::Both);
+    for (int i = 0; i < dimofi(kTabAccentNames); i++)
+        if (str::EqI(text, Tr(kTabAccentNames[i]))) return ReadPenAccent(Str(kTabAccentValues[i]), color);
+    return ReadPenAccent(text, color);
+}
+
+static int SelectedTabStyle(DropDown* drop) {
+    int index = CbGetCurrentSelection(drop);
+    return index >= 0 && index < dimofi(kActiveTabStyles) ? kActiveTabStyles[index] : 3;
+}
+
+static int SelectedPenCursor(DropDown* drop) {
+    int index = CbGetCurrentSelection(drop);
+    return index >= 0 && index < dimofi(kPenCursorChoices) ? (int)kPenCursorChoices[index]
+                                                           : (int)PenCursorStyle::Rollerball;
+}
+
 static constexpr int kSettingsMaxWidth = 900;
 static constexpr int kSettingsMinWidth = 560;
 static constexpr PinIconStyle kPinIconChoices[] = {PinIconStyle::Soft, PinIconStyle::Solid, PinIconStyle::Round};
@@ -83,6 +127,11 @@ static constexpr PinIconStyle kPinIconChoices[] = {PinIconStyle::Soft, PinIconSt
 static int SelectedPinIconStyle(DropDown* drop) {
     int index = CbGetCurrentSelection(drop);
     return index >= 0 && index < dimofi(kPinIconChoices) ? (int)kPinIconChoices[index] : (int)PinIconStyle::Soft;
+}
+static constexpr int kFileIconChoices[] = {3, 1, 2};
+static int SelectedFileIconStyle(DropDown* drop) {
+    int index = CbGetCurrentSelection(drop);
+    return index >= 0 && index < dimofi(kFileIconChoices) ? kFileIconChoices[index] : 3;
 }
 static constexpr ColorPickerIconStyle kColorPickerIconChoices[] = {
     ColorPickerIconStyle::Tiles, ColorPickerIconStyle::Classic, ColorPickerIconStyle::Soft,
@@ -124,6 +173,10 @@ struct SettingsMoveBatch {
     void Apply(bool applyNative = true) {
         active = nullptr;
         if (!applyNative) return;
+        if (len(moves) == 0) {
+            if (createdControls && themeWindow) themeWindow->UpdateTheme();
+            return;
+        }
         HDWP batch = BeginDeferWindowPos(len(moves));
         for (auto& move : moves) {
             if (!batch) break;
@@ -228,12 +281,51 @@ static VirtText* NewSettingsLabel(const VirtTextArgs& args) {
     return new SettingsLabel(args);
 }
 
+enum class SettingsAppearance {
+    None,
+    PageText,
+    PageBackground,
+    Selection,
+    TabAccent,
+    PenAccent,
+    Pin,
+    Palette,
+    Tab,
+    Pen,
+    FileIcon
+};
+
+static bool SettingsPreviewColor(SettingsAppearance appearance, Str text, Color& color, u8& alpha) {
+    alpha = 255;
+    if (appearance == SettingsAppearance::Selection) {
+        if (!ReadSelectionColor(text, color)) return false;
+        alpha = GetAlpha(color);
+        return true;
+    }
+    if (appearance == SettingsAppearance::TabAccent) return ReadTabAccent(text, color);
+    if (appearance == SettingsAppearance::PenAccent) return ReadPenAccent(text, color);
+    if (appearance != SettingsAppearance::PageText && appearance != SettingsAppearance::PageBackground) return false;
+    text = str::DupTemp(text);
+    str::TrimWSInPlace(text, str::TrimOpt::Both);
+    if (str::EqI(text, Tr("Use theme"))) {
+        Color background;
+        Color foreground = ThemePageRenderColors(background);
+        color = appearance == SettingsAppearance::PageText ? foreground : background;
+        return true;
+    }
+    if (!ParseColor(&color, text) || color == kColorUnset) return false;
+    if (!str::TrimPrefix(text, StrL("0x"))) str::TrimPrefix(text, StrL("#"));
+    if (len(text) == 8) alpha = GetAlpha(color);
+    return true;
+}
+
 struct SettingsDropDownMetric {
     PlatformFont* font;
     StrVec items;
     Size size;
     int dpi, idealDx, maxDx, height;
     DWORD margins;
+    bool previewItems;
 };
 struct SettingsMetrics {
     Vec<SettingsDropDownMetric*> entries;
@@ -246,6 +338,8 @@ struct SettingsMetrics {
 };
 static SettingsMetrics settingsMetrics;
 
+static constexpr UINT kSettingsIdleMessage = WM_APP + 0x307;
+
 struct SettingsDropDown : DropDown {
     struct IdleField : VirtCtrl {
         SettingsDropDown* drop;
@@ -256,12 +350,17 @@ struct SettingsDropDown : DropDown {
             onSetCursor = MkMethod1<IdleField, VirtSetCursorEvent*, &IdleField::SetCursor>(this);
         }
         void Paint(VirtPaintCtx& ctx) override;
-        bool HitTest(Point pt) override { return !drop->hwnd && drop->IsEnabled() && VirtCtrl::HitTest(pt); }
+        bool HitTest(Point pt) override { return !drop->nativeActive && drop->IsEnabled() && VirtCtrl::HitTest(pt); }
         void Press(VirtMouseEvent*);
         void Repaint();
         void SetCursor(VirtSetCursorEvent*);
     } idle{this};
     SettingsWnd* window = nullptr;
+    SettingsAppearance appearance = SettingsAppearance::None;
+    bool nativeActive = false;
+    void HideIfIdle();
+    bool IsFocusable() const override { return IsEnabled() && ::IsWindowVisible(pendingCreate.parent); }
+    void DrawAppearance(PreviewItemEvent*);
     ~SettingsDropDown() override;
     VirtCtrl* AsVirtCtrl() override {
         idle.SetFlag(vwfEnabled, IsEnabled());
@@ -278,6 +377,7 @@ struct SettingsDropDown : DropDown {
     int measuredMaxDx = 0;
     int measuredHeight = 0;
     DWORD measuredMargins = 0;
+    bool measuredPreview = false;
 
     Size GetIdealSize() override {
         bool sameItems = len(items) == len(measuredItems);
@@ -286,12 +386,14 @@ struct SettingsDropDown : DropDown {
         HWND edit = CbEditHwnd(hwnd);
         DWORD margins = edit ? (DWORD)SendMessageW(edit, EM_GETMARGINS, 0, 0) : deferredMargins;
         if (sameItems && measuredFont == font && measuredDpi == DpiGet() && measuredIdealDx == idealDx &&
-            measuredMaxDx == maxDx && measuredHeight <= height && measuredMargins == margins)
+            measuredMaxDx == maxDx && measuredHeight <= height && measuredMargins == margins &&
+            measuredPreview == previewItems)
             return {measuredSize.dx, std::max(measuredSize.dy, height)};
         SettingsDropDownMetric* found = nullptr;
         for (auto* entry : settingsMetrics.entries) {
             if (entry->font != font || entry->dpi != DpiGet() || entry->idealDx != idealDx || entry->maxDx != maxDx ||
-                entry->height > height || entry->margins != margins || len(entry->items) != len(items))
+                entry->height > height || entry->margins != margins || entry->previewItems != previewItems ||
+                len(entry->items) != len(items))
                 continue;
             bool same = true;
             for (int i = 0; same && i < len(items); i++) same = str::Eq(entry->items[i], items[i]);
@@ -314,7 +416,8 @@ struct SettingsDropDown : DropDown {
                 delete settingsMetrics.entries[0];
                 VecRemoveAt(settingsMetrics.entries, 0);
             }
-            auto* entry = new SettingsDropDownMetric{font, {}, measuredSize, DpiGet(), idealDx, maxDx, height, margins};
+            auto* entry = new SettingsDropDownMetric{font,  {},     measuredSize, DpiGet(),    idealDx,
+                                                     maxDx, height, margins,      previewItems};
             for (Str item : items) entry->items.Append(item);
             VecAppend(settingsMetrics.entries, entry);
 #if IS_DEBUG
@@ -327,6 +430,7 @@ struct SettingsDropDown : DropDown {
         measuredMaxDx = maxDx;
         measuredHeight = height;
         measuredMargins = margins;
+        measuredPreview = previewItems;
         measuredItems.Reset();
         for (Str item : items) measuredItems.Append(item);
         return measuredSize;
@@ -515,9 +619,17 @@ struct SettingsViewport : ScrollBox {
     }
     void ClipControl(ControlBase* control) {
         if (!control->hwnd) return;
+        if (str::Eq(Str(control->GetKind()), StrL("dropdown")) && !((SettingsDropDown*)control)->nativeActive) return;
         int index = 0;
         while (index < len(clips) && clips[index].hwnd != control->hwnd) index++;
         bool outside = control->lastBounds.Intersect(lastBounds).IsEmpty();
+        if (str::Eq(Str(control->GetKind()), StrL("checkbox")) && GetFocus() != control->hwnd) {
+            bool shown = (GetWindowLongPtrW(control->hwnd, GWL_STYLE) & WS_VISIBLE) != 0;
+            if (shown == outside) {
+                UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW;
+                SetWindowPos(control->hwnd, nullptr, 0, 0, 0, 0, flags | (outside ? SWP_HIDEWINDOW : SWP_SHOWWINDOW));
+            }
+        }
         if (outside && index < len(clips) && clips[index].valid && clips[index].clip.IsEmpty()) return;
         Rect requested = SettingsControlWindowBounds(control, control->lastBounds, GetHwnd());
         if (index < len(clips)) {
@@ -560,6 +672,7 @@ struct SettingsViewport : ScrollBox {
         HRGN current = CreateRectRgn(0, 0, 0, 0);
         bool unchanged = GetWindowRgn(control->hwnd, current) != ERROR && EqualRgn(current, region);
         DeleteObject(current);
+        RoundControlSetClip(control->hwnd, clip);
         bool applied = unchanged || SetWindowRgn(control->hwnd, region, FALSE);
         if (unchanged || !applied)
             DeleteObject(region);
@@ -567,7 +680,11 @@ struct SettingsViewport : ScrollBox {
             InvalidateRect(control->hwnd, nullptr, FALSE);
         cached = {control->hwnd, bounds.Size(), requested.Size(), clip, dpi, font, applied};
     }
-    void ClipControls(ILayout* node) {
+    void ClipControls(ILayout* node, bool refresh = false) {
+        // First-time native corner theming replaces the viewport region.
+        if (refresh) {
+            for (auto& clip : clips) clip.valid = false;
+        }
 #if IS_DEBUG
         if (node == child) clipPasses++;
 #endif
@@ -584,7 +701,7 @@ struct SettingsViewport : ScrollBox {
         // these bounds again with the correct origin; only that pass moves HWNDs.
         bool attached = GetHwnd() != nullptr;
         batch.Apply(attached);
-        if (attached) ClipControls(child);
+        if (attached) ClipControls(child, batch.createdControls);
         moving = false;
         if (attached) Repaint();
     }
@@ -593,33 +710,67 @@ struct SettingsViewport : ScrollBox {
         RedrawWindow(GetHwnd(), &area, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
     }
     bool ScrollTo(int y) {
-        if (moving) return false;
+        y = ClampI(y, 0, MaxScrollY());
+        if (moving || y == scrollY) return false;
         moving = true;
         SettingsMoveBatch batch;
         batch.viewport = lastBounds;
         batch.themeWindow = themeWindow;
-        bool changed = ScrollBox::ScrollTo(y);
+        scrollY = y;
+        if (child) child->SetBounds({lastBounds.x, lastBounds.y - scrollY, lastBounds.dx, contentSize.dy});
         batch.Apply();
-        if (changed) ClipControls(child);
+        ClipControls(child, batch.createdControls);
+        // Move and clip fields before updating the overlay; avoid repainting the native title bar.
+        HWND hwnd = GetHwnd();
+        if (syncScrollbar && hwnd) {
+            SCROLLINFO info{sizeof(info), SIF_RANGE | SIF_PAGE | SIF_POS};
+            info.nMax = std::max(0, contentSize.dy - 1);
+            info.nPage = (UINT)std::max(0, bounds.dy);
+            info.nPos = scrollY;
+            SetScrollInfo(hwnd, SB_VERT, &info, FALSE);
+            if (gUiInstallScrollbar) gUiInstallScrollbar(hwnd);
+        }
         moving = false;
-        if (changed) Repaint();
-        return changed;
+        Repaint();
+        return true;
     }
     bool ScrollBy(int dy) { return ScrollTo((int)std::clamp<int64_t>((int64_t)scrollY + dy, 0, MaxScrollY())); }
     void OnVScroll(WPARAM wp) {
-        if (moving) return;
-        int previous = scrollY;
-        moving = true;
-        SettingsMoveBatch batch;
-        batch.viewport = lastBounds;
-        batch.themeWindow = themeWindow;
-        ScrollBox::OnVScroll(wp);
-        batch.Apply();
-        if (scrollY != previous) ClipControls(child);
-        moving = false;
-        if (scrollY != previous) Repaint();
+        int target = scrollY;
+        switch (LOWORD(wp)) {
+            case SB_TOP:
+                target = 0;
+                break;
+            case SB_BOTTOM:
+                target = MaxScrollY();
+                break;
+            case SB_LINEUP:
+                target -= lineDy;
+                break;
+            case SB_LINEDOWN:
+                target += lineDy;
+                break;
+            case SB_PAGEUP:
+                target -= bounds.dy;
+                break;
+            case SB_PAGEDOWN:
+                target += bounds.dy;
+                break;
+            case SB_THUMBTRACK:
+            case SB_THUMBPOSITION:
+                target = gUiScrollbarTrackPos ? gUiScrollbarTrackPos(GetHwnd(), HIWORD(wp), SB_VERT) : HIWORD(wp);
+                break;
+            default:
+                return;
+        }
+        ScrollTo(target);
     }
     void Wheel(int delta) {
+        if (!delta) return;
+        if (MaxScrollY() == 0 || (delta > 0 && scrollY == 0) || (delta < 0 && scrollY == MaxScrollY())) {
+            wheelRemainder = 0;
+            return;
+        }
         UINT lines = 3;
         SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
         if (!lines) return;
@@ -653,13 +804,63 @@ struct SettingsFontDownload {
     }
 };
 static const char* kMarkdownDownloadNotice =
-    "Optional reading fonts download from GitHub when you click OK and remain available offline. PDF document fonts "
-    "are unchanged.";
+    "System fonts are available offline. Optional reading fonts download from GitHub when you click OK and remain "
+    "available offline. PDF document fonts are unchanged.";
 static void RunSettingsFontDownload(SettingsFontDownload*);
+struct SettingsIconDownload {
+    SettingsWnd* wnd = nullptr;
+    int style = 3;
+    Str cacheRoot;
+    Str error;
+    bool success = false;
+    ~SettingsIconDownload() {
+        str::Free(cacheRoot);
+        str::Free(error);
+    }
+};
+static const char* kFileIconNotice =
+    "Outlined Pages is included. The other styles download from GitHub after confirmation and stay available "
+    "offline. Icons appear for file types assigned to SumatraPDF Enhanced in Windows Default Apps; choosing a "
+    "style does not change your default apps.";
+static void RunSettingsIconDownload(SettingsIconDownload*);
+
+enum class SettingsPreviewFinish {
+    Rollback,
+    Commit
+};
+
+struct SettingsAppearanceSnapshot {
+    struct Page {
+        DisplayModel* model;
+        Color text, background;
+    };
+    Settings* settings = nullptr;
+    int tabStyle = 3, penStyle = 11, penSize = 20, pinStyle = 10, pickerStyle = 8;
+    Str tabAccent, penAccent, selection, fileText, fileBackground;
+    bool hadFileState = false;
+    Vec<Page> pages;
+    void Clear() {
+        str::Free(tabAccent);
+        str::Free(penAccent);
+        str::Free(selection);
+        str::Free(fileText);
+        str::Free(fileBackground);
+        tabAccent = penAccent = selection = fileText = fileBackground = {};
+        hadFileState = false;
+        VecReset(pages);
+        settings = nullptr;
+    }
+    ~SettingsAppearanceSnapshot() { Clear(); }
+};
+static constexpr UINT_PTR kSettingsPreviewTimer = 0x7f07;
+static constexpr UINT kSettingsPreviewDelay = 150;
+static bool ParseSettingNumber(Str text, Str unit, double& value);
 
 struct SettingsWnd : WindowBase {
     ~SettingsWnd() override {
+        EndAppearancePreview(SettingsPreviewFinish::Rollback);
         if (fontDownload) fontDownload->wnd = nullptr;
+        if (iconDownload) iconDownload->wnd = nullptr;
         str::Free(colorFile);
         str::Free(cacheKey);
         for (auto& value : savedValues) str::Free(value.text);
@@ -693,10 +894,21 @@ struct SettingsWnd : WindowBase {
     DropDown* dropUiFamily = nullptr;
     DropDown* dropMarkdownFamily = nullptr;
     DropDown* dropMarkdownMath = nullptr;
+    DropDown* dropMarkdownWidth = nullptr;
+    DropDown* dropMarkdownLeft = nullptr;
+    DropDown* dropMarkdownRight = nullptr;
+    bool markdownLayoutUpdating = false;
+    void MarkdownWidthChanged();
+    void MarkdownMarginsChanged();
     DropDown* dropDictionaryFont = nullptr;
     DropDown* dropDictionarySpacing = nullptr;
+    DropDown* dropDictionaryScale = nullptr;
+    DropDown* dropLearningScale = nullptr;
     VirtText* fontDownloadStatus = nullptr;
     SettingsFontDownload* fontDownload = nullptr;
+    DropDown* dropFileIconStyle = nullptr;
+    VirtText* iconDownloadStatus = nullptr;
+    SettingsIconDownload* iconDownload = nullptr;
     DropDown* dropInterfaceScale = nullptr;
     DropDown* dropUiSize = nullptr;
     DropDown* dropTreeSize = nullptr;
@@ -704,6 +916,25 @@ struct SettingsWnd : WindowBase {
     DropDown* dropToolbarSize = nullptr;
     DropDown* dropPinIconStyle = nullptr;
     DropDown* dropColorPickerIconStyle = nullptr;
+    DropDown* dropPenCursorStyle = nullptr;
+    DropDown* dropPenCursorSize = nullptr;
+    DropDown* dropPenCursorAccent = nullptr;
+    void PickPenCursorAccent(VirtMouseEvent*);
+    DropDown* dropTabStyle = nullptr;
+    DropDown* dropTabAccent = nullptr;
+    void PickTabAccent(VirtMouseEvent*);
+    void RefreshAppearance();
+    SettingsAppearanceSnapshot appearanceSnapshot;
+    SettingsAppearanceSnapshot suspendedAppearance;
+    bool appearanceReady = false;
+    Color pendingPageColors[2] = {kColorUnset, kColorUnset};
+    void CaptureAppearance();
+    void PreviewAppearance();
+    void PreviewPageColors();
+    void EndAppearancePreview(SettingsPreviewFinish);
+    void CancelAppearance() { EndAppearancePreview(SettingsPreviewFinish::Rollback); }
+    void SuspendAppearance();
+    void ResumeAppearance();
     DropDown* dropRecentCount = nullptr;
     DropDown* dropTabListCount = nullptr;
     DropDown* dropScrollbarWidth = nullptr;
@@ -724,6 +955,17 @@ struct SettingsWnd : WindowBase {
     Checkbox* chkRememberOpened = nullptr;
 
     VirtRichText* dataLocation = nullptr;
+    DropDown* dropBackupMode = nullptr;
+    DropDown* dropBackupFolder = nullptr;
+    VirtButton* btnExportSettings = nullptr;
+    VirtButton* btnImportSettings = nullptr;
+    HWND importedSettingsOwner = nullptr;
+    Str BackupFolderTemp();
+    void ChooseBackupFolder(VirtMouseEvent*);
+    void DefaultBackupFolder(VirtMouseEvent*);
+    void BackUpNow(VirtMouseEvent*);
+    void ExportSettings(VirtMouseEvent*);
+    void ImportSettings(VirtMouseEvent*);
     void UpdateDataLocation();
     void ChooseDataFolder(VirtMouseEvent*);
     void RestoreDataFolder(VirtMouseEvent*);
@@ -744,6 +986,12 @@ struct SettingsWnd : WindowBase {
     void RestoreValues();
     bool exposingAccessibility = false;
     void ExposeNativeFields();
+    bool nativeAccessibility = false;
+    void HideIdleFields();
+    void UpdateTheme() override {
+        WindowBase::UpdateTheme();
+        if (scroll) scroll->ClipControls(scroll->child, true);
+    }
 
     bool Create(MainWindow* win, SettingsView view = SettingsView::Visible);
     void FillLayout();
@@ -756,6 +1004,228 @@ struct SettingsWnd : WindowBase {
     void OnCancel(VirtMouseEvent* ev = nullptr);
     void OnOk(VirtMouseEvent* ev = nullptr);
 };
+
+void SettingsWnd::RefreshAppearance() {
+    PreviewAppearance();
+    for (DropDown* field : {dropTabStyle, dropPenCursorStyle}) {
+        if (!field) continue;
+        if (field->hwnd)
+            InvalidateRect(field->hwnd, nullptr, FALSE);
+        else
+            ((SettingsDropDown*)field)->idle.Repaint();
+    }
+}
+
+static void RepaintAppearance(bool tabs, bool icons, bool selection) {
+    if (tabs) SetCurrentThemeFromSettings();
+    for (MainWindow* window : gWindows) {
+        if (tabs) UpdateTabWidth(window);
+        if (icons) UpdateToolbarAfterThemeChange(window);
+        if (selection) InvalidateRect(window->hwndCanvas, nullptr, FALSE);
+    }
+    if (icons) MaybeRedrawHomePage();
+}
+
+static void CaptureAppearanceState(SettingsAppearanceSnapshot& state, Str file) {
+    state.Clear();
+    state.settings = gSettings;
+    state.tabStyle = gSettings->activeTabStyle;
+    state.penStyle = gSettings->penCursorStyle;
+    state.penSize = gSettings->penCursorSize;
+    state.pinStyle = gSettings->pinIconStyle;
+    state.pickerStyle = gSettings->colorPickerIconStyle;
+    state.tabAccent = str::Dup(gSettings->activeTabAccent.s);
+    state.penAccent = str::Dup(gSettings->penCursorAccent.s);
+    state.selection = str::Dup(gSettings->fixedPageUI.selectionColor.s);
+    if (!len(file)) return;
+    if (auto* history = FileHistoryFindByPath(file)) {
+        state.hadFileState = true;
+        state.fileText = str::Dup(history->pageTextColor.s);
+        state.fileBackground = str::Dup(history->pageBackgroundColor.s);
+    }
+    for (MainWindow* window : gWindows) {
+        for (WindowTab* tab : window->Tabs()) {
+            auto* model = tab->ctrl ? tab->ctrl->AsFixed() : nullptr;
+            if (model && str::EqI(model->GetFilePath(), file))
+                VecAppend(state.pages, {model, model->pageTextColor, model->pageBackgroundColor});
+        }
+    }
+}
+
+static void RestoreAppearanceState(const SettingsAppearanceSnapshot& state, Str file) {
+    if (state.settings != gSettings) return;
+    gSettings->activeTabStyle = state.tabStyle;
+    gSettings->penCursorStyle = state.penStyle;
+    gSettings->penCursorSize = state.penSize;
+    gSettings->pinIconStyle = state.pinStyle;
+    gSettings->colorPickerIconStyle = state.pickerStyle;
+    SetColorText(gSettings->activeTabAccent, state.tabAccent);
+    SetColorText(gSettings->penCursorAccent, state.penAccent);
+    SetColorText(gSettings->fixedPageUI.selectionColor, state.selection);
+    if (auto* history = len(file) ? FileHistoryFindByPath(file) : nullptr) {
+        SetColorText(history->pageTextColor, state.fileText);
+        SetColorText(history->pageBackgroundColor, state.fileBackground);
+    }
+    for (MainWindow* window : gWindows) {
+        for (WindowTab* tab : window->Tabs()) {
+            auto* model = tab->ctrl ? tab->ctrl->AsFixed() : nullptr;
+            if (!model) continue;
+            for (const auto& page : state.pages) {
+                if (page.model != model) continue;
+                model->pageTextColor = page.text;
+                model->pageBackgroundColor = page.background;
+            }
+        }
+    }
+}
+
+void SettingsWnd::CaptureAppearance() {
+    if (appearanceSnapshot.settings) return;
+    BeginAppearancePreview(this, MkMethod0<SettingsWnd, &SettingsWnd::CancelAppearance>(this),
+                           MkMethod0<SettingsWnd, &SettingsWnd::SuspendAppearance>(this),
+                           MkMethod0<SettingsWnd, &SettingsWnd::ResumeAppearance>(this));
+    CaptureAppearanceState(appearanceSnapshot, colorFile);
+    if (len(appearanceSnapshot.pages)) {
+        pendingPageColors[0] = appearanceSnapshot.pages[0].text;
+        pendingPageColors[1] = appearanceSnapshot.pages[0].background;
+    }
+}
+
+void SettingsWnd::SuspendAppearance() {
+    if (!appearanceSnapshot.settings || appearanceSnapshot.settings != gSettings || suspendedAppearance.settings)
+        return;
+    CaptureAppearanceState(suspendedAppearance, colorFile);
+    RestoreAppearanceState(appearanceSnapshot, colorFile);
+}
+
+void SettingsWnd::ResumeAppearance() {
+    if (!suspendedAppearance.settings) return;
+    RestoreAppearanceState(suspendedAppearance, colorFile);
+    suspendedAppearance.Clear();
+}
+
+static bool SetPreviewColor(ParsedColor& setting, Color color, Str value) {
+    if (GetParsedColor(setting, kColorUnset) == color) return false;
+    SetColorText(setting, value);
+    return true;
+}
+
+void SettingsWnd::PreviewAppearance() {
+    if (!appearanceReady || !gSettings || !gSettings->liveAppearancePreview) return;
+    CaptureAppearance();
+    bool tabs = false, icons = false, selection = false;
+    Color color;
+    if (ReadTabAccent(dropTabAccent->GetTextTemp(), color))
+        tabs = SetPreviewColor(gSettings->activeTabAccent, color, SerializeColorTemp(color));
+    int style = SelectedTabStyle(dropTabStyle);
+    tabs |= style != gSettings->activeTabStyle;
+    gSettings->activeTabStyle = style;
+    if (ReadPenAccent(dropPenCursorAccent->GetTextTemp(), color))
+        SetPreviewColor(gSettings->penCursorAccent, color, SerializeColorTemp(color));
+    gSettings->penCursorStyle = SelectedPenCursor(dropPenCursorStyle);
+    double size;
+    if (ParseSettingNumber(dropPenCursorSize->GetTextTemp(), StrL("px"), size) && size >= 0 && size <= 100 &&
+        size == floor(size))
+        gSettings->penCursorSize = (int)size;
+    style = SelectedPinIconStyle(dropPinIconStyle);
+    icons |= style != gSettings->pinIconStyle;
+    gSettings->pinIconStyle = style;
+    style = SelectedColorPickerIconStyle(dropColorPickerIconStyle);
+    icons |= style != gSettings->colorPickerIconStyle;
+    gSettings->colorPickerIconStyle = style;
+    if (ReadSelectionColor(dropSelectionColor->GetTextTemp(), color))
+        selection = SetPreviewColor(gSettings->fixedPageUI.selectionColor, color, SerializeSelectionColor(color));
+    RepaintAppearance(tabs, icons, selection);
+    if (!len(colorFile)) return;
+    DropDown* fields[] = {dropPageText, dropPageBg};
+    bool pageChanged = false;
+    for (int i = 0; i < 2; i++) {
+        Str value = str::DupTemp(fields[i]->GetTextTemp());
+        str::TrimWSInPlace(value, str::TrimOpt::Both);
+        color = kColorUnset;
+        if (!str::EqI(value, Tr("Use theme")) && (!ParseColor(&color, value) || color == kColorUnset)) continue;
+        pageChanged |= pendingPageColors[i] != color;
+        pendingPageColors[i] = color;
+    }
+    if (pageChanged) SetTimer(hwnd, kSettingsPreviewTimer, kSettingsPreviewDelay, nullptr);
+}
+
+static void SetPreviewPage(MainWindow* window, DisplayModel* model, Color text, Color background) {
+    if (model->pageTextColor == text && model->pageBackgroundColor == background) return;
+    if (gRenderCache) {
+        gRenderCache->CancelRenderingBlocking(model);
+        gRenderCache->FreeForDisplayModel(model);
+    }
+    model->pageTextColor = text;
+    model->pageBackgroundColor = background;
+    model->RepaintDisplay();
+    if (window->AsFixed() == model) RefHoverRefreshColors(window->refHover);
+}
+
+void SettingsWnd::PreviewPageColors() {
+    KillTimer(hwnd, kSettingsPreviewTimer);
+    if (!appearanceSnapshot.settings || !gSettings || !gSettings->liveAppearancePreview) return;
+    for (MainWindow* window : gWindows) {
+        for (WindowTab* tab : window->Tabs()) {
+            auto* model = tab->ctrl ? tab->ctrl->AsFixed() : nullptr;
+            if (model && str::EqI(model->GetFilePath(), colorFile))
+                SetPreviewPage(window, model, pendingPageColors[0], pendingPageColors[1]);
+        }
+    }
+}
+
+void SettingsWnd::EndAppearancePreview(SettingsPreviewFinish finish) {
+    if (hwnd) KillTimer(hwnd, kSettingsPreviewTimer);
+    auto& original = appearanceSnapshot;
+    if (!original.settings) return;
+    if (finish == SettingsPreviewFinish::Rollback) {
+        // Restore cached render state through the same invalidation path as a new preview.
+        for (MainWindow* window : gWindows) {
+            for (WindowTab* tab : window->Tabs()) {
+                auto* model = tab->ctrl ? tab->ctrl->AsFixed() : nullptr;
+                if (!model) continue;
+                for (const auto& page : original.pages)
+                    if (page.model == model) SetPreviewPage(window, model, page.text, page.background);
+            }
+        }
+        RestoreAppearanceState(original, colorFile);
+        if (gSettings == original.settings) RepaintAppearance(true, true, true);
+    }
+    ::EndAppearancePreview(this);
+    original.Clear();
+    suspendedAppearance.Clear();
+}
+
+void SettingsDropDown::DrawAppearance(PreviewItemEvent* ev) {
+    Color color;
+    u8 alpha;
+    if (SettingsPreviewColor(appearance, ev->text, color, alpha)) {
+        DrawDropDownSwatch(ev->gfx, ev->bounds, color, alpha);
+        return;
+    }
+    int index = ev->itemIndex;
+    if (index < 0) index = CbGetCurrentSelection(this);
+    Str svg;
+    Pixmap* pixmap = nullptr;
+    if (appearance == SettingsAppearance::Pin && index >= 0 && index < dimofi(kPinIconChoices))
+        svg = Str(GetPinIconSvg(kPinIconChoices[index]));
+    else if (appearance == SettingsAppearance::Palette && index >= 0 && index < dimofi(kColorPickerIconChoices))
+        svg = Str(GetColorPickerIconSvg(kColorPickerIconChoices[index]));
+    else if (appearance == SettingsAppearance::FileIcon && index >= 0 && index < dimofi(kFileIconChoices))
+        pixmap = GetFileTypeIconPreview(kFileIconChoices[index]);
+    else if (appearance == SettingsAppearance::Tab && index >= 0 && index < dimofi(kActiveTabStyles)) {
+        Color accent = GetParsedColor(gSettings->activeTabAccent, MkRgb(0x26, 0x75, 0xe8));
+        if (window->dropTabAccent) ReadTabAccent(window->dropTabAccent->GetTextTemp(), accent);
+        svg = GetActiveTabPreviewSvgTemp(kActiveTabStyles[index], accent, ThemeActiveTabBackgroundColor(),
+                                         ThemeWindowTextColor());
+    } else if (appearance == SettingsAppearance::Pen && index >= 0 && index < dimofi(kPenCursorChoices)) {
+        Color accent = GetParsedColor(gSettings->penCursorAccent, MkRgb(0x26, 0x75, 0xe8));
+        if (window->dropPenCursorAccent) ReadPenAccent(window->dropPenCursorAccent->GetTextTemp(), accent);
+        svg = GetPenCursorSvgTemp(kPenCursorChoices[index], accent, ev->foreground);
+    }
+    if (len(svg)) pixmap = GetCachedPixmapForSvg(svg, ev->bounds.dx, ev->bounds.dy, ev->foreground, ev->background);
+    if (pixmap) ev->gfx->DrawPixmap(pixmap, ev->bounds);
+}
 
 static void FillSizeChoices(DropDown* drop, Vec<int>& sizes, int current, bool percentage) {
     const int fontSizes[] = {0, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48};
@@ -855,11 +1325,13 @@ static bool IsSettingsFont(Str name) {
 static int CALLBACK DictionaryFontEnum(const LOGFONTW* font, const TEXTMETRICW*, DWORD, LPARAM data) {
     auto* names = (StrVec*)data;
     Str name = ToUtf8Temp(font->lfFaceName);
+    if (str::StartsWith(name, StrL("EDict"))) return 1;
     if (len(name) && name.s[0] != '@' && !names->Contains(name)) names->Append(name);
     return 1;
 }
 static void DictionaryFontChoices(StrVec& names) {
     names.Append(Tr("Follow interface font"));
+    names.Append(Tr("App fonts"));
     for (Str name : {StrL("Manrope"), StrL("Pretendard Std"), StrL("Public Sans")}) names.Append(name);
     for (auto kind : {MarkdownFontKind::Text, MarkdownFontKind::Math}) {
         for (int i = 1; i < MarkdownFontCount(kind); i++) names.Append(MarkdownFontName(kind, i));
@@ -873,9 +1345,38 @@ static void DictionaryFontChoices(StrVec& names) {
         ReleaseDC(nullptr, dc);
     }
     SortNoCase(&installed);
+    names.Append(Tr("System fonts"));
     for (Str name : installed) {
         if (!names.Contains(name)) names.Append(name);
     }
+}
+
+static void FillMarkdownFontChoices(DropDown* drop, MarkdownFontKind kind, Str value, const StrVec& installed) {
+    StrVec catalog;
+    MarkdownFontChoices(kind, catalog);
+    StrVec names;
+    names.Append(catalog[0]);
+    VecReset(drop->sectionHeaders);
+    VecAppend(drop->sectionHeaders, len(names));
+    names.Append(Tr("Downloadable fonts"));
+    for (int i = 1; i < len(catalog); i++) names.Append(catalog[i]);
+    if (len(installed)) {
+        VecAppend(drop->sectionHeaders, len(names));
+        names.Append(Tr("System fonts"));
+        for (Str name : installed) {
+            if (names.FindI(name) < 0) names.Append(name);
+        }
+    }
+    drop->SetItems(names);
+    int selected = len(value) ? names.FindI(value) : 0;
+    if (VecContains(drop->sectionHeaders, selected)) selected = 0;
+    CbSetCurrentSelection(drop, std::max(0, selected));
+}
+
+static Str SelectedMarkdownFont(DropDown* drop) {
+    int selected = CbGetCurrentSelection(drop);
+    if (selected <= 0 || selected >= len(drop->items) || VecContains(drop->sectionHeaders, selected)) return {};
+    return drop->items[selected];
 }
 
 void SettingsWnd::UpdateDataLocation() {
@@ -931,7 +1432,52 @@ void SettingsWnd::RestoreDataFolder(VirtMouseEvent*) {
     ApplyDataFolder(GetDefaultDataDirTemp());
 }
 
+Str SettingsWnd::BackupFolderTemp() {
+    Str folder = dropBackupFolder->GetTextTemp();
+    str::TrimWSInPlace(folder, str::TrimOpt::Both);
+    return str::EqI(folder, Tr("Use default backup folder")) ? Str{} : folder;
+}
+
+void SettingsWnd::ChooseBackupFolder(VirtMouseEvent*) {
+    BROWSEINFOW args{};
+    args.hwndOwner = hwnd;
+    args.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    args.lpszTitle = CWStrTemp(Tr("Choose a settings backup folder"));
+    PIDLIST_ABSOLUTE item = SHBrowseForFolderW(&args);
+    if (!item) return;
+    WCHAR folder[MAX_PATH];
+    bool ok = SHGetPathFromIDListW(item, folder) != FALSE;
+    CoTaskMemFree(item);
+    if (ok) dropBackupFolder->SetText(ToUtf8Temp(folder));
+}
+
+void SettingsWnd::DefaultBackupFolder(VirtMouseEvent*) {
+    CbSetCurrentSelection(dropBackupFolder, 0);
+}
+
+void SettingsWnd::BackUpNow(VirtMouseEvent*) {
+    ShowSettingsBackup(hwnd, BackupFolderTemp());
+}
+
 static SettingsWnd* gSettingsWnd = nullptr;
+static void ReopenImportedSettings(SettingsWnd*);
+
+void SettingsWnd::ExportSettings(VirtMouseEvent*) {
+    ShowSettingsTransfer(win, SettingsTransfer::Export, hwnd);
+}
+
+void SettingsWnd::ImportSettings(VirtMouseEvent*) {
+    if (fontDownload || iconDownload) {
+        MessageBoxW(hwnd, CWStrTemp(Tr("Wait for the current download to finish, then import settings.")),
+                    CWStrTemp(Tr("Import Settings")), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    HWND owner = win ? win->hwndFrame : nullptr;
+    if (!ShowSettingsTransfer(win, SettingsTransfer::Import, hwnd)) return;
+    importedSettingsOwner = owner;
+    SetIsVisible(false);
+    uitask::Post(MkFunc0(ReopenImportedSettings, this), "ReopenImportedSettings");
+}
 
 TempStr SettingsFontStateTemp() {
     return fmt("busy=%d\nfont=%s\ndictionary=%s\nspacing=%g\nstatus=%s",
@@ -949,7 +1495,12 @@ static TempStr SettingsCacheKey(MainWindow* win) {
                        gSettings->homePageThumbnailSize,
                        gSettings->toolbarSize,
                        gSettings->pinIconStyle,
+                       gSettings->fileTypeIconStyle,
+                       (double)gSettings->liveAppearancePreview,
                        gSettings->colorPickerIconStyle,
+                       gSettings->penCursorStyle,
+                       gSettings->penCursorSize,
+                       gSettings->activeTabStyle,
                        gSettings->homePageMaxRecentItems,
                        gSettings->tabListVisibleItems,
                        gSettings->scrollbarWidth,
@@ -959,6 +1510,8 @@ static TempStr SettingsCacheKey(MainWindow* win) {
                        gSettings->penMaxWidth,
                        gSettings->penWidthStep,
                        gSettings->dictionaryUI.lineSpacing,
+                       gSettings->dictionaryUI.fontScale,
+                       gSettings->dictionaryUI.learningHubScale,
                        (double)gSettings->showToc,
                        (double)gSettings->rememberStatePerDocument,
                        (double)gSettings->useTabs,
@@ -977,6 +1530,10 @@ static TempStr SettingsCacheKey(MainWindow* win) {
                      gSettings->uiLanguage,
                      gSettings->inverseSearchCmdLine,
                      gSettings->fixedPageUI.selectionColor.s,
+                     gSettings->penCursorAccent.s,
+                     gSettings->activeTabAccent.s,
+                     gSettings->settingsBackupMode,
+                     gSettings->settingsBackupDirectory,
                      GetAppDataDirTemp(),
                      GetPendingDataDirTemp()};
     for (Str value : strings) {
@@ -1017,12 +1574,25 @@ void SettingsWnd::SaveValues() {
                          dropPageText,
                          dropPageBg,
                          dropPinIconStyle,
+                         dropFileIconStyle,
                          dropColorPickerIconStyle,
                          dropSelectionColor,
+                         dropPenCursorStyle,
+                         dropPenCursorSize,
+                         dropPenCursorAccent,
+                         dropTabStyle,
+                         dropTabAccent,
                          dropMarkdownFamily,
                          dropMarkdownMath,
+                         dropMarkdownWidth,
+                         dropMarkdownLeft,
+                         dropMarkdownRight,
                          dropDictionaryFont,
-                         dropDictionarySpacing};
+                         dropDictionarySpacing,
+                         dropDictionaryScale,
+                         dropLearningScale,
+                         dropBackupMode,
+                         dropBackupFolder};
     for (auto* drop : drops)
         if (drop)
             VecAppend(savedValues, {drop, str::Dup(drop->GetTextTemp()), CbGetCurrentSelection(drop), false, false});
@@ -1033,6 +1603,7 @@ void SettingsWnd::SaveValues() {
 }
 
 void SettingsWnd::RestoreValues() {
+    markdownLayoutUpdating = true;
     for (auto& value : savedValues) {
         if (value.checkbox) {
             ((Checkbox*)value.control)->SetState(value.checked ? Checkbox::State::Checked : Checkbox::State::Unchecked);
@@ -1047,6 +1618,7 @@ void SettingsWnd::RestoreValues() {
     }
     OnReferenceHoverChanged();
     OnRememberOpenedChanged();
+    markdownLayoutUpdating = false;
 }
 
 static void ClearSettingsWnd() {
@@ -1158,6 +1730,15 @@ void SettingsWnd::OnRememberOpenedChanged() {
 }
 
 void SettingsWnd::OnCancel(VirtMouseEvent*) {
+    EndAppearancePreview(SettingsPreviewFinish::Rollback);
+    if (iconDownload) {
+        iconDownload->wnd = nullptr;
+        iconDownload = nullptr;
+        dropFileIconStyle->SetIsEnabled(HasPermission(Perm::RegistryAccess));
+        btnOk->SetIsEnabled(true);
+        iconDownloadStatus->SetText(Tr(Str(kFileIconNotice)));
+        iconDownloadStatus->RequestLayout();
+    }
     if (fontDownload) {
         fontDownload->wnd = nullptr;
         fontDownload = nullptr;
@@ -1165,20 +1746,76 @@ void SettingsWnd::OnCancel(VirtMouseEvent*) {
         dropMarkdownMath->SetIsEnabled(true);
         dropDictionaryFont->SetIsEnabled(true);
         dropDictionarySpacing->SetIsEnabled(true);
+        dropDictionaryScale->SetIsEnabled(true);
+        dropLearningScale->SetIsEnabled(true);
         btnOk->SetIsEnabled(true);
         fontDownloadStatus->SetText(Tr(Str(kMarkdownDownloadNotice)));
     }
     SetIsVisible(false);
+    HideIdleFields();
     win = nullptr;
 }
 
+void SettingsWnd::MarkdownWidthChanged() {
+    if (markdownLayoutUpdating) return;
+    double width, left, right;
+    if (!ReadSettingNumber(dropMarkdownWidth, StrL("%"), width) || width <= 0 || width > 100 ||
+        !ReadSettingNumber(dropMarkdownLeft, StrL("%"), left) ||
+        !ReadSettingNumber(dropMarkdownRight, StrL("%"), right))
+        return;
+    if (left < 0 || right < 0) return;
+    double total = left + right;
+    left = total > 0 ? (100 - width) * left / total : (100 - width) / 2;
+    right = 100 - width - left;
+    markdownLayoutUpdating = true;
+    dropMarkdownLeft->SetText(fmt("%.3f", left));
+    dropMarkdownRight->SetText(fmt("%.3f", right));
+    markdownLayoutUpdating = false;
+}
+
+void SettingsWnd::MarkdownMarginsChanged() {
+    if (markdownLayoutUpdating) return;
+    double left, right;
+    if (!ReadSettingNumber(dropMarkdownLeft, StrL("%"), left) ||
+        !ReadSettingNumber(dropMarkdownRight, StrL("%"), right) || left < 0 || right < 0 || left + right >= 100)
+        return;
+    markdownLayoutUpdating = true;
+    dropMarkdownWidth->SetText(fmt("%.3f", 100 - left - right));
+    markdownLayoutUpdating = false;
+}
+
 void SettingsWnd::OnOk(VirtMouseEvent*) {
-    if (fontDownload) return;
+    if (fontDownload || iconDownload) return;
     if (!gSettings) {
         ScheduleDelete();
         return;
     }
 
+    Str backupFolder = str::Dup(BackupFolderTemp());
+    defer {
+        str::Free(backupFolder);
+    };
+    if (len(backupFolder) && !path::IsAbsolute(backupFolder)) {
+        MessageBoxW(hwnd, CWStrTemp(Tr("Choose an absolute path for the backup folder, or use the default folder.")),
+                    CWStrTemp(Tr("Check backup folder")), MB_OK | MB_ICONWARNING);
+        dropBackupFolder->SetFocus();
+        return;
+    }
+
+    Color penAccent;
+    if (!ReadPenAccent(dropPenCursorAccent->GetTextTemp(), penAccent)) {
+        MessageBoxW(hwnd, CWStrTemp(Tr("Choose Blue or Red, or enter an accent color as #RRGGBB.")),
+                    CWStrTemp(Tr("Check color")), MB_OK | MB_ICONWARNING);
+        dropPenCursorAccent->SetFocus();
+        return;
+    }
+    Color tabAccent;
+    if (!ReadTabAccent(dropTabAccent->GetTextTemp(), tabAccent)) {
+        MessageBoxW(hwnd, CWStrTemp(Tr("Choose a tab accent preset or enter a color as #RRGGBB.")),
+                    CWStrTemp(Tr("Check color")), MB_OK | MB_ICONWARNING);
+        dropTabAccent->SetFocus();
+        return;
+    }
     Color selectionColor;
     if (!ReadSelectionColor(dropSelectionColor->GetTextTemp(), selectionColor)) {
         MessageBoxW(hwnd, CWStrTemp(Tr("Choose a selection color or enter #RRGGBB or #AARRGGBB.")),
@@ -1219,6 +1856,7 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
         {dropTreeSize, Tr("Sidebar text size"), StrL("px"), 9, 96, true},
         {dropThumbnailSize, Tr("Home thumbnail size"), StrL("%"), 75, 250},
         {dropToolbarSize, Tr("UI icon size"), StrL("px"), 8, 64},
+        {dropPenCursorSize, Tr("Pen cursor size"), StrL("px"), 0, 100},
         {dropRecentCount, Tr("Recent documents shown"), {}, 1, 200},
         {dropTabListCount, Tr("Visible open-file list rows"), {}, 1, 50},
         {dropScrollbarWidth, Tr("Scrollbar width"), StrL("px"), 8, 60},
@@ -1289,8 +1927,58 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
         dropDictionarySpacing->SetFocus();
         return;
     }
-    Str selectedText = MarkdownFontName(MarkdownFontKind::Text, CbGetCurrentSelection(dropMarkdownFamily));
-    Str selectedMath = MarkdownFontName(MarkdownFontKind::Math, CbGetCurrentSelection(dropMarkdownMath));
+    double dictionaryScale, learningScale;
+    if (!ReadSettingNumber(dropDictionaryScale, StrL("%"), dictionaryScale) || dictionaryScale < 50 ||
+        dictionaryScale > 300 || !ReadSettingNumber(dropLearningScale, StrL("%"), learningScale) ||
+        learningScale < 50 || learningScale > 300) {
+        MessageBoxW(hwnd, CWStrTemp(Tr("Enter text scales from 50% to 300%. 100% follows the app text size.")),
+                    CWStrTemp(Tr("Check text scale")), MB_OK | MB_ICONWARNING);
+        return;
+    }
+    Str selectedText = SelectedMarkdownFont(dropMarkdownFamily);
+    Str selectedMath = SelectedMarkdownFont(dropMarkdownMath);
+    double markdownWidth, markdownLeft, markdownRight;
+    if (!ReadSettingNumber(dropMarkdownWidth, StrL("%"), markdownWidth) ||
+        !ReadSettingNumber(dropMarkdownLeft, StrL("%"), markdownLeft) ||
+        !ReadSettingNumber(dropMarkdownRight, StrL("%"), markdownRight) || markdownWidth < 0 || markdownWidth > 100 ||
+        markdownLeft < 0 || markdownRight < 0 || markdownLeft >= 100 || markdownRight >= 100 ||
+        (markdownWidth > 0 && std::abs(markdownWidth + markdownLeft + markdownRight - 100) > 0.05)) {
+        MessageBoxW(
+            hwnd,
+            CWStrTemp(Tr("Reading width and left/right margins must total 100%. Use width 0 for the default layout.")),
+            CWStrTemp(Tr("Check Markdown layout")), MB_OK | MB_ICONWARNING);
+        return;
+    }
+    int fileIconStyle = SelectedFileIconStyle(dropFileIconStyle);
+    if (HasPermission(Perm::RegistryAccess) && !FileTypeIconPackAvailable(fileIconStyle)) {
+        if (!HasPermission(Perm::InternetAccess) || !HasPermission(Perm::DiskAccess)) {
+            iconDownloadStatus->SetText(Tr("Downloading icon styles requires internet and disk access."));
+            iconDownloadStatus->RequestLayout();
+            return;
+        }
+        Str prompt =
+            fmt("%s: %s\n\n%s: %s (%.2f MiB)\n%s\n\n%s\n\n%s", Tr("Icon style"), FileTypeIconStyleName(fileIconStyle),
+                Tr("Download"), StrL("github.com/abelokoj/sumatrapdf-enhanced"),
+                FileTypeIconDownloadBytes(fileIconStyle) / 1048576.0,
+                Tr("39 file-type icons; no installer or additional fonts. The download is checked before use."),
+                Tr("The icons will be stored in your app data folder and remain available offline. This changes only "
+                   "SumatraPDF Enhanced file icons; your default apps and document contents stay unchanged."),
+                Tr("Download and apply this icon style?"));
+        if (MessageBoxW(hwnd, CWStrTemp(prompt), CWStrTemp(Tr("Download file icons")),
+                        MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) != IDYES)
+            return;
+        auto* job = new SettingsIconDownload();
+        job->wnd = this;
+        job->style = fileIconStyle;
+        job->cacheRoot = str::Dup(FileTypeIconCacheDir());
+        iconDownload = job;
+        dropFileIconStyle->SetIsEnabled(false);
+        btnOk->SetIsEnabled(false);
+        iconDownloadStatus->SetText(Tr("Downloading and checking the selected file icons…"));
+        iconDownloadStatus->RequestLayout();
+        RunAsync(MkFunc0(RunSettingsIconDownload, job), StrL("DownloadFileTypeIcons"));
+        return;
+    }
     if (!MarkdownFontsAvailable(selectedText, selectedMath) || !ReadingFontAvailable(dictionary)) {
         auto* job = new SettingsFontDownload();
         job->wnd = this;
@@ -1303,11 +1991,23 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
         dropMarkdownMath->SetIsEnabled(false);
         dropDictionaryFont->SetIsEnabled(false);
         dropDictionarySpacing->SetIsEnabled(false);
+        dropDictionaryScale->SetIsEnabled(false);
+        dropLearningScale->SetIsEnabled(false);
         btnOk->SetIsEnabled(false);
         fontDownloadStatus->SetText(Tr("Downloading the selected reading fonts from GitHub…"));
         fontDownloadStatus->RequestLayout();
         RunAsync(MkFunc0(RunSettingsFontDownload, job), StrL("DownloadMarkdownFonts"));
         return;
+    }
+    if (fileIconStyle != gSettings->fileTypeIconStyle && HasPermission(Perm::RegistryAccess)) {
+        if (!ApplyFileTypeIcons(fileIconStyle)) {
+            iconDownloadStatus->SetText(
+                Tr("Windows could not update the file icons. Your previous style is still "
+                   "selected. Try again."));
+            iconDownloadStatus->RequestLayout();
+            return;
+        }
+        gSettings->fileTypeIconStyle = fileIconStyle;
     }
     int layoutIdx = CbGetCurrentSelection(dropLayout);
     int nLayout = dropLayout ? len(dropLayout->items) : 0;
@@ -1324,14 +2024,22 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     int interfaceScale = (int)SelectedNumber(dropInterfaceScale, gSettings->interfaceScale, 50, 250, StrL("%"));
     bool fontsChanged = interfaceScale != gSettings->interfaceScale || uiSize != gSettings->uIFontSize ||
                         treeSize != gSettings->treeFontSize || !str::EqI(family, gSettings->uIFontFamily);
-    Str markdownFont = MarkdownFontName(MarkdownFontKind::Text, CbGetCurrentSelection(dropMarkdownFamily));
-    Str markdownMath = MarkdownFontName(MarkdownFontKind::Math, CbGetCurrentSelection(dropMarkdownMath));
+    Str markdownFont = selectedText;
+    Str markdownMath = selectedMath;
     bool markdownFontsChanged = !str::Eq(gSettings->markdownUI.fontName, markdownFont) ||
-                                !str::Eq(gSettings->markdownUI.mathFontName, markdownMath);
+                                !str::Eq(gSettings->markdownUI.mathFontName, markdownMath) ||
+                                gSettings->markdownUI.readingWidth != (float)markdownWidth ||
+                                gSettings->markdownUI.leftMargin != (float)markdownLeft ||
+                                gSettings->markdownUI.rightMargin != (float)markdownRight;
     str::ReplaceWithCopy(&gSettings->dictionaryUI.fontName, dictionary);
     gSettings->dictionaryUI.lineSpacing = (float)spacing;
+    gSettings->dictionaryUI.fontScale = (float)dictionaryScale;
+    gSettings->dictionaryUI.learningHubScale = (float)learningScale;
     str::ReplaceWithCopy(&gSettings->markdownUI.fontName, markdownFont);
     str::ReplaceWithCopy(&gSettings->markdownUI.mathFontName, markdownMath);
+    gSettings->markdownUI.readingWidth = (float)markdownWidth;
+    gSettings->markdownUI.leftMargin = (float)markdownLeft;
+    gSettings->markdownUI.rightMargin = (float)markdownRight;
     str::ReplaceWithCopy(&gSettings->uIFontFamily, family);
     gSettings->uIFontSize = uiSize;
     gSettings->interfaceScale = interfaceScale;
@@ -1341,7 +2049,18 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     gSettings->citationHoverDelay =
         chkReferenceHover->IsChecked() ? (int)SelectedNumber(dropHoverDelay, 300, 0, 2000, StrL("ms")) : -1;
     gSettings->toolbarSize = (int)SelectedNumber(dropToolbarSize, gSettings->toolbarSize, 8, 64, StrL("px"));
+    gSettings->activeTabStyle = SelectedTabStyle(dropTabStyle);
+    SetColorText(gSettings->activeTabAccent,
+                 fmt("#%02x%02x%02x", GetRed(tabAccent), GetGreen(tabAccent), GetBlue(tabAccent)));
+    SetCurrentThemeFromSettings();
+    gSettings->penCursorStyle = SelectedPenCursor(dropPenCursorStyle);
+    gSettings->penCursorSize = (int)SelectedNumber(dropPenCursorSize, gSettings->penCursorSize, 0, 100, StrL("px"));
+    SetColorText(gSettings->penCursorAccent,
+                 fmt("#%02x%02x%02x", GetRed(penAccent), GetGreen(penAccent), GetBlue(penAccent)));
     gSettings->pinIconStyle = SelectedPinIconStyle(dropPinIconStyle);
+    str::ReplaceWithCopy(&gSettings->settingsBackupMode,
+                         CbGetCurrentSelection(dropBackupMode) == 1 ? StrL("manual") : StrL("automatic"));
+    str::ReplaceWithCopy(&gSettings->settingsBackupDirectory, backupFolder);
     gSettings->colorPickerIconStyle = SelectedColorPickerIconStyle(dropColorPickerIconStyle);
     SetColorText(gSettings->fixedPageUI.selectionColor, SerializeSelectionColor(selectionColor));
     gSettings->homePageMaxRecentItems = (int)SelectedNumber(dropRecentCount, gSettings->homePageMaxRecentItems, 1, 200);
@@ -1410,14 +2129,24 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     // call SetTabsInTitlebar() for windows that have only one tab, but that's somewhat inconsistent
     for (MainWindow* window : gWindows) window->RedrawAll(true);
     ApplySettingsToOpenWindows();
-    if (markdownFontsChanged && !fontsChanged) {
+    if (markdownFontsChanged) {
         for (MainWindow* window : gWindows) {
             for (WindowTab* tab : window->Tabs()) {
                 auto* markdown = tab->ctrl ? tab->ctrl->AsMarkdown() : nullptr;
-                if (markdown && !markdown->isHtml) markdown->UpdateTheme();
+                if (markdown && !markdown->isHtml && !fontsChanged) markdown->UpdateTheme();
+                Str path = tab->ctrl ? tab->ctrl->GetFilePath() : Str{};
+                bool fixedMarkdown = tab->ctrl && tab->ctrl->AsFixed() &&
+                                     (str::EndsWithI(path, StrL(".md")) || str::EndsWithI(path, StrL(".markdown")));
+                if (fixedMarkdown) {
+                    if (window->CurrentTab() == tab)
+                        ReloadDocument(window, false);
+                    else
+                        tab->reloadOnFocus = true;
+                }
             }
         }
     }
+    EndAppearancePreview(SettingsPreviewFinish::Commit);
     ScheduleSaveSettings();
     MaybeRedrawHomePage();
     if (fontsChanged) {
@@ -1436,6 +2165,8 @@ static void FinishSettingsFontDownload(SettingsFontDownload* job) {
         wnd->dropMarkdownMath->SetIsEnabled(true);
         wnd->dropDictionaryFont->SetIsEnabled(true);
         wnd->dropDictionarySpacing->SetIsEnabled(true);
+        wnd->dropDictionaryScale->SetIsEnabled(true);
+        wnd->dropLearningScale->SetIsEnabled(true);
         wnd->btnOk->SetIsEnabled(true);
         wnd->fontDownloadStatus->SetText(job->success ? Tr(Str(kMarkdownDownloadNotice)) : job->error);
         wnd->fontDownloadStatus->RequestLayout();
@@ -1448,11 +2179,72 @@ static void RunSettingsFontDownload(SettingsFontDownload* job) {
                    DownloadReadingFont(job->dictionary, &job->error, job->cacheRoot);
     uitask::Post(MkFunc0(FinishSettingsFontDownload, job), "FinishMarkdownFontDownload");
 }
+static void FinishSettingsIconDownload(SettingsIconDownload* job) {
+    auto* wnd = job->wnd;
+    if (wnd && wnd == gSettingsWnd && wnd->iconDownload == job) {
+        wnd->iconDownload = nullptr;
+        wnd->dropFileIconStyle->SetIsEnabled(HasPermission(Perm::RegistryAccess));
+        wnd->btnOk->SetIsEnabled(true);
+        wnd->iconDownloadStatus->SetText(job->success ? Tr(Str(kFileIconNotice)) : job->error);
+        wnd->iconDownloadStatus->RequestLayout();
+        if (job->success) wnd->OnOk();
+    }
+    delete job;
+}
+static void RunSettingsIconDownload(SettingsIconDownload* job) {
+    job->success = DownloadFileTypeIcons(job->style, &job->error, job->cacheRoot);
+    uitask::Post(MkFunc0(FinishSettingsIconDownload, job), "FinishFileTypeIconDownload");
+}
 
 static void SelectionColorPicked(SettingsWnd* wnd, ChangeColorsArgs* args) {
     if (wnd != gSettingsWnd || !IsWindow(wnd->hwnd) || !wnd->win || !args->didSelect) return;
     wnd->dropSelectionColor->SetText(SerializeSelectionColor(args->color));
     ((SettingsDropDown*)wnd->dropSelectionColor)->idle.Repaint();
+    wnd->RefreshAppearance();
+}
+
+static void PenCursorAccentPicked(SettingsWnd* wnd, ChangeColorsArgs* args) {
+    if (wnd != gSettingsWnd || !IsWindow(wnd->hwnd) || !wnd->win || !args->didSelect) return;
+    wnd->dropPenCursorAccent->SetText(
+        fmt("#%02x%02x%02x", GetRed(args->color), GetGreen(args->color), GetBlue(args->color)));
+    ((SettingsDropDown*)wnd->dropPenCursorAccent)->idle.Repaint();
+    wnd->RefreshAppearance();
+}
+
+void SettingsWnd::PickPenCursorAccent(VirtMouseEvent*) {
+    if (!win || !IsMainWindowValidAndNotClosing(win)) return;
+    Color current = GetParsedColor(gSettings->penCursorAccent, MkRgb(0x26, 0x75, 0xe8));
+    ReadPenAccent(dropPenCursorAccent->GetTextTemp(), current);
+    auto* args = new ChangeColorsArgs();
+    args->win = win;
+    args->title = Tr("Pen cursor accent color");
+    args->color = current;
+    args->withOpacity = false;
+    VecAppend(args->colors, MkRgb(0x26, 0x75, 0xe8));
+    VecAppend(args->colors, MkRgb(0xe4, 0x3d, 0x46));
+    args->onClose = MkFunc1(PenCursorAccentPicked, this);
+    ShowChangeColorsDialog(args);
+}
+
+static void TabAccentPicked(SettingsWnd* wnd, ChangeColorsArgs* args) {
+    if (wnd != gSettingsWnd || !IsWindow(wnd->hwnd) || !wnd->win || !args->didSelect) return;
+    wnd->dropTabAccent->SetText(fmt("#%02x%02x%02x", GetRed(args->color), GetGreen(args->color), GetBlue(args->color)));
+    ((SettingsDropDown*)wnd->dropTabAccent)->idle.Repaint();
+    wnd->RefreshAppearance();
+}
+
+void SettingsWnd::PickTabAccent(VirtMouseEvent*) {
+    if (!win || !IsMainWindowValidAndNotClosing(win)) return;
+    Color current = GetParsedColor(gSettings->activeTabAccent, MkRgb(0x26, 0x75, 0xe8));
+    ReadTabAccent(dropTabAccent->GetTextTemp(), current);
+    auto* args = new ChangeColorsArgs();
+    args->win = win;
+    args->title = Tr("Active tab accent color");
+    args->color = current;
+    args->withOpacity = false;
+    for (const char* value : kTabAccentValues) VecAppend(args->colors, ParseColor(Str(value)));
+    args->onClose = MkFunc1(TabAccentPicked, this);
+    ShowChangeColorsDialog(args);
 }
 
 void SettingsWnd::PickSelectionColor(VirtMouseEvent*) {
@@ -1486,6 +2278,7 @@ void SettingsWnd::PickPageColor(DropDown* drop) {
     if (DarkModeChooseColor(&cc)) {
         drop->SetText(SerializeColorTemp(cc.rgbResult));
         ((SettingsDropDown*)drop)->idle.Repaint();
+        RefreshAppearance();
     }
 }
 
@@ -1502,7 +2295,8 @@ static void OnDestroy(WindowBase::DestroyEvent* /*ev*/) {
     }
 }
 
-static DropDown* MakeDropDown(SettingsWnd* window, PlatformFont* font, bool isRtl, bool editable) {
+static DropDown* MakeDropDown(SettingsWnd* window, PlatformFont* font, bool isRtl, bool editable,
+                              bool sectioned = false, SettingsAppearance appearance = SettingsAppearance::None) {
 #if IS_DEBUG
     TimeStamp started = TimeGet();
 #endif
@@ -1511,10 +2305,16 @@ static DropDown* MakeDropDown(SettingsWnd* window, PlatformFont* font, bool isRt
     args.font = font;
     args.isRtl = isRtl;
     args.isEditable = editable;
+    args.sectioned = sectioned;
+    args.previewItems = appearance != SettingsAppearance::None;
     args.deferItems = true;
     args.visible = false;
     auto* c = new SettingsDropDown();
     c->window = window;
+    c->appearance = appearance;
+    if (args.previewItems)
+        c->onPreviewItem =
+            MkMethod1<SettingsDropDown, DropDown::PreviewItemEvent*, &SettingsDropDown::DrawAppearance>(c);
     c->DeferCreate(args);
     HDC dc = PlatformFontMeasurementDC();
     if (dc) {
@@ -1570,6 +2370,7 @@ static LRESULT CALLBACK SettingsFocusProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
         owner = parent == wnd->hwnd ? hwnd : parent;
     }
     if (geometryChanged) scroll->InvalidateControlClip(owner);
+    if (msg == WM_KILLFOCUS) PostMessageW(wnd->hwnd, kSettingsIdleMessage, 0, 0);
     if (msg == WM_SETFOCUS) {
         auto* control = ControlFromHwnd(owner);
         Rect bounds = control ? control->lastBounds : HwndMapRectToWindow(HwndClientRect(hwnd), hwnd, wnd->hwnd);
@@ -1598,12 +2399,22 @@ static void SettingsFocusStops(SettingsWnd* wnd, ILayout* node) {
 }
 
 bool SettingsDropDown::EnsureNative() {
-    if (hwnd) return true;
+    if (hwnd) {
+        nativeActive = true;
+        SetSettingsControlBounds(this, lastBounds);
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        if (window->scroll) window->scroll->ClipControl(this);
+        return true;
+    }
+    nativeActive = true;
 #if IS_DEBUG
     TimeStamp started = TimeGet();
 #endif
     pendingCreate.pos = SettingsControlWindowBounds(this, lastBounds, pendingCreate.parent);
-    if (!EnsureCreated()) return false;
+    if (!EnsureCreated()) {
+        nativeActive = false;
+        return false;
+    }
 #if IS_DEBUG
     settingsLazyCreateMs += TimeSinceInMs(started);
     TimeStamp colorStart = TimeGet();
@@ -1627,7 +2438,7 @@ SettingsDropDown::~SettingsDropDown() {
 }
 
 void SettingsDropDown::IdleField::Paint(VirtPaintCtx& ctx) {
-    if (drop->hwnd) return;
+    if (drop->nativeActive) return;
     bool enabled = drop->IsEnabled(), hot = HasFlag(vwfHovered);
     Color text = enabled ? ThemeWindowTextColor() : ThemeWindowTextDisabledColor();
     Color edge = enabled ? (hot ? ThemeHotEdgeColor() : ThemeEdgeColor()) : ThemeDisabledEdgeColor();
@@ -1644,10 +2455,13 @@ void SettingsDropDown::IdleField::Paint(VirtPaintCtx& ctx) {
     if (!rtl) arrow.x = ctx.bounds.Right() - arrow.dx;
     Rect label = ctx.bounds;
     int margin = std::max(DpiScale(4), (int)LOWORD(drop->deferredMargins));
-    label.SubLR(rtl ? arrow.dx + margin : margin, rtl ? margin : arrow.dx + margin);
+    int labelMargin = drop->previewItems ? 0 : margin;
+    label.SubLR(rtl ? arrow.dx + labelMargin : labelMargin, rtl ? labelMargin : arrow.dx + labelMargin);
     u32 flags = gfxTextSingleLine | gfxTextVCenter | gfxTextEllipsis;
     if (rtl) flags |= gfxTextRight | gfxTextRtl;
-    ctx.gfx->DrawText(drop->GetTextTemp(), label, flags, drop->font, text);
+    Str value = drop->GetTextTemp();
+    drop->PaintPreview(ctx.gfx, label, CbGetCurrentSelection(drop), value, text, background);
+    ctx.gfx->DrawText(value, drop->PreviewTextBounds(label), flags, drop->font, text);
     int half = std::max(2, DpiScale(3));
     Point center{arrow.x + arrow.dx / 2, arrow.y + arrow.dy / 2};
     float stroke = (float)std::max(1, DpiScale(1));
@@ -1686,7 +2500,24 @@ void SettingsDropDown::IdleField::Press(VirtMouseEvent* ev) {
 void SettingsDropDown::SetBounds(Rect bounds) {
     lastBounds = bounds;
     idle.SetBounds(SettingsControlWindowBounds(this, bounds, pendingCreate.parent));
-    if (hwnd) SetSettingsControlBounds(this, bounds);
+    if (hwnd && nativeActive) SetSettingsControlBounds(this, bounds);
+}
+
+void SettingsDropDown::HideIfIdle() {
+    if (!nativeActive || !hwnd || window->nativeAccessibility || IsFocused() || CbIsDropped(this)) return;
+    nativeActive = false;
+    ShowWindow(hwnd, SW_HIDE);
+    idle.Repaint();
+}
+
+static void HideIdleSettingsFields(ILayout* node) {
+    if (auto* control = node->AsControl())
+        if (str::Eq(Str(control->GetKind()), StrL("dropdown"))) ((SettingsDropDown*)control)->HideIfIdle();
+    for (int i = 0; i < node->LayoutChildCount(); i++) HideIdleSettingsFields(node->LayoutChildAt(i));
+}
+
+void SettingsWnd::HideIdleFields() {
+    if (scroll) HideIdleSettingsFields(scroll->child);
 }
 
 static void ExposeSettingsFields(ILayout* node) {
@@ -1702,11 +2533,12 @@ static void ExposeSettingsFields(ILayout* node) {
 void SettingsWnd::ExposeNativeFields() {
     if (exposingAccessibility || !scroll) return;
     exposingAccessibility = true;
+    nativeAccessibility = true;
     SettingsMoveBatch batch;
     batch.themeWindow = this;
     ExposeSettingsFields(scroll->child);
     batch.Apply();
-    scroll->ClipControls(scroll->child);
+    scroll->ClipControls(scroll->child, batch.createdControls);
     exposingAccessibility = false;
 }
 
@@ -1715,12 +2547,11 @@ void SettingsDropDown::PrepareFocus() {
     Rect bounds = lastBounds, viewport = view->lastBounds;
     int delta = bounds.y < viewport.y ? bounds.y - viewport.y : std::max(0, bounds.Bottom() - viewport.Bottom());
     if (delta) view->ScrollBy(delta);
-    if (hwnd) return;
     if (!EnsureNative()) return;
     if (!SettingsMoveBatch::active) {
         SetSettingsControlBounds(this, lastBounds);
         window->UpdateTheme();
-        view->ClipControl(this);
+        view->ClipControls(view->child, true);
     }
 }
 
@@ -1842,7 +2673,8 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         for (int i = 0; i < 2; i++) {
             table->SetCell(i, 0, NewSettingsLabel({.s = labels[i], .font = font, .isRtl = isRtl})).alignV =
                 CrossAxisAlign::CrossCenter;
-            auto* drop = MakeDropDown(this, font, isRtl, true);
+            auto appearance = i == 0 ? SettingsAppearance::PageText : SettingsAppearance::PageBackground;
+            auto* drop = MakeDropDown(this, font, isRtl, true, false, appearance);
             *drops[i] = drop;
             StrVec presets;
             presets.Append(Tr("Use theme"));
@@ -1875,7 +2707,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         auto* table = new SettingsForm();
         table->rtl = isRtl;
         VecAppend(forms, table);
-        table->SetSize(14, 2);
+        table->SetSize(16, 2);
         table->colGap = UiScalePx(20);
         table->rowGap = UiScalePx(6);
         const Str names[] = {
@@ -1890,8 +2722,12 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
                                  &dropColorPickerIconStyle};
         for (int row = 0; row < dimofi(names); row++) {
             auto* label = NewSettingsLabel({.s = names[row], .font = font, .isRtl = isRtl, .prefix = true});
+            auto appearance = controls[row] == &dropPinIconStyle           ? SettingsAppearance::Pin
+                              : controls[row] == &dropColorPickerIconStyle ? SettingsAppearance::Palette
+                                                                           : SettingsAppearance::None;
             auto* drop = MakeDropDown(this, GetFont(), isRtl,
-                                      controls[row] != &dropPinIconStyle && controls[row] != &dropColorPickerIconStyle);
+                                      controls[row] != &dropPinIconStyle && controls[row] != &dropColorPickerIconStyle,
+                                      false, appearance);
             *controls[row] = drop;
             table->SetCell(row, 0, label).alignV = CrossAxisAlign::CrossCenter;
             auto& cell = table->SetCell(row, 1, drop);
@@ -1947,7 +2783,7 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
                           std::max(0, gSettings->citationHoverDelay));
         FillNumberChoices(dropMinTabWidth, StrL("60|100|120|150|180|200|250|300|400"), gSettings->minTabWidth);
 
-        dropSelectionColor = MakeDropDown(this, font, isRtl, true);
+        dropSelectionColor = MakeDropDown(this, font, isRtl, true, false, SettingsAppearance::Selection);
         StrVec selectionChoices;
         for (const char* name : kSelectionColorNames) selectionChoices.Append(Tr(name));
         dropSelectionColor->SetItems(selectionChoices);
@@ -1975,6 +2811,40 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         table->SetCell(13, 0, NewSettingsLabel({.s = Tr("Text selection background:"), .font = font, .isRtl = isRtl}))
             .alignV = CrossAxisAlign::CrossCenter;
         table->SetCell(13, 1, selectionRow).alignH = CrossAxisAlign::Stretch;
+        dropTabStyle = MakeDropDown(this, font, isRtl, false, false, SettingsAppearance::Tab);
+        StrVec styles;
+        styles.Append(Tr("Outlined (3, default)"));
+        styles.Append(Tr("Solid color (1)"));
+        styles.Append(Tr("Inset (4)"));
+        dropTabStyle->SetItems(styles);
+        int styleIndex = 0;
+        for (int i = 0; i < dimofi(kActiveTabStyles); i++)
+            if (gSettings->activeTabStyle == kActiveTabStyles[i]) styleIndex = i;
+        CbSetCurrentSelection(dropTabStyle, styleIndex);
+        table->SetCell(14, 0, NewSettingsLabel({.s = Tr("Active tab style:"), .font = font, .isRtl = isRtl})).alignV =
+            CrossAxisAlign::CrossCenter;
+        table->SetCell(14, 1, dropTabStyle).alignH = CrossAxisAlign::Stretch;
+        dropTabAccent = MakeDropDown(this, font, isRtl, true, false, SettingsAppearance::TabAccent);
+        StrVec accents;
+        for (const char* name : kTabAccentNames) accents.Append(Tr(name));
+        dropTabAccent->SetItems(accents);
+        dropTabAccent->onTextChanged = MkMethod0<SettingsWnd, &SettingsWnd::RefreshAppearance>(this);
+        dropTabAccent->onSelectionChanged = MkMethod0<SettingsWnd, &SettingsWnd::RefreshAppearance>(this);
+        Color accent = GetParsedColor(gSettings->activeTabAccent, MkRgb(0x26, 0x75, 0xe8));
+        dropTabAccent->SetText(fmt("#%02x%02x%02x", GetRed(accent), GetGreen(accent), GetBlue(accent)));
+        auto* chooseAccent = new VirtIconButton();
+        chooseAccent->pixmap = GetCachedPixmapForSvg(Str(GetColorPickerIconSvg()), selectionIconSize, selectionIconSize,
+                                                     ThemeWindowTextColor(), ThemeWindowBackgroundColor());
+        chooseAccent->SetTooltip(Tr("Choose active tab accent color"));
+        chooseAccent->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::PickTabAccent>(this);
+        auto* accentRow = new HBox();
+        accentRow->gap = UiScalePx(8);
+        accentRow->alignCross = CrossAxisAlign::CrossCenter;
+        accentRow->AddChild(dropTabAccent, 1);
+        accentRow->AddChild(chooseAccent);
+        table->SetCell(15, 0, NewSettingsLabel({.s = Tr("Active tab accent color:"), .font = font, .isRtl = isRtl}))
+            .alignV = CrossAxisAlign::CrossCenter;
+        table->SetCell(15, 1, accentRow).alignH = CrossAxisAlign::Stretch;
         vbox->AddChild(table);
         vbox->AddChild(NewSettingsLabel({
             .s = Tr("Overall scale changes the interface, not document zoom. Individual font and icon sizes remain "
@@ -1983,6 +2853,175 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
             .isRtl = isRtl,
             .padding = Insets{UiScalePx(4), UiScalePx(0), UiScalePx(0), UiScalePx(0)},
         }));
+    }
+
+    {
+        vbox->AddChild(NewSettingsLabel({.s = Tr("Windows file icons"),
+                                         .font = headingFont,
+                                         .isRtl = isRtl,
+                                         .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)}}));
+        auto* table = new SettingsForm();
+        table->rtl = isRtl;
+        VecAppend(forms, table);
+        table->SetSize(1, 2);
+        table->colGap = UiScalePx(20);
+        table->rowGap = UiScalePx(6);
+        dropFileIconStyle = MakeDropDown(this, font, isRtl, false, false, SettingsAppearance::FileIcon);
+        StrVec choices;
+        choices.Append(Tr("Outlined Pages (included, default)"));
+        choices.Append(Tr("Folded Pages (optional download)"));
+        choices.Append(Tr("Color Covers (optional download)"));
+        dropFileIconStyle->SetItems(choices);
+        int selected = 0;
+        for (int i = 0; i < dimofi(kFileIconChoices); i++)
+            if (gSettings->fileTypeIconStyle == kFileIconChoices[i]) selected = i;
+        CbSetCurrentSelection(dropFileIconStyle, selected);
+        dropFileIconStyle->SetIsEnabled(HasPermission(Perm::RegistryAccess));
+        table->SetCell(0, 0, NewSettingsLabel({.s = Tr("File icon style:"), .font = font, .isRtl = isRtl})).alignV =
+            CrossAxisAlign::CrossCenter;
+        table->SetCell(0, 1, dropFileIconStyle).alignH = CrossAxisAlign::Stretch;
+        vbox->AddChild(table);
+        iconDownloadStatus = NewSettingsLabel({.s = Tr(Str(kFileIconNotice)), .font = font, .isRtl = isRtl});
+        vbox->AddChild(iconDownloadStatus);
+    }
+    {
+        vbox->AddChild(NewSettingsLabel({.s = Tr("Drawing cursor"),
+                                         .font = headingFont,
+                                         .isRtl = isRtl,
+                                         .padding = Insets{UiScalePx(12), UiScalePx(0), UiScalePx(4), UiScalePx(0)}}));
+        auto* table = new SettingsForm();
+        table->rtl = isRtl;
+        VecAppend(forms, table);
+        table->SetSize(3, 2);
+        table->colGap = UiScalePx(20);
+        table->rowGap = UiScalePx(6);
+        dropPenCursorAccent = MakeDropDown(this, font, isRtl, true, false, SettingsAppearance::PenAccent);
+        StrVec colors;
+        for (const char* name : kPenAccentNames) colors.Append(Tr(name));
+        dropPenCursorAccent->SetItems(colors);
+        dropPenCursorAccent->onTextChanged = MkMethod0<SettingsWnd, &SettingsWnd::RefreshAppearance>(this);
+        dropPenCursorAccent->onSelectionChanged = MkMethod0<SettingsWnd, &SettingsWnd::RefreshAppearance>(this);
+        Color accent = GetParsedColor(gSettings->penCursorAccent, MkRgb(0x26, 0x75, 0xe8));
+        dropPenCursorAccent->SetText(fmt("#%02x%02x%02x", GetRed(accent), GetGreen(accent), GetBlue(accent)));
+        for (int i = 0; i < dimofi(kPenAccentValues); i++) {
+            Color preset;
+            if (ParseColor(&preset, Str(kPenAccentValues[i])) && accent == preset)
+                CbSetCurrentSelection(dropPenCursorAccent, i);
+        }
+        auto* choose = new VirtIconButton();
+        int iconSize = UiScalePx(20);
+        choose->pixmap = GetCachedPixmapForSvg(Str(GetColorPickerIconSvg()), iconSize, iconSize, ThemeWindowTextColor(),
+                                               ThemeWindowBackgroundColor());
+        choose->SetTooltip(Tr("Choose pen cursor accent color"));
+        choose->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::PickPenCursorAccent>(this);
+        auto* colorRow = new HBox();
+        colorRow->gap = UiScalePx(8);
+        colorRow->alignCross = CrossAxisAlign::CrossCenter;
+        colorRow->AddChild(dropPenCursorAccent, 1);
+        colorRow->AddChild(choose);
+        table->SetCell(0, 0, NewSettingsLabel({.s = Tr("Accent color:"), .font = font, .isRtl = isRtl})).alignV =
+            CrossAxisAlign::CrossCenter;
+        table->SetCell(0, 1, colorRow).alignH = CrossAxisAlign::Stretch;
+        dropPenCursorStyle = MakeDropDown(this, font, isRtl, false, false, SettingsAppearance::Pen);
+        StrVec styles;
+        styles.Append(Tr("Rollerball (11)"));
+        styles.Append(Tr("Drafting pen (12)"));
+        styles.Append(Tr("Lacquer pen (9)"));
+        dropPenCursorStyle->SetItems(styles);
+        int selected = 0;
+        for (int i = 0; i < dimofi(kPenCursorChoices); i++)
+            if ((int)kPenCursorChoices[i] == gSettings->penCursorStyle) selected = i;
+        CbSetCurrentSelection(dropPenCursorStyle, selected);
+        table->SetCell(1, 0, NewSettingsLabel({.s = Tr("Pen type:"), .font = font, .isRtl = isRtl})).alignV =
+            CrossAxisAlign::CrossCenter;
+        table->SetCell(1, 1, dropPenCursorStyle).alignH = CrossAxisAlign::Stretch;
+        dropPenCursorSize = MakeDropDown(this, font, isRtl, true);
+        FillNumberChoices(dropPenCursorSize, StrL("0|1|4|8|12|16|20|24|32|48|64|80|100"),
+                          std::clamp(gSettings->penCursorSize, 0, 100));
+        table->SetCell(2, 0, NewSettingsLabel({.s = Tr("Cursor size (px):"), .font = font, .isRtl = isRtl})).alignV =
+            CrossAxisAlign::CrossCenter;
+        table->SetCell(2, 1, dropPenCursorSize).alignH = CrossAxisAlign::Stretch;
+        vbox->AddChild(table);
+        vbox->AddChild(
+            NewSettingsLabel({.s = Tr("Set size to 0 to hide the cursor while drawing. Changes the displayed pen, not "
+                                      "the ink color or stroke width. Size "
+                                      "follows display scaling independently of the toolbar and interface scale."),
+                              .font = font,
+                              .isRtl = isRtl}));
+    }
+
+    {
+        vbox->AddChild(NewSettingsLabel({.s = Tr("Import, export and backups"),
+                                         .font = headingFont,
+                                         .isRtl = isRtl,
+                                         .padding = Insets{UiScalePx(12), 0, UiScalePx(4), 0}}));
+        auto* transfers = new Wrap();
+        transfers->rtl = isRtl;
+        transfers->colGap = UiScalePx(8);
+        transfers->rowGap = UiScalePx(4);
+        btnExportSettings = NewThemedButton(hwnd, Tr("Export saved settings..."), font, false);
+        btnExportSettings->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::ExportSettings>(this);
+        btnImportSettings = NewThemedButton(hwnd, Tr("Import settings..."), font, false);
+        btnImportSettings->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::ImportSettings>(this);
+        bool transferAllowed = HasPermission(Perm::SavePreferences | Perm::DiskAccess) && !gDontSaveSettings;
+        btnExportSettings->SetIsEnabled(transferAllowed);
+        btnImportSettings->SetIsEnabled(transferAllowed && !gForTesting);
+        transfers->AddChild(btnExportSettings);
+        transfers->AddChild(btnImportSettings);
+        vbox->AddChild(transfers);
+        vbox->AddChild(NewSettingsLabel(
+            {.s = Tr("Export includes saved preferences, toolbar choices, favorites and remembered files. Save current "
+                     "edits first to include them. Import replaces saved preferences and refreshes this window."),
+             .font = font,
+             .isRtl = isRtl}));
+        auto* table = new SettingsForm();
+        table->rtl = isRtl;
+        VecAppend(forms, table);
+        table->SetSize(2, 2);
+        table->colGap = UiScalePx(20);
+        table->rowGap = UiScalePx(6);
+        dropBackupMode = MakeDropDown(this, font, isRtl, false);
+        StrVec modes;
+        modes.Append(Tr("Automatic"));
+        modes.Append(Tr("Manual"));
+        dropBackupMode->SetItems(modes);
+        CbSetCurrentSelection(dropBackupMode, str::EqI(gSettings->settingsBackupMode, StrL("manual")) ? 1 : 0);
+        table->SetCell(0, 0, NewSettingsLabel({.s = Tr("Backup mode:"), .font = font, .isRtl = isRtl})).alignV =
+            CrossAxisAlign::CrossCenter;
+        table->SetCell(0, 1, dropBackupMode).alignH = CrossAxisAlign::Stretch;
+        dropBackupFolder = MakeDropDown(this, font, isRtl, true);
+        StrVec folders;
+        folders.Append(Tr("Use default backup folder"));
+        if (len(gSettings->settingsBackupDirectory)) folders.Append(gSettings->settingsBackupDirectory);
+        dropBackupFolder->SetItems(folders);
+        CbSetCurrentSelection(dropBackupFolder, len(gSettings->settingsBackupDirectory) ? 1 : 0);
+        table->SetCell(1, 0, NewSettingsLabel({.s = Tr("Backup folder:"), .font = font, .isRtl = isRtl})).alignV =
+            CrossAxisAlign::CrossCenter;
+        table->SetCell(1, 1, dropBackupFolder).alignH = CrossAxisAlign::Stretch;
+        vbox->AddChild(table);
+        vbox->AddChild(NewSettingsLabel(
+            {.s = fmt("%s %s", Tr("Default folder:"), GetSettingsBackupDirTemp()), .font = font, .isRtl = isRtl}));
+        vbox->AddChild(NewSettingsLabel(
+            {.s = Tr(
+                 "Automatic backs up changed saved settings in the background and keeps the latest 20 copies. Manual "
+                 "backs up only when you choose Back Up Now. Documents and learning data are stored separately."),
+             .font = font,
+             .isRtl = isRtl}));
+        auto* actions = new Wrap();
+        actions->rtl = isRtl;
+        actions->colGap = UiScalePx(8);
+        actions->rowGap = UiScalePx(4);
+        auto* choose = NewThemedButton(hwnd, Tr("Choose backup folder..."), font, false);
+        choose->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::ChooseBackupFolder>(this);
+        auto* reset = NewThemedButton(hwnd, Tr("Use default folder"), font, false);
+        reset->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::DefaultBackupFolder>(this);
+        auto* backup = NewThemedButton(hwnd, Tr("Back Up Now"), font, false);
+        backup->onClick = MkMethod1<SettingsWnd, VirtMouseEvent*, &SettingsWnd::BackUpNow>(this);
+        backup->SetIsEnabled(!gForTesting && HasPermission(Perm::SavePreferences | Perm::DiskAccess));
+        actions->AddChild(choose);
+        actions->AddChild(reset);
+        actions->AddChild(backup);
+        vbox->AddChild(actions);
     }
 
     {
@@ -2088,24 +3127,42 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
                                          .padding = Insets{UiScalePx(12), 0, UiScalePx(4), 0}}));
         auto* table = new SettingsForm();
         table->rtl = isRtl;
-        table->SetSize(2, 2);
+        table->SetSize(5, 2);
         table->colGap = UiScalePx(20);
         table->rowGap = UiScalePx(6);
         VecAppend(forms, table);
         DropDown** controls[] = {&dropMarkdownFamily, &dropMarkdownMath};
         Str labels[] = {Tr("Display font:"), Tr("Math font:")};
         Str values[] = {gSettings->markdownUI.fontName, gSettings->markdownUI.mathFontName};
+        StrVec installed;
+        InstalledMarkdownFonts(installed);
         for (int i = 0; i < 2; i++) {
             MarkdownFontKind kind = i ? MarkdownFontKind::Math : MarkdownFontKind::Text;
-            auto* drop = MakeDropDown(this, font, isRtl, false);
+            auto* drop = MakeDropDown(this, font, isRtl, false, true);
             *controls[i] = drop;
-            StrVec choices;
-            MarkdownFontChoices(kind, choices);
-            drop->SetItems(choices);
-            CbSetCurrentSelection(drop, MarkdownFontIndex(kind, values[i]));
+            FillMarkdownFontChoices(drop, kind, values[i], installed);
             table->SetCell(i, 0, NewSettingsLabel({.s = labels[i], .font = font, .isRtl = isRtl})).alignV =
                 CrossAxisAlign::CrossCenter;
             table->SetCell(i, 1, drop).alignH = CrossAxisAlign::Stretch;
+        }
+        dropMarkdownWidth = MakeDropDown(this, font, isRtl, true);
+        dropMarkdownLeft = MakeDropDown(this, font, isRtl, true);
+        dropMarkdownRight = MakeDropDown(this, font, isRtl, true);
+        FillNumberChoices(dropMarkdownWidth, StrL("0|50|60|70|80|90|100"), gSettings->markdownUI.readingWidth);
+        FillNumberChoices(dropMarkdownLeft, StrL("0|5|10|15|20"), gSettings->markdownUI.leftMargin);
+        FillNumberChoices(dropMarkdownRight, StrL("0|5|10|15|20"), gSettings->markdownUI.rightMargin);
+        DropDown* layoutControls[] = {dropMarkdownWidth, dropMarkdownLeft, dropMarkdownRight};
+        Str layoutLabels[] = {Tr("Reading width (%; 0 = default):"), Tr("Left margin (%):"), Tr("Right margin (%):")};
+        for (int i = 0; i < 3; i++) {
+            table->SetCell(i + 2, 0, NewSettingsLabel({.s = layoutLabels[i], .font = font, .isRtl = isRtl})).alignV =
+                CrossAxisAlign::CrossCenter;
+            table->SetCell(i + 2, 1, layoutControls[i]).alignH = CrossAxisAlign::Stretch;
+        }
+        dropMarkdownWidth->onTextChanged = MkMethod0<SettingsWnd, &SettingsWnd::MarkdownWidthChanged>(this);
+        dropMarkdownWidth->onSelectionChanged = MkMethod0<SettingsWnd, &SettingsWnd::MarkdownWidthChanged>(this);
+        for (auto* drop : {dropMarkdownLeft, dropMarkdownRight}) {
+            drop->onTextChanged = MkMethod0<SettingsWnd, &SettingsWnd::MarkdownMarginsChanged>(this);
+            drop->onSelectionChanged = MkMethod0<SettingsWnd, &SettingsWnd::MarkdownMarginsChanged>(this);
         }
         vbox->AddChild(table);
         fontDownloadStatus = NewSettingsLabel({.s = Tr(Str(kMarkdownDownloadNotice)), .font = font, .isRtl = isRtl});
@@ -2119,32 +3176,41 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
                                          .padding = Insets{UiScalePx(12), 0, UiScalePx(4), 0}}));
         auto* table = new SettingsForm();
         table->rtl = isRtl;
-        table->SetSize(2, 2);
+        table->SetSize(4, 2);
         table->colGap = UiScalePx(20);
         table->rowGap = UiScalePx(6);
         VecAppend(forms, table);
-        dropDictionaryFont = MakeDropDown(this, font, isRtl, true);
+        dropDictionaryFont = MakeDropDown(this, font, isRtl, true, true);
         StrVec choices;
         DictionaryFontChoices(choices);
         dropDictionaryFont->SetItems(choices);
+        for (int i = 0; i < len(choices); i++)
+            if (str::Eq(choices[i], Tr("App fonts")) || str::Eq(choices[i], Tr("System fonts")))
+                VecAppend(dropDictionaryFont->sectionHeaders, i);
         if (len(gSettings->dictionaryUI.fontName))
             dropDictionaryFont->SetText(gSettings->dictionaryUI.fontName);
         else
             CbSetCurrentSelection(dropDictionaryFont, 0);
         dropDictionarySpacing = MakeDropDown(this, font, isRtl, true);
         FillNumberChoices(dropDictionarySpacing, StrL("0.8|1|1.15|1.25|1.5|2"), gSettings->dictionaryUI.lineSpacing);
-        DropDown* controls[] = {dropDictionaryFont, dropDictionarySpacing};
-        Str labels[] = {Tr("Reading font:"), Tr("Line spacing:")};
-        for (int i = 0; i < 2; i++) {
+        dropDictionaryScale = MakeDropDown(this, font, isRtl, true);
+        dropLearningScale = MakeDropDown(this, font, isRtl, true);
+        FillNumberChoices(dropDictionaryScale, StrL("75|100|125|150|200|300"), gSettings->dictionaryUI.fontScale);
+        FillNumberChoices(dropLearningScale, StrL("75|100|125|150|200|300"), gSettings->dictionaryUI.learningHubScale);
+        DropDown* controls[] = {dropDictionaryFont, dropDictionarySpacing, dropDictionaryScale, dropLearningScale};
+        Str labels[] = {Tr("Reading font:"), Tr("Line spacing:"), Tr("Dictionary text scale (%):"),
+                        Tr("Learning Hub text scale (%):")};
+        for (int i = 0; i < 4; i++) {
             table->SetCell(i, 0, NewSettingsLabel({.s = labels[i], .font = font, .isRtl = isRtl})).alignV =
                 CrossAxisAlign::CrossCenter;
             table->SetCell(i, 1, controls[i]).alignH = CrossAxisAlign::Stretch;
         }
         vbox->AddChild(table);
-        vbox->AddChild(NewSettingsLabel({.s = Tr("Choose an app font or any installed Windows font. Type a positive "
-                                                 "line-spacing value; 1 is single spacing."),
-                                         .font = font,
-                                         .isRtl = isRtl}));
+        vbox->AddChild(NewSettingsLabel(
+            {.s = Tr("Choose an app font or any installed Windows font. Type a positive "
+                     "line-spacing value; 1 is single spacing. Text scales accept 50–300%; 100% follows the app size."),
+             .font = font,
+             .isRtl = isRtl}));
     }
 
     chkUseTabs = MakeCheckbox(hwnd, GetFont(), Tr("Use &tabs"), isRtl, gSettings && gSettings->useTabs, 0);
@@ -2255,10 +3321,18 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
     TimeStamp themeStart = TimeGet();
 #endif
     UpdateTheme();
+    scroll->ClipControls(scroll->child, true);
     scroll->themeWindow = this;
 
     SettingsFocusStops(this, scroll->child);
     SaveValues();
+    for (DropDown* field : {dropPageText, dropPageBg, dropSelectionColor, dropTabStyle, dropTabAccent, dropPinIconStyle,
+                            dropColorPickerIconStyle, dropPenCursorStyle, dropPenCursorAccent, dropPenCursorSize}) {
+        if (!field) continue;
+        field->onTextChanged = MkMethod0<SettingsWnd, &SettingsWnd::RefreshAppearance>(this);
+        field->onSelectionChanged = MkMethod0<SettingsWnd, &SettingsWnd::RefreshAppearance>(this);
+    }
+    appearanceReady = true;
     BOOL screenReader = FALSE;
     if (SystemParametersInfoW(SPI_GETSCREENREADER, 0, &screenReader, 0) && screenReader) ExposeNativeFields();
     SetIsVisible(visible);
@@ -2300,7 +3374,14 @@ static void OnSettingsMessage(WindowBase::WndProcEvent* ev) {
         ev->didHandle = true;
         return;
     }
-    if (ev->msg == WM_VSCROLL && ev->lparam == 0) {
+    if (ev->msg == kSettingsIdleMessage) {
+        window->HideIdleFields();
+        ev->didHandle = true;
+        return;
+    }
+    if (ev->msg == WM_TIMER && ev->wparam == kSettingsPreviewTimer) {
+        window->PreviewPageColors();
+    } else if (ev->msg == WM_VSCROLL && ev->lparam == 0) {
         window->scroll->OnVScroll(ev->wparam);
     } else if (ev->msg == WM_MOUSEWHEEL) {
         window->scroll->Wheel(GET_WHEEL_DELTA_WPARAM(ev->wparam));
@@ -2312,6 +3393,7 @@ static void OnSettingsMessage(WindowBase::WndProcEvent* ev) {
 }
 
 static void OpenSettingsDialog(MainWindow* win, SettingsView view) {
+    if (!gSettingsWnd || !gSettingsWnd->IsVisible()) CancelAppearancePreview();
     if (gSettingsWnd) {
         if (!gSettingsWnd->IsVisible()) {
 #if IS_DEBUG
@@ -2364,6 +3446,18 @@ void ShowSettingsDialog(MainWindow* win) {
     OpenSettingsDialog(win, SettingsView::Visible);
 }
 
+static void ReopenImportedSettings(SettingsWnd* previous) {
+    if (gSettingsWnd != previous) return;
+    HWND owner = previous->importedSettingsOwner;
+    gSettingsWnd = nullptr;
+    previous->onBeforeDelete = {};
+    previous->onDestroy = {};
+    // Replace pending fields after the event returns, even if the cache key is unchanged.
+    delete previous;
+    MainWindow* win = FindMainWindowByHwnd(owner);
+    if (IsMainWindowValidAndNotClosing(win)) ShowSettingsDialog(win);
+}
+
 #if IS_DEBUG
 
 struct SettingsMeasureProbe : SettingsLabel {
@@ -2374,6 +3468,101 @@ struct SettingsMeasureProbe : SettingsLabel {
         return SettingsLabel::Layout(bc);
     }
 };
+
+static bool CheckSettingsRegions(SettingsWnd* wnd) {
+    auto* view = wnd->scroll;
+    for (auto& value : wnd->savedValues) {
+        HWND hwnd = value.control->hwnd;
+        if (!hwnd) continue;
+        HRGN region = CreateRectRgn(0, 0, 0, 0);
+        int kind = GetWindowRgn(hwnd, region);
+        RECT box{};
+        GetRgnBox(region, &box);
+        DeleteObject(region);
+        if (kind == ERROR) return false;
+        if (kind == NULLREGION) continue;
+        Rect bounds = ChildPosWithinParent(hwnd);
+        OffsetRect(&box, bounds.x, bounds.y);
+        Rect logical = value.control->lastBounds.Intersect(view->lastBounds);
+        Rect visible = bounds.Intersect(view->lastBounds);
+        if (!logical.IsEmpty() && box.top >= visible.y && box.bottom <= visible.Bottom()) continue;
+        logf("Settings escaped clip: '%s' expected (%d,%d,%d,%d) actual (%d,%d,%d,%d)\n", value.control->GetTextTemp(),
+             logical.x, logical.y, logical.dx, logical.dy, box.left, box.top, box.right, box.bottom);
+        return false;
+    }
+    return true;
+}
+
+static void SettingsScrollPaintTests(SettingsWnd* wnd) {
+    auto* darkHook = gWindowBaseApplyDarkMode;
+    DarkModeInit();
+    defer {
+        gWindowBaseApplyDarkMode = darkHook;
+    };
+    wnd->ExposeNativeFields();
+    wnd->UpdateTheme();
+    RoundChildControls(wnd->hwnd);
+    wnd->scroll->ClipControls(wnd->scroll->child);
+    ShowWindow(wnd->hwnd, SW_SHOWNOACTIVATE);
+    defer {
+        ShowWindow(wnd->hwnd, SW_HIDE);
+    };
+    Rect frame = HwndWindowRect(wnd->hwnd);
+    Rect footer = wnd->btnOk->lastBounds;
+    int max = wnd->scroll->MaxScrollY();
+    for (int i = 0; i < 120; i++) {
+        int y = (i % 3 == 0) ? 0 : (i % 3 == 1) ? max : max * (i % 23) / 23;
+        wnd->scroll->ScrollTo(y);
+        bool clipped = CheckSettingsRegions(wnd);
+        utassert(clipped);
+        if (!clipped) return;
+        if (i % 10 == 0) wnd->UpdateTheme();
+        RedrawWindow(wnd->hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+        clipped = CheckSettingsRegions(wnd);
+        utassert(clipped);
+        if (!clipped) return;
+        utassert(wnd->btnOk->lastBounds == footer && HwndWindowRect(wnd->hwnd) == frame);
+    }
+    auto* view = wnd->scroll;
+    view->ScrollTo(0);
+    view->wheelRemainder = 119;
+    view->Wheel(WHEEL_DELTA);
+    utassert(view->scrollY == 0 && view->wheelRemainder == 0);
+    view->ScrollTo(view->MaxScrollY());
+    view->wheelRemainder = -119;
+    view->Wheel(-WHEEL_DELTA);
+    utassert(view->scrollY == view->MaxScrollY() && view->wheelRemainder == 0);
+    view->ScrollTo(0);
+}
+
+static void SettingsNoopScrollTests() {
+    WindowBase host;
+    utassert(host.CreateCustom({.style = WS_POPUP | WS_VSCROLL, .pos = {-10000, -10000, 200, 80}, .visible = false}));
+    auto* box = new ScrollBox(new Spacer(200, 200));
+    host.layout = box;
+    host.DoLayout({200, 80});
+    static int updates = 0;
+    auto* previousInstaller = gUiInstallScrollbar;
+    gUiInstallScrollbar = [](HWND) { updates++; };
+    defer {
+        gUiInstallScrollbar = previousInstaller;
+    };
+    updates = 0;
+    TimeStamp started = TimeGet();
+    for (int i = 0; i < 200; i++) box->ScrollTo(0);
+    logf("Unchanged UI scroll: %d scrollbar redraws, %.3f ms for 200 positions\n", updates, TimeSinceInMs(started));
+    utassert(updates == 0);
+    updates = 0;
+    utassert(box->ScrollTo(50));
+    utassert(updates == 1);
+    SCROLLINFO info{sizeof(info), SIF_POS | SIF_PAGE | SIF_RANGE};
+    utassert(GetScrollInfo(host.hwnd, SB_VERT, &info) && info.nPos == 50);
+    box->Layout(Tight({200, 100}));
+    box->SetBounds({0, 0, 200, 100});
+    info.fMask = SIF_POS | SIF_PAGE | SIF_RANGE;
+    utassert(GetScrollInfo(host.hwnd, SB_VERT, &info) && info.nPage == 100 && info.nPos == 50);
+    host.Destroy();
+}
 
 static void SettingsResponsivenessTests(SettingsWnd* wnd) {
     utassert(Dpi_UnitTestsWindowQuery());
@@ -2480,14 +3669,47 @@ static void SettingsCustomValueTests(SettingsWnd* wnd) {
         for (int i = 1; i < MarkdownFontCount(kind); i++) utassert(dictionaryFonts.Contains(MarkdownFontName(kind, i)));
     }
     utassert(dictionaryFonts.Contains(StrL("Segoe UI")) && dictionaryFonts.Contains(StrL("Manrope")));
+    for (auto* picker : {wnd->dropMarkdownFamily, wnd->dropMarkdownMath}) {
+        picker->EnsureCreated();
+        utassert(picker->sectioned && len(picker->sectionHeaders) == 2);
+        utassert(str::Eq(picker->items[1], Tr("Downloadable fonts")));
+        utassert(picker->items.FindI(StrL("Consolas")) > picker->sectionHeaders[1]);
+        int selected = CbGetCurrentSelection(picker);
+        for (int header : picker->sectionHeaders) {
+            CbSetCurrentSelection(picker, header);
+            SendMessageW(wnd->hwnd, WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(picker->hwnd), CBN_SELCHANGE),
+                         (LPARAM)picker->hwnd);
+            utassert(!VecContains(picker->sectionHeaders, CbGetCurrentSelection(picker)));
+        }
+        CbSetCurrentSelection(picker, picker->items.FindI(StrL("Consolas")));
+        utassert(str::Eq(SelectedMarkdownFont(picker), StrL("Consolas")));
+        CbSetCurrentSelection(picker, selected);
+    }
     double spacing;
     for (Str value : {StrL("0.875"), StrL("1.37"), StrL("2.7x")}) {
         wnd->dropDictionarySpacing->SetText(value);
         utassert(ReadSettingNumber(wnd->dropDictionarySpacing, StrL("x"), spacing) && spacing > 0);
     }
+    auto* fontPicker = wnd->dropDictionaryFont;
+    fontPicker->EnsureCreated();
+    utassert(fontPicker->sectioned && len(fontPicker->sectionHeaders) == 2);
+    for (int header : fontPicker->sectionHeaders) {
+        CbSetCurrentSelection(fontPicker, header);
+        SendMessageW(wnd->hwnd, WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(fontPicker->hwnd), CBN_SELCHANGE),
+                     (LPARAM)fontPicker->hwnd);
+        utassert(!VecContains(fontPicker->sectionHeaders, CbGetCurrentSelection(fontPicker)));
+    }
+    CbSetCurrentSelection(fontPicker, 0);
+    double textScale;
+    wnd->dropDictionaryScale->SetText(StrL("137.5%"));
+    utassert(ReadSettingNumber(wnd->dropDictionaryScale, StrL("%"), textScale) && textScale == 137.5);
+    wnd->dropLearningScale->SetText(StrL("85%"));
+    utassert(ReadSettingNumber(wnd->dropLearningScale, StrL("%"), textScale) && textScale == 85);
     Settings* sample = NewSettings({});
     str::ReplaceWithCopy(&sample->dictionaryUI.fontName, StrL("Consolas"));
     sample->dictionaryUI.lineSpacing = 0.875f;
+    sample->dictionaryUI.fontScale = 137.5f;
+    sample->dictionaryUI.learningHubScale = 85;
     FileState* state = NewFileState(StrL("reading-colors.pdf"));
     state->useDefaultState = false;
     SetColorText(state->pageTextColor, StrL("#123456"));
@@ -2497,6 +3719,7 @@ static void SettingsCustomValueTests(SettingsWnd* wnd) {
     Settings* restored = NewSettings(serialized);
     utassert(str::Eq(restored->dictionaryUI.fontName, StrL("Consolas")));
     utassert(restored->dictionaryUI.lineSpacing == 0.875f);
+    utassert(restored->dictionaryUI.fontScale == 137.5f && restored->dictionaryUI.learningHubScale == 85);
     utassert(len(*restored->fileStates) == 1);
     if (len(*restored->fileStates)) {
         utassert(GetParsedColor((*restored->fileStates)[0]->pageTextColor, kColorUnset) == MkRgb(0x12, 0x34, 0x56));
@@ -2739,6 +3962,9 @@ static void SettingsOpeningTests() {
         if (!value.checkbox) utassert(!value.control->hwnd);
     }
     first->scroll->ScrollTo(0);
+    TimeStamp virtualStarted = TimeGet();
+    for (int i = 0; i < 100; i++) first->scroll->ScrollTo((i & 1) ? 0 : first->scroll->MaxScrollY());
+    logf("Settings virtual scroll: %.3f ms for 100 alternating positions\n", TimeSinceInMs(virtualStarted));
     Size layoutSize = first->dropLayout->GetIdealSize(), zoomSize = first->dropZoom->GetIdealSize();
     first->dropLayout->PrepareFocus();
     Str zoomText = str::Dup(first->dropZoom->GetTextTemp());
@@ -2884,10 +4110,116 @@ static void SettingsOpeningTests() {
     query.lparam = -25;
     OnSettingsMessage(&query);
     utassert(!query.didHandle && second->scroll->scrollY == accessibilityScroll);
+
+    utassert(second->btnExportSettings && second->btnExportSettings->onClick.IsValid());
+    utassert(second->btnImportSettings && second->btnImportSettings->onClick.IsValid());
+    utassert(second->btnImportSettings->IsEnabled() ==
+             (!gForTesting && !gDontSaveSettings && HasPermission(Perm::SavePreferences | Perm::DiskAccess)));
+    second->dropTabListCount->SetText(StrL("777"));
+    second->dropBackupFolder->SetText(StrL("C:\\pending-settings-folder"));
+    second->importedSettingsOwner = owner.hwnd;
+    VecAppend(gWindows, &main);
+    ReopenImportedSettings(second);
+    VecRemove(gWindows, &main);
+    second = gSettingsWnd;
+    utassert(second && second->win == &main);
+    if (second) {
+        utassert(str::Eq(second->dropTabListCount->GetTextTemp(), fmt("%d", gSettings->tabListVisibleItems)));
+        utassert(str::Eq(second->BackupFolderTemp(), gSettings->settingsBackupDirectory));
+        utassert(GetWindow(second->hwnd, GW_OWNER) == owner.hwnd);
+    }
     gSettingsWnd = nullptr;
     str::Free(original);
+    if (!second) return;
     DestroyWindow(second->hwnd);
     delete second;
+}
+
+static void SettingsAppearanceTests(SettingsWnd* wnd) {
+    Color color;
+    u8 alpha;
+    Color background, foreground = ThemePageRenderColors(background);
+    utassert(SettingsPreviewColor(SettingsAppearance::PageText, Tr("Use theme"), color, alpha));
+    utassert(color == foreground && alpha == 255);
+    utassert(SettingsPreviewColor(SettingsAppearance::PageBackground, Tr("Use theme"), color, alpha));
+    utassert(color == background && alpha == 255);
+    utassert(SettingsPreviewColor(SettingsAppearance::PageText, StrL("#000000"), color, alpha));
+    utassert(color == kColBlack && alpha == 255);
+    utassert(SettingsPreviewColor(SettingsAppearance::PageBackground, StrL("#00123456"), color, alpha));
+    utassert(GetRed(color) == 0x12 && alpha == 0);
+    utassert(SettingsPreviewColor(SettingsAppearance::Selection, StrL("#a0123456"), color, alpha));
+    utassert(GetRed(color) == 0x12 && alpha == 0xa0);
+    utassert(SettingsPreviewColor(SettingsAppearance::Selection, StrL("#00123456"), color, alpha) && alpha == 0);
+    utassert(SettingsPreviewColor(SettingsAppearance::Selection, Tr("Soft blue"), color, alpha) && alpha == 0x5f);
+    utassert(!SettingsPreviewColor(SettingsAppearance::PenAccent, StrL("#bad"), color, alpha));
+    utassert(!SettingsPreviewColor(SettingsAppearance::PageBackground, StrL("unknown"), color, alpha));
+    utassert(!SettingsPreviewColor(SettingsAppearance::TabAccent, StrL(""), color, alpha));
+    utassert(SettingsPreviewColor(SettingsAppearance::TabAccent, Tr("Violet"), color, alpha));
+    utassert(color == MkRgb(0x74, 0x51, 0xba));
+    int initialPin = gSettings->pinIconStyle, initialPicker = gSettings->colorPickerIconStyle;
+    for (auto style : kPinIconChoices) utassert(len(Str(GetPinIconSvg(style))) > 0);
+    for (auto style : kColorPickerIconChoices) utassert(len(Str(GetColorPickerIconSvg(style))) > 0);
+    utassert(gSettings->pinIconStyle == initialPin && gSettings->colorPickerIconStyle == initialPicker);
+    for (int style : kActiveTabStyles)
+        utassert(len(GetActiveTabPreviewSvgTemp(style, MkRgb(0x26, 0x75, 0xe8), background, foreground)) > 0);
+    for (int style : kFileIconChoices) {
+        Pixmap* preview = GetFileTypeIconPreview(style);
+        utassert(preview && preview->width > 0 && preview->height > 0);
+        utassert(GetFileTypeIconPreview(style) == preview);
+    }
+    utassert(!GetFileTypeIconPreview(0) && !GetFileTypeIconPreview(4));
+    for (DropDown* field :
+         {wnd->dropTabStyle, wnd->dropTabAccent, wnd->dropSelectionColor, wnd->dropPinIconStyle,
+          wnd->dropColorPickerIconStyle, wnd->dropFileIconStyle, wnd->dropPenCursorStyle, wnd->dropPenCursorAccent}) {
+        utassert(field->previewItems && field->onPreviewItem.IsValid());
+        Rect row{0, 0, 300, PlatformFontLineHeight(field->font) + DpiScale(10)};
+        utassert(row.Intersect(field->PreviewBounds(row)) == field->PreviewBounds(row));
+        utassert(!field->PreviewBounds(row).Intersect(field->PreviewTextBounds(row)).dx);
+    }
+    Str originalAccent = str::Dup(gSettings->activeTabAccent.s);
+    int originalStyle = gSettings->activeTabStyle;
+    bool originalLive = gSettings->liveAppearancePreview;
+    gSettings->liveAppearancePreview = false;
+    wnd->dropTabAccent->SetText(StrL("#ff3388"));
+    CbSetCurrentSelection(wnd->dropTabStyle, 1);
+    wnd->RefreshAppearance();
+    utassert(!wnd->appearanceSnapshot.settings && gSettings->activeTabStyle == originalStyle);
+    utassert(str::Eq(gSettings->activeTabAccent.s, originalAccent));
+    gSettings->liveAppearancePreview = true;
+    wnd->RefreshAppearance();
+    utassert(wnd->appearanceSnapshot.settings == gSettings && gSettings->activeTabStyle == 1);
+    utassert(GetParsedColor(gSettings->activeTabAccent, kColorUnset) == MkRgb(0xff, 0x33, 0x88));
+    Str serialized = SerializeSettings(gSettings, {});
+    Settings* restored = NewSettings(serialized);
+    utassert(restored->activeTabStyle == originalStyle && str::Eq(restored->activeTabAccent.s, originalAccent));
+    utassert(gSettings->activeTabStyle == 1 &&
+             GetParsedColor(gSettings->activeTabAccent, kColorUnset) == MkRgb(0xff, 0x33, 0x88));
+    str::Free(serialized);
+    DeleteSettings(restored);
+    wnd->dropTabAccent->SetText(StrL("#invalid"));
+    wnd->RefreshAppearance();
+    utassert(GetParsedColor(gSettings->activeTabAccent, kColorUnset) == MkRgb(0xff, 0x33, 0x88));
+    wnd->EndAppearancePreview(SettingsPreviewFinish::Rollback);
+    utassert(!wnd->appearanceSnapshot.settings && gSettings->activeTabStyle == originalStyle);
+    utassert(str::Eq(gSettings->activeTabAccent.s, originalAccent));
+    wnd->RestoreValues();
+    wnd->dropTabAccent->SetText(StrL("#123456"));
+    wnd->RefreshAppearance();
+    wnd->EndAppearancePreview(SettingsPreviewFinish::Commit);
+    utassert(GetParsedColor(gSettings->activeTabAccent, kColorUnset) == MkRgb(0x12, 0x34, 0x56));
+    SetColorText(gSettings->activeTabAccent, originalAccent);
+    gSettings->activeTabStyle = originalStyle;
+    gSettings->liveAppearancePreview = originalLive;
+    wnd->RestoreValues();
+    auto* field = (SettingsDropDown*)wnd->dropTabAccent;
+    field->PrepareFocus();
+    HWND native = field->hwnd;
+    utassert(native && field->nativeActive);
+    HwndSetFocus(wnd->hwnd);
+    field->HideIfIdle();
+    utassert(field->hwnd == native && !field->nativeActive);
+    utassert(str::Eq(field->GetTextTemp(), wnd->dropTabAccent->GetTextTemp()));
+    str::Free(originalAccent);
 }
 
 static void SettingsScaledVisualTests() {
@@ -2977,7 +4309,59 @@ bool SettingsDialog_UnitTestsSizing() {
     Rect work = PlatformWindowWorkArea(wnd->hwnd);
     int maxWidth = std::min(DpiScale(900), std::max(1, work.dx - DpiScale(32)));
     utassert(HwndClientRect(wnd->hwnd).dx <= maxWidth);
+    SettingsAppearanceTests(wnd);
     utassert(!IsWindowVisible(wnd->hwnd));
+    utassert(len(wnd->dropFileIconStyle->items) == 3);
+    utassert(SelectedFileIconStyle(wnd->dropFileIconStyle) == 3);
+    for (int i = 0; i < dimofi(kFileIconChoices); i++) {
+        CbSetCurrentSelection(wnd->dropFileIconStyle, i);
+        utassert(SelectedFileIconStyle(wnd->dropFileIconStyle) == kFileIconChoices[i]);
+    }
+    CbSetCurrentSelection(wnd->dropFileIconStyle, 0);
+    Settings* iconPrefs = NewSettings(StrL("FileTypeIconStyle = 2\n"));
+    Str iconSerialized = SerializeSettings(iconPrefs, {});
+    Settings* iconRestored = NewSettings(iconSerialized);
+    utassert(iconRestored->fileTypeIconStyle == 2);
+    str::Free(iconSerialized);
+    DeleteSettings(iconRestored);
+    DeleteSettings(iconPrefs);
+    utassert(len(wnd->dropPenCursorStyle->items) == 3);
+    for (int i = 0; i < dimofi(kPenCursorChoices); i++) {
+        CbSetCurrentSelection(wnd->dropPenCursorStyle, i);
+        utassert(SelectedPenCursor(wnd->dropPenCursorStyle) == (int)kPenCursorChoices[i]);
+    }
+    Color penAccent;
+    utassert(ReadPenAccent(Tr("Blue"), penAccent) && penAccent == MkRgb(0x26, 0x75, 0xe8));
+    utassert(ReadPenAccent(Tr("Red"), penAccent) && penAccent == MkRgb(0xe4, 0x3d, 0x46));
+    utassert(ReadPenAccent(StrL(" #00a879 "), penAccent) && penAccent == MkRgb(0, 168, 121));
+    utassert(!ReadPenAccent(StrL("#garbage"), penAccent));
+    utassert(!ReadPenAccent(StrL("#00123456"), penAccent));
+    wnd->dropPenCursorAccent->SetText(StrL("#00a879"));
+    wnd->dropPenCursorSize->SetText(StrL("31 px"));
+    wnd->RestoreValues();
+    utassert(SelectedTabStyle(wnd->dropTabStyle) == 3);
+    for (int i = 0; i < dimofi(kActiveTabStyles); i++) {
+        CbSetCurrentSelection(wnd->dropTabStyle, i);
+        utassert(SelectedTabStyle(wnd->dropTabStyle) == kActiveTabStyles[i]);
+    }
+    CbSetCurrentSelection(wnd->dropTabStyle, 0);
+    Color tabAccent;
+    utassert(ReadTabAccent(StrL("Violet"), tabAccent) && tabAccent == MkRgb(0x74, 0x51, 0xba));
+    utassert(ReadTabAccent(StrL("#abcdef"), tabAccent) && tabAccent == MkRgb(0xab, 0xcd, 0xef));
+    utassert(!ReadTabAccent(StrL("#bad"), tabAccent));
+    Settings* tabPrefs = NewSettings(StrL("ActiveTabStyle = 4\nActiveTabAccent = #ad344a\n"));
+    Str tabSerialized = SerializeSettings(tabPrefs, {});
+    Settings* tabRestored = NewSettings(tabSerialized);
+    utassert(tabRestored->activeTabStyle == 4 &&
+             GetParsedColor(tabRestored->activeTabAccent, kColorUnset) == MkRgb(0xad, 0x34, 0x4a));
+    str::Free(tabSerialized);
+    DeleteSettings(tabRestored);
+    DeleteSettings(tabPrefs);
+    utassert(SelectedPenCursor(wnd->dropPenCursorStyle) == (int)PenCursorStyle::Rollerball);
+    double cursorSize;
+    utassert(ReadSettingNumber(wnd->dropPenCursorSize, StrL("px"), cursorSize) && cursorSize == 20);
+    utassert(ReadPenAccent(wnd->dropPenCursorAccent->GetTextTemp(), penAccent) && penAccent == MkRgb(0x26, 0x75, 0xe8));
+
     utassert(len(wnd->dropPinIconStyle->items) == 3);
     utassert(SelectedPinIconStyle(wnd->dropPinIconStyle) == (int)PinIconStyle::Soft);
     for (int i = 0; i < dimofi(kPinIconChoices); i++) {
@@ -3033,6 +4417,8 @@ bool SettingsDialog_UnitTestsSizing() {
     DeleteSettings(selectionRestored);
     SettingsResponsivenessTests(wnd);
     SettingsCustomValueTests(wnd);
+    SettingsScrollPaintTests(wnd);
+    SettingsNoopScrollTests();
     Rect footer = wnd->btnOk->lastBounds;
     utassert(footer.y >= wnd->scroll->lastBounds.y + wnd->scroll->lastBounds.dy);
     wnd->scroll->ScrollTo(INT_MAX);

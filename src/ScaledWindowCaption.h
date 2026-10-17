@@ -19,7 +19,7 @@ static int AppCaptionNativeHeight(HWND hwnd) {
 static int AppCaptionHeight(HWND hwnd) {
     int dpi = DpiGetForHwnd(hwnd);
     int textHeight = PlatformFontLineHeight(GetAppFontForDpi(dpi));
-    return std::max(AppCaptionNativeHeight(hwnd), textHeight + UiScalePxForDpi(dpi, 12));
+    return std::max(AppCaptionNativeHeight(hwnd), textHeight + UiScalePxForDpi(dpi, 4));
 }
 
 static int AppCaptionExtraHeight(HWND hwnd) {
@@ -39,20 +39,24 @@ static Rect AppCaptionRect(HWND hwnd) {
 
 static Rect AppCaptionButton(HWND hwnd, int hit) {
     Rect caption = AppCaptionRect(hwnd);
-    int width = caption.dy;
+    int width = std::max(DpiGetSystemMetrics(SM_CXSIZE, DpiGetForHwnd(hwnd)), UiScalePxForDpi(DpiGetForHwnd(hwnd), 36));
     LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
     bool rtl = (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) != 0;
     int closeWidth = (style & WS_VSCROLL) ? std::max(width, GetAppScrollbarWidth(DpiGetForHwnd(hwnd))) : width;
-    if (hit == HTCLOSE) width = closeWidth;
-    int preceding = 0;
-    if (hit != HTCLOSE) preceding = closeWidth;
-    if (hit == HTMINBUTTON && (style & WS_MAXIMIZEBOX)) preceding += caption.dy;
-    int x = rtl ? caption.x + preceding : caption.Right() - preceding - width;
+    Rect window = HwndWindowRect(hwnd);
+    if (hit == HTCLOSE) return {rtl ? 0 : window.dx - closeWidth, 0, closeWidth, caption.Bottom()};
+    int preceding = closeWidth;
+    if (hit == HTMINBUTTON && (style & WS_MAXIMIZEBOX)) preceding += width;
+    int x = rtl ? preceding : window.dx - preceding - width;
     return {x, caption.y, width, caption.dy};
 }
 
 static Rect AppCaptionButtonContent(HWND hwnd, int hit) {
-    return AppCaptionButton(hwnd, hit);
+    Rect button = AppCaptionButton(hwnd, hit);
+    Rect caption = AppCaptionRect(hwnd);
+    button.y = caption.y;
+    button.dy = caption.dy;
+    return button;
 }
 
 static bool AppCaptionButtonEnabled(HWND hwnd, int hit) {
@@ -67,10 +71,10 @@ static bool AppCaptionButtonEnabled(HWND hwnd, int hit) {
 }
 
 static int AppCaptionHitTest(HWND hwnd, Point point) {
-    if (!AppCaptionRect(hwnd).Contains(point)) return HTNOWHERE;
     LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    if ((style & WS_SYSMENU) && AppCaptionButton(hwnd, HTCLOSE).Contains(point)) return HTCLOSE;
+    if (!AppCaptionRect(hwnd).Contains(point)) return HTNOWHERE;
     if (!(style & WS_SYSMENU)) return HTCAPTION;
-    if (AppCaptionButton(hwnd, HTCLOSE).Contains(point)) return HTCLOSE;
     if ((style & WS_MAXIMIZEBOX) && AppCaptionButton(hwnd, HTMAXBUTTON).Contains(point)) return HTMAXBUTTON;
     if ((style & WS_MINIMIZEBOX) && AppCaptionButton(hwnd, HTMINBUTTON).Contains(point)) return HTMINBUTTON;
     Rect caption = AppCaptionRect(hwnd);
@@ -122,7 +126,8 @@ static void PaintAppCaption(HWND hwnd, ScaledWindowCaption* state, HDC target = 
         if (!rtl) title.x += iconSize + pad;
     }
     int buttons = (style & WS_SYSMENU) ? 1 + !!(style & WS_MINIMIZEBOX) + !!(style & WS_MAXIMIZEBOX) : 0;
-    int buttonsWidth = buttons ? AppCaptionButton(hwnd, HTCLOSE).dx + (buttons - 1) * caption.dy : 0;
+    int buttonsWidth =
+        buttons ? AppCaptionButton(hwnd, HTCLOSE).dx + (buttons - 1) * AppCaptionButton(hwnd, HTMAXBUTTON).dx : 0;
     title.dx = std::max(0, title.dx - buttonsWidth);
     if (rtl) title.x += buttonsWidth;
     u32 textFlags = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX;
@@ -140,12 +145,10 @@ static void PaintAppCaption(HWND hwnd, ScaledWindowCaption* state, HDC target = 
         Rect content = AppCaptionButtonContent(hwnd, hit);
         bool closeHot = hit == HTCLOSE && hit == state->hot && AppCaptionButtonEnabled(hwnd, hit);
         if (closeHot) {
-            int diameter = std::min(content.dx, content.dy);
-            int inset = std::min(UiScalePxForDpi(dpi, 2), diameter / 8);
-            diameter = std::max(1, diameter - inset * 2);
-            gfx.FillEllipse(
-                {content.x + (content.dx - diameter) / 2, content.y + (content.dy - diameter) / 2, diameter, diameter},
-                gColsCloseBtn[kColCloseCircleHover]);
+            gfx.PushClip(button);
+            gfx.FillRoundedRect({0, 0, window.dx, window.dy}, IsZoomed(hwnd) ? 0 : 2 * GetAppCornerRadius(dpi, 6),
+                                gColsCloseBtn[kColCloseCircleHover]);
+            gfx.PopClip();
         } else if (hit == state->hot) {
             gfx.FillRoundedRect(button, GetAppCornerRadius(dpi, 4), ThemeHotBackgroundColor());
         }

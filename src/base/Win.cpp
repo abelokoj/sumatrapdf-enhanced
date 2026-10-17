@@ -432,7 +432,10 @@ bool HwndIsVisible(HWND hwnd) {
 }
 
 void HwndSetVisible(HWND hwnd, bool visible) {
-    if (HwndIsVisible(hwnd) == visible) {
+    // IsWindowVisible includes ancestors, so it misses a requested child hide
+    // while the frame is hidden or temporarily suppresses redraw.
+    bool ownVisible = (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_VISIBLE) != 0;
+    if (ownVisible == visible) {
         return;
     }
     ShowWindow(hwnd, visible ? SW_SHOW : SW_HIDE);

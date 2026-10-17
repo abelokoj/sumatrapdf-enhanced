@@ -14,6 +14,7 @@ extern bool gDontSaveSettings;
 extern Vec<SessionData*>* gInitialSessionData;
 
 struct PlatformFont;
+struct MainWindow;
 struct VirtText;
 struct VirtCloseButton;
 
@@ -23,7 +24,22 @@ TempStr GetSettingsFileNameTemp();
 bool LoadSettings();
 void ScheduleSaveSettings();
 void FlushScheduledSaveSettings();
+void BeginAppearancePreview(void* owner, Func0 cancel, Func0 suspend, Func0 resume);
+void EndAppearancePreview(void* owner);
+void CancelAppearancePreview();
 void ForceReloadSettings();
+enum class SettingsTransfer {
+    Export,
+    Import
+};
+bool ShowSettingsTransfer(MainWindow*, SettingsTransfer, HWND owner = nullptr);
+TempStr GetSettingsBackupDirTemp(Str custom = {});
+void ShowSettingsBackup(HWND owner, Str directory = {});
+bool FlushSettingsBackups();
+TempStr SettingsTransferResultTemp(Str action, Str path, int* exitCodeOut);
+#if IS_DEBUG
+void SettingsTransfer_UnitTests();
+#endif
 void ReloadDeferredSettings();
 void ApplySettingsToOpenWindows();
 void RefreshUiFonts();

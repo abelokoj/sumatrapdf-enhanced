@@ -99,6 +99,8 @@
 #include "HomePage.h"
 #include "VocabularyDialog.h"
 #include "StudyExport.h"
+#include "AnnotationTransferDialog.h"
+#include "FileTypeIcons.h"
 #include "DocumentProperties.h"
 #include "TabGroupsManage.h"
 #include "PageThumbnails.h"
@@ -144,6 +146,7 @@
 #include "Version.h"
 #include "CachedObjects.h"
 #include "SumatraPDF.h"
+#include "MarkdownEdit.h"
 #include "PerfLog.h"
 #include "SumatraLog.h"
 
@@ -275,6 +278,10 @@ static void OnPanelsSplitterMove(VirtSplitter::MoveEvent* /*ev*/);
 EBookUI* GetEBookUI() {
     if (!gSettings) return nullptr;
     return &gSettings->eBookUI;
+}
+
+MarkdownUI* GetMarkdownUI() {
+    return gSettings ? &gSettings->markdownUI : nullptr;
 }
 
 // A document is usually loaded on a worker thread, where walking the file
@@ -1130,35 +1137,10 @@ void RebuildMenuBarForWindow(MainWindow* win) {
 }
 
 static bool ShouldSaveThumbnail(FileState* ds) {
-    // don't create thumbnails if we won't be needing them at all
-    if (!HasPermission(Perm::SavePreferences)) {
+    if (!ds || len(ds->filePath) == 0 || (ds->isMissing && !ds->isPinned) || !HasPermission(Perm::SavePreferences)) {
         return false;
     }
-
-    // don't materialize (hydrate) a cloud-only placeholder file just to make a
-    // thumbnail. opening it would force a slow, possibly multi-minute download
-    // (e.g. OneDrive "Files On-Demand" dehydrated file). issue #5756
-    if (path::IsCloudPlaceholder(ds->filePath)) {
-        logf("ShouldSaveThumbnail: skipping cloud placeholder '%s'\n", ds->filePath);
-        return false;
-    }
-
-    // don't create thumbnails for files that won't need them anytime soon
-    Vec<FileState*> list;
-    if (gSettings->homePageSortByFrequentlyRead) {
-        FileHistoryGetFrequencyOrder(list);
-    } else {
-        FileHistoryGetRecentlyOpenedOrder(list);
-    }
-    int idx = VecFind(list, ds);
-    if (idx < 0) {
-        return false;
-    }
-
-    if (HasThumbnail(ds)) {
-        return false;
-    }
-    return true;
+    return !HasThumbnail(ds);
 }
 
 struct ControllerCallbackHandler : DocControllerCallback {
@@ -1252,8 +1234,7 @@ void ControllerCallbackHandler::RenderThumbnail(DisplayModel* dm, Size size, con
     }
 
     pageRect = engine->Transform(pageRect, 1, 1.0f, 0);
-    float zoom = (float)size.dx / pageRect.dx;
-    pageRect.dy = std::min(pageRect.dy, (float)size.dy / zoom);
+    float zoom = ThumbnailZoom(pageRect, size, GetThumbnailMode());
     pageRect = engine->Transform(pageRect, 1, 1.0f, 0, true);
 
     // always render thumbnails with anti-aliasing for quality
@@ -1272,7 +1253,15 @@ void ControllerCallbackHandler::RenderThumbnail(DisplayModel* dm, Size size, con
 static Vec<Str> gThumbnailRequests;
 static Vec<Str> gThumbnailFailures;
 static Vec<Str> gPendingThumbnailRequests;
-constexpr int kMaxThumbnailRequests = 2;
+constexpr int kMaxThumbnailRequests = 1;
+
+static bool HomeNeedsThumbnails() {
+    if (!gSettings->showStartPage) return false;
+    for (MainWindow* win : gWindows) {
+        if (win->IsCurrentTabAbout() && IsWindowVisible(win->hwndFrame)) return true;
+    }
+    return false;
+}
 
 static bool ThumbnailPathInList(const Vec<Str>& paths, Str path) {
     for (Str candidate : paths) {
@@ -1285,7 +1274,9 @@ static bool ThumbnailPathInList(const Vec<Str>& paths, Str path) {
 
 struct CreateThumbnailFromFileData {
     Str filePath;
+    Str cachePath;
     Size renderSize;
+    ThumbnailMode mode = ThumbnailMode::Cropped;
     // when set, render from this clone of the open document instead of loading
     // the file again (owned)
     EngineBase* engine = nullptr;
@@ -1295,6 +1286,7 @@ struct CreateThumbnailFromFileData {
     FileEBookUI* fileEBookUI = nullptr;
     ~CreateThumbnailFromFileData() {
         str::Free(filePath);
+        str::Free(cachePath);
         SafeEngineRelease(&engine);
         FreePixmap(bmp);
         DeleteFileEBookUI(fileEBookUI);
@@ -1304,7 +1296,7 @@ struct CreateThumbnailFromFileData {
 static void CreateThumbnailFromFileAsync(FileState*, EngineBase*);
 
 static void PumpThumbnailRequests() {
-    if (len(gWindows) == 0) {
+    if (!HomeNeedsThumbnails()) {
         for (Str path : gPendingThumbnailRequests) str::Free(path);
         VecReset(gPendingThumbnailRequests);
         return;
@@ -1327,7 +1319,7 @@ static void CreateThumbnailFromFileFinish(CreateThumbnailFromFileData* d) {
             break;
         }
     }
-    if (!d->bmp && !ThumbnailPathInList(gThumbnailFailures, d->filePath)) {
+    if (!d->bmp && d->mode == GetThumbnailMode() && !ThumbnailPathInList(gThumbnailFailures, d->filePath)) {
         if (len(gThumbnailFailures) >= 128) {
             for (Str path : gThumbnailFailures) {
                 str::Free(path);
@@ -1336,9 +1328,9 @@ static void CreateThumbnailFromFileFinish(CreateThumbnailFromFileData* d) {
         }
         VecAppend(gThumbnailFailures, str::Dup(d->filePath));
     }
-    if (d->bmp) {
+    if (d->bmp && HomeNeedsThumbnails()) {
         FileState* fs = FileHistoryFindByPath(d->filePath);
-        SetThumbnail(fs, d->bmp);
+        SetThumbnail(fs, d->bmp, d->mode);
         d->bmp = nullptr;
     }
     delete d;
@@ -1369,6 +1361,18 @@ static TempStr FindCoverImageTemp(Str docPath) {
 }
 
 static void CreateThumbnailFromFileThread(CreateThumbnailFromFileData* d) {
+    d->bmp = LoadCachedThumbnail(d->cachePath, d->filePath);
+    if (ThumbnailIsReady(d->bmp, d->renderSize, d->mode)) {
+        uitask::Post(MkFunc0(CreateThumbnailFromFileFinish, d), "Cached thumbnail ready");
+        return;
+    }
+    FreePixmap(d->bmp);
+    d->bmp = nullptr;
+    // A preview must never hydrate a cloud-only document.
+    if (path::IsCloudPlaceholder(d->filePath)) {
+        uitask::Post(MkFunc0(CreateThumbnailFromFileFinish, d), "Cloud thumbnail skipped");
+        return;
+    }
     EngineBase* engine = d->engine;
     TempStr cover = FindCoverImageTemp(d->filePath);
     if (len(cover) > 0) {
@@ -1408,13 +1412,14 @@ static void CreateThumbnailFromFileThread(CreateThumbnailFromFileData* d) {
         return;
     }
     pageRect = engine->Transform(pageRect, 1, 1.0f, 0);
-    float zoom = (float)d->renderSize.dx / pageRect.dx;
-    pageRect.dy = std::min(pageRect.dy, (float)d->renderSize.dy / zoom);
+    float zoom = ThumbnailZoom(pageRect, d->renderSize, d->mode);
     pageRect = engine->Transform(pageRect, 1, 1.0f, 0, true);
     RenderPageArgs args(1, zoom, 0, &pageRect);
     d->bmp = engine->RenderPage(args);
     engine->Release();
     d->engine = nullptr;
+    d->bmp = PixmapToBgr(d->bmp);
+    if (d->bmp) SaveThumbnail(d->cachePath, d->bmp);
     auto fn = MkFunc0<CreateThumbnailFromFileData>(CreateThumbnailFromFileFinish, d);
     uitask::Post(fn, "SetThumbnailFromFile");
 }
@@ -1422,6 +1427,13 @@ static void CreateThumbnailFromFileThread(CreateThumbnailFromFileData* d) {
 // create a thumbnail by loading the file with a temporary engine
 // used for lazy-loaded files that don't have a loaded controller
 static void CreateThumbnailFromFileAsync(FileState* ds, EngineBase* engine = nullptr) {
+    ThumbnailMode mode = GetThumbnailMode();
+    static ThumbnailMode failureMode = ThumbnailMode::Cropped;
+    if (failureMode != mode) {
+        failureMode = mode;
+        for (Str path : gThumbnailFailures) str::Free(path);
+        VecReset(gThumbnailFailures);
+    }
     if (ThumbnailPathInList(gThumbnailRequests, ds->filePath) ||
         ThumbnailPathInList(gThumbnailFailures, ds->filePath) ||
         ThumbnailPathInList(gPendingThumbnailRequests, ds->filePath)) {
@@ -1435,8 +1447,16 @@ static void CreateThumbnailFromFileAsync(FileState* ds, EngineBase* engine = nul
     }
     VecAppend(gThumbnailRequests, str::Dup(ds->filePath));
     auto* d = new CreateThumbnailFromFileData();
-    d->renderSize = GetThumbnailRenderSize();
+    d->mode = mode;
+    d->renderSize = GetThumbnailRenderSize(mode);
     d->filePath = str::Dup(ds->filePath);
+    d->cachePath = str::Dup(GetThumbnailPathTemp(ds->filePath, mode));
+    if (!engine) {
+        WindowTab* tab = FindTabByFile(ds->filePath);
+        DisplayModel* dm = tab ? tab->AsFixed() : nullptr;
+        EngineBase* opened = dm ? dm->GetEngine() : nullptr;
+        if (opened && opened->kind == kindEnginePostScript) engine = opened->Clone();
+    }
     d->engine = engine;
     d->fileEBookUI = CopyFileEBookUI(ds->eBookUI);
     auto fn = MkFunc0<CreateThumbnailFromFileData>(CreateThumbnailFromFileThread, d);
@@ -1444,13 +1464,16 @@ static void CreateThumbnailFromFileAsync(FileState* ds, EngineBase* engine = nul
 }
 
 void RequestHomeThumbnail(FileState* ds) {
-    if (!ds || len(ds->filePath) == 0 || !ShouldSaveThumbnail(ds)) {
+    if (!HomeNeedsThumbnails() || !ShouldSaveThumbnail(ds)) {
         return;
     }
     CreateThumbnailFromFileAsync(ds);
 }
 
 static void CreateThumbnailForFile(MainWindow* win, FileState* ds) {
+    if (!ds) return;
+    FreePixmap(ds->thumbnail);
+    ds->thumbnail = nullptr;
     // Explicitly reopening a document permits another attempt (for example,
     // after the user supplied an encrypted file's remembered password).
     for (int i = 0; i < len(gThumbnailFailures); i++) {
@@ -1461,10 +1484,6 @@ static void CreateThumbnailForFile(MainWindow* win, FileState* ds) {
             break;
         }
     }
-    if (!ShouldSaveThumbnail(ds)) {
-        return;
-    }
-
     // don't create thumbnails for password protected documents
     // (unless we're also remembering the decryption key anyway)
     if (win->IsDocLoaded()) {
@@ -1484,19 +1503,7 @@ static void CreateThumbnailForFile(MainWindow* win, FileState* ds) {
         }
     }
 
-    // re-opening a PostScript file runs Ghostscript again (seconds for a big
-    // one), so hand the thread a clone of the engine we already have
-    EngineBase* clone = nullptr;
-    DisplayModel* dm = win->IsDocLoaded() ? win->AsFixed() : nullptr;
-    EngineBase* engine = dm ? dm->GetEngine() : nullptr;
-    if (engine && engine->kind == kindEnginePostScript && str::Eq(engine->FilePath(), ds->filePath)) {
-        clone = engine->Clone();
-    }
-
-    // otherwise use file-based async thumbnail creation; it's independent
-    // of the tab lifecycle so it works even if the tab is closed before
-    // the render completes
-    CreateThumbnailFromFileAsync(ds, clone);
+    // Visible Home cards request previews; restoring document tabs does no PNG work.
 }
 
 /* Send the request to render a given page to a rendering thread */
@@ -3334,6 +3341,8 @@ static void CreateFrameLayout(MainWindow* win) {
     win->menuSlot->mapRtlX = true;
     win->toolbarTopSlot = new HwndSlot();
     win->toolbarBottomSlot = new HwndSlot();
+    win->toolbarLeftSlot = new HwndSlot();
+    win->toolbarRightSlot = new HwndSlot();
     CreateCaptionLayout(win);
 
     // the webview is expensive to resize, so this one only moves the panes
@@ -3367,7 +3376,12 @@ static void CreateFrameLayout(MainWindow* win) {
     chrome->AddChild(win->tabsSlot);
     chrome->AddChild(win->menuSlot);
     chrome->AddChild(win->toolbarTopSlot);
-    chrome->AddChild(win->frameLayout, 1);
+    auto* toolbarContent = new HBox();
+    toolbarContent->alignCross = CrossAxisAlign::Stretch;
+    toolbarContent->AddChild(win->toolbarLeftSlot);
+    toolbarContent->AddChild(win->frameLayout, 1);
+    toolbarContent->AddChild(win->toolbarRightSlot);
+    chrome->AddChild(toolbarContent, 1);
     chrome->AddChild(win->toolbarBottomSlot);
     win->chromeLayout = chrome;
     FrameSyncSplitters(win);
@@ -6424,6 +6438,7 @@ void CloseWindow(MainWindow* win, bool quitIfLast, bool forceClose) {
         return;
     }
 
+    CloseAnnotationTransferDialog(win);
     CloseVocabularyDialogs(win);
 
     // Stop eventual TTS reading
@@ -6777,6 +6792,20 @@ static void ShowCurrentFileInFolder(MainWindow* win) {
         return;
     }
     ShowFileInFolder(win, win->ctrl->GetFilePath());
+}
+
+static void EditCurrentMarkdown(MainWindow* win) {
+    if (!win || !win->IsDocLoaded() || !CanAccessDisk()) return;
+    Str path = win->ctrl->GetFilePath();
+    auto* model = win->ctrl->AsMarkdown();
+    if (model && model->currentPageUrl) path = model->VirtualUrlToFileTemp(model->currentPageUrl);
+    if (!str::EndsWithI(path, StrL(".md")) && !str::EndsWithI(path, StrL(".markdown"))) return;
+    Str target = str::Dup(path);
+    defer {
+        str::Free(target);
+    };
+    bool saved = ShowMarkdownEditor(win->hwndFrame, target);
+    if (saved && IsMainWindowValidAndNotClosing(win)) ReloadDocument(win, false);
 }
 
 static void ShowGeneratedMarkdownHtml(MainWindow* win) {
@@ -7869,7 +7898,8 @@ using UILayout = MainWindow::UIState::Layout;
 
 static bool IsUiLayoutEq(UILayout* s1, UILayout* s2) {
     return s1->rc == s2->rc && s1->presentation == s2->presentation && s1->tabsInTitlebar == s2->tabsInTitlebar &&
-           s1->isFullScreen == s2->isFullScreen && s1->tabsVisible == s2->tabsVisible &&
+           s1->isFullScreen == s2->isFullScreen && s1->annotationMode == s2->annotationMode &&
+           s1->toolbarPosition == s2->toolbarPosition && s1->tabsVisible == s2->tabsVisible &&
            s1->isToolbarVisible == s2->isToolbarVisible && s1->isToolbarOverlay == s2->isToolbarOverlay &&
            s1->sidebarTopVisible == s2->sidebarTopVisible && s1->sidebarBottomVisible == s2->sidebarBottomVisible &&
            s1->favoritesAsTab == s2->favoritesAsTab && s1->showMenuBarRebar == s2->showMenuBarRebar &&
@@ -7937,14 +7967,28 @@ static void SyncCaptionLayout(MainWindow* win) {
     if (!win->captionLayout) {
         return;
     }
+    if (!win->tabsInTitlebar || win->annotationMode || win->isFullScreen || win->presentation) {
+        for (int i = CB_BTN_FIRST; i < CB_BTN_COUNT; i++) {
+            SetVis(win->capBtn[i], false);
+            win->captionBtn[i].visible = false;
+            win->captionBtn[i].pressed = false;
+            win->captionBtn[i].highlighted = false;
+            win->captionBtn[i].rect = {};
+        }
+        SetVis(win->captionRow1, false);
+        SetVis(win->captionRow2, false);
+        win->captionRect = {};
+        return;
+    }
+    SetVis(win->captionRow1, true);
     bool maximized = IsZoomed(win->hwndFrame);
     bool twoRow = IsShowingMenuBarRebar(win);
     bool isRtl = IsUIRtl();
     bool needPad = !maximized && !twoRow;
     int tabHeight = GetTabbarHeight(win->hwndFrame);
-    int pad = needPad ? kCaptionTopPadding : 0;
+    int pad = needPad ? UiScalePx(2) : 0;
     int menuBarDy = twoRow ? GetMenuBarRebarHeight(win) : 0;
-    bool hasFileTabs = WinHasFileTabs(win);
+    bool hasFileTabs = !win->annotationMode && WinHasFileTabs(win);
 
     win->captionRow1->rtl = isRtl;
     win->captionRow2->rtl = isRtl;
@@ -7952,9 +7996,11 @@ static void SyncCaptionLayout(MainWindow* win) {
     int winBtn = twoRow ? menuBarDy : (pad + tabHeight + 2);
     // hamburger / app icon match the tab band; min/max/close span the pad too
     int tabBtn = twoRow ? menuBarDy : tabHeight;
+    int captionButtonDx = std::max(UiScalePx(36), DpiGetSystemMetrics(SM_CXSIZE));
 
     auto setBtn = [&](int id, bool vis, int sz) {
-        win->capBtn[id]->idealSize = {sz, sz};
+        bool windowControl = id == CB_MINIMIZE || id == CB_MAXIMIZE || id == CB_RESTORE || id == CB_CLOSE;
+        win->capBtn[id]->idealSize = {windowControl ? captionButtonDx : sz, sz};
         SetVis(win->capBtn[id], vis);
         win->captionBtn[id].id = id;
         win->captionBtn[id].visible = vis;
@@ -7967,8 +8013,8 @@ static void SyncCaptionLayout(MainWindow* win) {
     setBtn(CB_CLOSE, true, winBtn);
 
     SetVis(win->capMenuSlot, twoRow);
-    SetVis(win->capTabsRow1, !twoRow);
-    SetVis(win->capDrag1, twoRow);
+    SetVis(win->capTabsRow1, !twoRow && !win->annotationMode);
+    SetVis(win->capDrag1, twoRow || win->annotationMode);
     SetVis(win->capGap, !twoRow);
     SetVis(win->captionRow2, twoRow && hasFileTabs);
     SetVis(win->capTabsRow2, twoRow && hasFileTabs);
@@ -7985,7 +8031,7 @@ static void SyncCaptionLayout(MainWindow* win) {
         if (rowDx <= 0) {
             rowDx = HwndClientRect(win->hwndFrame).dx;
         }
-        int menuMax = std::max(rowDx - (4 * winBtn), 0);
+        int menuMax = std::max(rowDx - tabBtn - (3 * captionButtonDx), 0);
         int natural = menuMax;
         if (win->hwndMenuToolbar) {
             int btnCount = TbGetButtonCount(win->hwndMenuToolbar);
@@ -7996,11 +8042,11 @@ static void SyncCaptionLayout(MainWindow* win) {
         }
         win->capMenuSlot->dx = std::min(natural, menuMax);
         win->capRow2Lead->dx = winBtn;
-        win->capRow2Trail->dx = 3 * winBtn;
+        win->capRow2Trail->dx = 3 * captionButtonDx;
         if (win->tabsCtrl) {
-            bool showTabs = hasFileTabs && !win->isQuickLook;
+            bool showTabs = WinHasFileTabs(win) && !win->isQuickLook;
             win->tabsVisible = showTabs;
-            win->tabsCtrl->SetIsVisible(showTabs);
+            win->tabsCtrl->SetIsVisible(showTabs && !win->annotationMode);
         }
     }
 }
@@ -8018,6 +8064,8 @@ static bool RelayoutFrame(MainWindow* win, bool updateToolbars, int sidebarDx) {
     curState.presentation = (int)win->presentation;
     curState.tabsInTitlebar = win->tabsInTitlebar;
     curState.isFullScreen = win->isFullScreen;
+    curState.annotationMode = win->annotationMode;
+    curState.toolbarPosition = ToolbarPositionForWindow(win);
     curState.tabsVisible = win->tabsVisible;
     curState.isToolbarVisible = win->isToolbarVisible;
     curState.isToolbarOverlay = win->isToolbarOverlay;
@@ -8098,7 +8146,8 @@ static bool RelayoutFrame(MainWindow* win, bool updateToolbars, int sidebarDx) {
     }
 
     // inset by border for resize hit-testing (only with custom caption, not when maximized/fullscreen)
-    if (win->tabsInTitlebar && !IsZoomed(win->hwndFrame) && !win->isFullScreen && !win->presentation) {
+    if ((win->tabsInTitlebar || win->annotationMode) && !IsZoomed(win->hwndFrame) && !win->isFullScreen &&
+        !win->presentation) {
         rc.x += kFrameBorderSize;
         // on Wine top border is kFrameBorderSize - 1 because 1px is already NC area
         // (WM_NCCALCSIZE keeps 1px NC to prevent DWM transparent flash)
@@ -8148,28 +8197,38 @@ static bool RelayoutFrame(MainWindow* win, bool updateToolbars, int sidebarDx) {
     bool bottomVisible = !favAsTab && win->uiState.sidebarBottomVisible;
     bool sidebarVisible = topVisible || bottomVisible;
     bool aiChatVisible = !favAsTab && win->uiState.aiChatVisible && win->hwndAiChatBox;
-    bool showCaption = !win->presentation && !win->isFullScreen && win->tabsInTitlebar;
+    bool showCaption = !win->presentation && !win->isFullScreen && !win->annotationMode && win->tabsInTitlebar;
     bool showingMenuBar = IsShowingMenuBarRebar(win);
-    bool showTabsBar = !win->presentation && !win->isFullScreen && !win->tabsInTitlebar && win->tabsVisible;
-    bool showMenuRebar = showingMenuBar && (!win->tabsInTitlebar || win->isFullScreen);
+    bool showTabsBar =
+        !win->presentation && !win->isFullScreen && !win->annotationMode && !win->tabsInTitlebar && win->tabsVisible;
+    bool showMenuRebar = !win->annotationMode && showingMenuBar && (!win->tabsInTitlebar || win->isFullScreen);
+    if (win->annotationMode && win->tabsCtrl) win->tabsCtrl->SetIsVisible(false);
     bool showToolbar = win->isToolbarVisible;
-    bool toolbarBottom = showToolbar && ToolbarAtBottom();
+    int toolbarPosition = ToolbarPositionForWindow(win);
+    bool toolbarBottom = showToolbar && toolbarPosition == kToolbarBottom;
+    bool toolbarSide = showToolbar && (toolbarPosition == kToolbarLeft || toolbarPosition == kToolbarRight);
+    bool toolbarTop = showToolbar && !toolbarBottom && !toolbarSide;
+    ToolbarSetDock(win);
 
     int tabHeight = GetTabbarHeight(win->hwndFrame);
-    if (showCaption) {
-        SyncCaptionLayout(win);
-    }
+    SyncCaptionLayout(win);
     int captionHeight = showCaption ? win->captionLayout->Layout(ExpandInf()).dy : 0;
     int menuBarDy = showMenuRebar ? GetMenuBarRebarHeight(win) : 0;
     int rebarDy = 0;
     if (showToolbar && win->hwndToolbar) {
-        rebarDy = HwndWindowRect(win->hwndToolbar).dy;
+        rebarDy = toolbarSide ? 0 : ToolbarDockSize(win);
     }
 
     SetVis(win->captionLayout, showCaption);
+    if (win->annotationMode && win->hwndMenuReBar) ShowWindow(win->hwndMenuReBar, SW_HIDE);
     SetVis(win->tabsSlot, showTabsBar);
     SetVis(win->menuSlot, showMenuRebar);
-    SetVis(win->toolbarTopSlot, showToolbar && !toolbarBottom);
+    SetVis(win->toolbarTopSlot, toolbarTop);
+    SetVis(win->toolbarLeftSlot, toolbarSide && toolbarPosition == kToolbarLeft);
+    SetVis(win->toolbarRightSlot, toolbarSide && toolbarPosition == kToolbarRight);
+    int toolbarSideDx = toolbarSide ? std::min(ToolbarDockSize(win), rc.dx / 3) : 0;
+    win->toolbarLeftSlot->dx = toolbarSideDx;
+    win->toolbarRightSlot->dx = toolbarSideDx;
     SetVis(win->toolbarBottomSlot, showToolbar && toolbarBottom);
     win->tabsSlot->dy = tabHeight;
     win->menuSlot->dy = menuBarDy;
@@ -8194,7 +8253,7 @@ static bool RelayoutFrame(MainWindow* win, bool updateToolbars, int sidebarDx) {
         }
         // never too narrow; max leaves kMinDocCanvasDx for the document
         // (was hard-capped at half the frame, which cut long favorite names)
-        int maxSidebarDx = std::max(kSidebarMinDx, rc.dx - kMinDocCanvasDx);
+        int maxSidebarDx = std::max(kSidebarMinDx, rc.dx - toolbarSideDx - kMinDocCanvasDx);
         sidebarDxApplied = limitValue(sidebarDxApplied, kSidebarMinDx, maxSidebarDx);
         win->sidebarDx = sidebarDxApplied; // remember what's applied
     }
@@ -8203,7 +8262,7 @@ static bool RelayoutFrame(MainWindow* win, bool updateToolbars, int sidebarDx) {
     // 1px caption-border inset can disagree with the HWND's x. Only pin when
     // the sidebar is on the left: on the right, side.x is the right pane and
     // using it as rc.x stacked fav+canvas at the same x (issue-2165).
-    if ((isFrameResize || isSplitterDrag) && sidebarVisible && prevSidebar && !SidebarOnRightLayout()) {
+    if ((isFrameResize || isSplitterDrag) && sidebarVisible && prevSidebar && !toolbarSide && !SidebarOnRightLayout()) {
         HWND sideHwnd = topVisible ? win->sidebarTop->hwnd : win->sidebarBottom->hwnd;
         if (sideHwnd) {
             Rect side = ChildPosWithinParent(sideHwnd);
@@ -8266,15 +8325,19 @@ static bool RelayoutFrame(MainWindow* win, bool updateToolbars, int sidebarDx) {
 
     // chrome HWNDs only move when updateToolbars (splitter drag skips them)
     bool capTwoRow = showCaption && showingMenuBar;
-    bool capHasFileTabs = showCaption && WinHasFileTabs(win);
+    bool capHasFileTabs = showCaption && !win->annotationMode && WinHasFileTabs(win);
     BindSlot(win->tabsSlot, win->tabsCtrl ? win->tabsCtrl->hwnd : nullptr, &dh, updateToolbars && showTabsBar);
     BindSlot(win->menuSlot, win->hwndMenuReBar, &dh, updateToolbars && showMenuRebar);
     BindSlot(win->capMenuSlot, win->hwndMenuReBar, &dh, updateToolbars && capTwoRow);
     BindSlot(win->capTabsRow1, win->tabsCtrl ? win->tabsCtrl->hwnd : nullptr, &dh,
-             updateToolbars && showCaption && !capTwoRow);
+             updateToolbars && showCaption && !capTwoRow && !win->annotationMode);
     BindSlot(win->capTabsRow2, win->tabsCtrl ? win->tabsCtrl->hwnd : nullptr, &dh,
              updateToolbars && capTwoRow && capHasFileTabs);
-    BindSlot(win->toolbarTopSlot, win->hwndToolbar, &dh, updateToolbars && showToolbar && !toolbarBottom);
+    BindSlot(win->toolbarTopSlot, win->hwndToolbar, &dh, updateToolbars && toolbarTop);
+    BindSlot(win->toolbarLeftSlot, win->hwndToolbar, &dh,
+             updateToolbars && toolbarSide && toolbarPosition == kToolbarLeft);
+    BindSlot(win->toolbarRightSlot, win->hwndToolbar, &dh,
+             updateToolbars && toolbarSide && toolbarPosition == kToolbarRight);
     BindSlot(win->toolbarBottomSlot, win->hwndToolbar, &dh, updateToolbars && showToolbar && toolbarBottom);
     HWND topHwnd = win->sidebarTop->hwnd;
     HWND bottomHwnd = win->sidebarBottom->hwnd;
@@ -8307,10 +8370,11 @@ static bool RelayoutFrame(MainWindow* win, bool updateToolbars, int sidebarDx) {
         }
     }
 
-    HwndSlot* chromeSlots[] = {win->tabsSlot,          win->menuSlot,       win->toolbarTopSlot,
-                               win->toolbarBottomSlot, win->capMenuSlot,    win->capTabsRow1,
-                               win->capTabsRow2,       win->sidebarTopSlot, win->sidebarBottomSlot,
-                               win->favoritesTabSlot,  win->canvasSlot,     win->aiChatSlot};
+    HwndSlot* chromeSlots[] = {win->tabsSlot,          win->menuSlot,          win->toolbarTopSlot,
+                               win->toolbarBottomSlot, win->toolbarLeftSlot,   win->toolbarRightSlot,
+                               win->capMenuSlot,       win->capTabsRow1,       win->capTabsRow2,
+                               win->sidebarTopSlot,    win->sidebarBottomSlot, win->favoritesTabSlot,
+                               win->canvasSlot,        win->aiChatSlot};
     for (HwndSlot* s : chromeSlots) {
         ClearSlotDefer(s);
     }
@@ -9342,7 +9406,8 @@ void EnterFullScreen(MainWindow* win, bool presentation) {
     // SetMenu(nullptr) can alter the window style bits.
     long ws = GetWindowLong(win->hwndFrame, GWL_STYLE);
     if (!presentation || !win->isFullScreen) {
-        win->nonFullScreenWindowStyle = ws;
+        // Fullscreen restores a normal frame independently of Annotation Mode.
+        win->nonFullScreenWindowStyle = win->annotationMode ? (ws | win->annotationCaptionStyle) : ws;
     }
     win->nonFullScreenFrameRect = HwndWindowRect(win->hwndFrame);
 
@@ -9511,7 +9576,7 @@ void ExitFullScreen(MainWindow* win) {
     }
     // destroy any fullscreen menu rebar before restoring normal menu
     DestroyMenuBarRebar(win);
-    if (IsMenubarVisible()) {
+    if (IsMenubarVisible() && !win->annotationMode) {
         if (win->tabsInTitlebar) {
             CreateMenuBarRebar(win);
         } else {
@@ -9535,6 +9600,7 @@ void ExitFullScreen(MainWindow* win) {
 
     Rect cr = HwndClientRect(win->hwndFrame);
     long style = win->nonFullScreenWindowStyle;
+    if (win->annotationMode) style &= ~WS_CAPTION;
     if (wasMaximized) {
         // Clear WS_MAXIMIZE so ShowWindow(SW_MAXIMIZE) applies cleanly.
         style &= ~WS_MAXIMIZE;
@@ -9579,6 +9645,53 @@ void ToggleFullScreen(MainWindow* win, bool presentation) {
     }
 }
 
+void ToggleAnnotationMode(MainWindow* win) {
+    if (!win || win->isQuickLook || gPluginMode || (!win->annotationMode && (win->presentation || !win->IsDocLoaded())))
+        return;
+
+    if (!win->annotationMode) {
+        win->annotationToolbarPosition = ToolbarPositionFromPrefs();
+        win->annotationToolbarOverlayShown = win->toolbarOverlayShown;
+        long style = win->isFullScreen ? win->nonFullScreenWindowStyle : GetWindowLong(win->hwndFrame, GWL_STYLE);
+        win->annotationCaptionStyle = style & WS_CAPTION;
+    }
+    BeginFrameRedrawSuppression(win);
+    win->annotationMode = !win->annotationMode;
+    if (win->annotationMode) {
+        SetMenu(win->hwndFrame, nullptr);
+    } else if (!win->isFullScreen && !win->presentation && IsMenubarVisible()) {
+        if (win->tabsInTitlebar) {
+            if (!win->hwndMenuReBar) CreateMenuBarRebar(win);
+        } else {
+            SetMenu(win->hwndFrame, win->menu);
+        }
+    }
+    if (!win->isFullScreen && !win->presentation) {
+        long style = GetWindowLong(win->hwndFrame, GWL_STYLE);
+        style = (style & ~WS_CAPTION) | (win->annotationMode ? 0 : win->annotationCaptionStyle);
+        SetWindowLong(win->hwndFrame, GWL_STYLE, style);
+    }
+    SetWindowPos(win->hwndFrame, nullptr, 0, 0, 0, 0,
+                 SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE);
+    HideToolbarHoverDropdown(win);
+    ShowOrHideToolbar(win);
+    if (!win->annotationMode && win->isToolbarOverlay) {
+        win->toolbarOverlayShown = win->annotationToolbarOverlayShown;
+        if (win->toolbarOverlayShown) RevealOverlayToolbar(win);
+    }
+    win->tabsCtrl->SetIsVisible(!win->annotationMode && !win->isFullScreen && !win->presentation && win->tabsVisible);
+    ToolbarUpdateStateForWindow(win, true);
+    ToolbarSetDock(win);
+    win->uiState.layout = {};
+    RelayoutFrame(win);
+    if (!win->annotationMode) ShowMenuBarRebar(win);
+    if (!win->annotationMode && win->isToolbarOverlay) PositionOverlayToolbar(win);
+    RepositionAnnotEditToolbar(win);
+    HwndSetFocus(win->hwndFrame);
+    ScheduleRepaint(win, 0);
+    EndFrameRedrawSuppression(win);
+}
+
 static void TogglePresentationMode(MainWindow* win) {
     // only DisplayModel currently supports an actual presentation mode
     ToggleFullScreen(win, win->AsFixed() != nullptr);
@@ -9596,7 +9709,7 @@ static int wrapIdx(int idx, int max) {
 void AdvanceFocus(MainWindow* win) {
     // Tab order: Frame -> Toolbar -> Chapter -> Page -> ToC -> Favorites -> Frame.
 
-    bool hasToolbar = !win->isFullScreen && !win->presentation && gSettings->showToolbar && win->IsDocLoaded();
+    bool hasToolbar = win->isToolbarVisible && !win->presentation && win->IsDocLoaded();
     int direction = IsShiftPressed() ? -1 : 1;
 
     constexpr int kMaxWindows = 6;
@@ -9845,6 +9958,10 @@ static WCHAR SingleCharLowerW(WCHAR c) {
 }
 
 static void OnFrameKeyEsc(MainWindow* win) {
+    if (win->annotationMode) {
+        ToggleAnnotationMode(win);
+        return;
+    }
     if (win->laserPointerActive) {
         StopLaserPointer(win);
         HideToolbarHoverDropdown(win);
@@ -9998,11 +10115,9 @@ static Annotation* MakeAnnotationsFromSelection(WindowTab* tab, AnnotCreateArgs*
     if (!ok) {
         return nullptr;
     }
-    // highlight / underline / squiggly / strike out mark up runs of *text*. A
-    // rectangular selection (Ctrl+drag, Select All) isn't one - marking up its
-    // bounding boxes produced bars over whitespace - so do nothing.
     bool isTextSelection = dm->textSelection && dm->textSelection->result.len > 0;
-    if (!isTextSelection) {
+    // Only a highlight can mark the complete Ctrl-drag region, including whitespace.
+    if (!isTextSelection && args->annotType != AnnotationType::Highlight) {
         return nullptr;
     }
 
@@ -10610,6 +10725,25 @@ static bool CopyOrCutAnnotationInTab(WindowTab* tab, LPARAM lp, bool cut) {
     if (!tab || !HasPermission(Perm::CopySelection)) {
         return false;
     }
+    MainWindow* win = tab->win;
+    if (win && win->annotationLasso.active && len(win->annotationLasso.selected) > 0) {
+        if (!CopyAnnotationLasso(win, cut)) return false;
+        str::Builder contents;
+        for (auto* annot : win->annotationLasso.selected) {
+            if (len(contents)) contents.Append(StrL("\n"));
+            contents.Append(Contents(annot));
+        }
+        if (len(contents)) CopyTextToClipboard(ToStrTemp(contents));
+        gAnnotClipboardSeqNo = GetClipboardSequenceNumber();
+        if (cut) {
+            NotificationCreateArgs args;
+            args.hwndParent = win->hwndCanvas;
+            args.msg = Tr("Selection cut. Paste to move it.");
+            args.timeoutMs = 3000;
+            ShowNotification(args);
+        }
+        return true;
+    }
     Annotation* annot = GetAnnotionUnderCursor(tab, nullptr, lp);
     bool ok = CopyAnnotationToClipboard(annot, cut);
     if (!ok) {
@@ -10876,7 +11010,7 @@ static void TransitionToTabs() {
 // (unlike ToggleMenuBar, which flips the pref). No-op in fullscreen /
 // presentation, where the menu bar is governed by that mode.
 static void ApplyMenuBarVisibility(MainWindow* win) {
-    if (!win->menu || win->presentation || win->isFullScreen) {
+    if (!win->menu || win->presentation || win->isFullScreen || win->annotationMode) {
         return;
     }
     bool visible = IsMenubarVisible();
@@ -11855,22 +11989,27 @@ void SetAnnotCreateArgs(AnnotCreateArgs& args, CustomCommand* cmd) {
         args.quadding = QuaddingFromName(a.freeTextAlignment);
     } else if (typ == AnnotationType::Line) {
         col = GetParsedColor(a.lineColor);
+        args.borderWidth = isfinite(a.lineBorderWidth) ? limitValue(a.lineBorderWidth, 0.f, 64.f) : 1.f;
         interiorCol = GetParsedColor(a.lineInteriorColor);
         interiorOpacity = a.lineInteriorOpacity;
     } else if (typ == AnnotationType::PolyLine) {
         col = GetParsedColor(a.polyLineColor);
+        args.borderWidth = isfinite(a.polyLineBorderWidth) ? limitValue(a.polyLineBorderWidth, 0.f, 64.f) : 1.f;
         interiorCol = GetParsedColor(a.polyLineInteriorColor);
         interiorOpacity = a.polyLineInteriorOpacity;
     } else if (typ == AnnotationType::Square) {
         col = GetParsedColor(a.squareColor);
+        args.borderWidth = isfinite(a.squareBorderWidth) ? limitValue(a.squareBorderWidth, 0.f, 64.f) : 1.f;
         interiorCol = GetParsedColor(a.squareInteriorColor);
         interiorOpacity = a.squareInteriorOpacity;
     } else if (typ == AnnotationType::Circle) {
         col = GetParsedColor(a.circleColor);
+        args.borderWidth = isfinite(a.circleBorderWidth) ? limitValue(a.circleBorderWidth, 0.f, 64.f) : 1.f;
         interiorCol = GetParsedColor(a.circleInteriorColor);
         interiorOpacity = a.circleInteriorOpacity;
     } else if (typ == AnnotationType::Polygon) {
         col = GetParsedColor(a.polygonColor);
+        args.borderWidth = isfinite(a.polygonBorderWidth) ? limitValue(a.polygonBorderWidth, 0.f, 64.f) : 1.f;
         interiorCol = GetParsedColor(a.polygonInteriorColor);
         interiorOpacity = a.polygonInteriorOpacity;
     } else if (typ == AnnotationType::Ink) {
@@ -11951,12 +12090,27 @@ static WindowTab* FindTabForAnnotation(Annotation* annot) {
 // can't lose the annotation (issue #5222). The annotation is gone already if
 // its document was closed in between; TakeCutAnnotation() returns null then.
 static void DeleteCutAnnotationAfterPaste() {
-    Annotation* cut = TakeCutAnnotation();
-    WindowTab* tab = FindTabForAnnotation(cut);
-    if (!tab) {
-        return;
+    Vec<Annotation*> cuts = TakeCutAnnotations();
+    Vec<WindowTab*> sources;
+    for (auto* cut : cuts) {
+        auto* tab = FindTabForAnnotation(cut);
+        if (!tab || VecContains(sources, tab)) continue;
+        VecAppend(sources, tab);
+        EngineMupdfBeginOperation(tab->AsFixed()->GetEngine(), "Move cut selection");
+        if (tab->win->annotationLasso.tab == tab) CancelAnnotationLasso(tab->win);
     }
-    DeleteAnnotationAndUpdateUI(tab, cut);
+    for (auto* cut : cuts) {
+        auto* tab = FindTabForAnnotation(cut);
+        if (!tab) continue;
+        DetachAnnotationFromUI(cut);
+        DeleteAnnotation(cut);
+    }
+    for (auto* tab : sources) {
+        EngineMupdfEndOperation(tab->AsFixed()->GetEngine());
+        RefreshAnnotationLists(tab);
+        NotifyAnnotationsChanged(tab);
+        MainWindowRerender(tab->win);
+    }
 }
 
 static Annotation* TryPasteCopiedAnnotation(MainWindow* win, WindowTab* tab, DisplayModel* dm, LPARAM lp) {
@@ -12509,6 +12663,10 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             ShowGeneratedMarkdownHtml(win);
             break;
 
+        case CmdEditMarkdown:
+            EditCurrentMarkdown(win);
+            break;
+
         case CmdOpenPrevFileInFolder:
         case CmdOpenNextFileInFolder:
             if (!win->IsCurrentTabAbout()) {
@@ -12651,7 +12809,7 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             // Ctrl+V pastes a copied annotation, but only while ours is the most
             // recent copy. An image copied in another app since then wins, or the
             // annotation would hijack Ctrl+V for the rest of the session.
-            bool pasteAnnot = win && win->pdfAnnotationsToolbarEnabled &&
+            bool pasteAnnot = win && (win->pdfAnnotationsToolbarEnabled || win->annotationLasso.active) &&
                               (CopiedAnnotationIsFresh() || !IsClipboardFormatAvailable(CF_BITMAP));
             if (pasteAnnot) {
                 lastCreatedAnnot = TryPasteCopiedAnnotation(win, tab, dm, lp);
@@ -12826,6 +12984,10 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
 
         case CmdToggleFreePan:
             ToggleFreePan(win);
+            break;
+
+        case CmdAnnotationMode:
+            if (ShouldToggle(cmd, win->annotationMode)) ToggleAnnotationMode(win);
             break;
 
         case CmdToggleToolbar:
@@ -13376,6 +13538,14 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             ShowNotification(nargs);
         } break;
 
+        case CmdExportAnnotationsTransfer:
+            ExportAnnotationsDialog(win);
+            break;
+
+        case CmdImportAnnotationsTransfer:
+            ImportAnnotationsDialog(win);
+            break;
+
         case CmdExportStudyNotes:
             ShowStudyExport(win);
             break;
@@ -13403,6 +13573,18 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
 
         case CmdOpenSettingsFile:
             OpenSettingsFileInEditor();
+            break;
+
+        case CmdExportSettings:
+            ShowSettingsTransfer(win, SettingsTransfer::Export);
+            break;
+
+        case CmdImportSettings:
+            ShowSettingsTransfer(win, SettingsTransfer::Import);
+            break;
+
+        case CmdBackupSettings:
+            ShowSettingsBackup(win->hwndFrame, gSettings->settingsBackupDirectory);
             break;
 
         case CmdChangeTheme:
@@ -13588,6 +13770,10 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             break;
 
         case CmdCopySelection:
+            if (win && win->annotationLasso.active && len(win->annotationLasso.selected) > 0) {
+                if (!ForwardEditMsgToFocusedEditControl(WM_COPY)) CopyOrCutAnnotationInTab(tab, 0, false);
+                break;
+            }
             CopySelectionInTabToClipboard(tab);
             break;
 
@@ -13963,6 +14149,10 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             if (win->handTool) RevealToolbarTool(win, cmdId);
             break;
 
+        case CmdAnnotationShapes:
+            ShowShapesToolbarPopup(win);
+            break;
+
         case CmdAnnotationLasso:
             ToggleAnnotationLasso(win);
             ToolbarUpdateStateForWindow(win, true);
@@ -14101,6 +14291,19 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             [[fallthrough]];
         case CmdCreateAnnotLine:
             [[fallthrough]];
+        case CmdCreateAnnotArrow:
+            [[fallthrough]];
+        case CmdCreateAnnotDashedLine:
+            [[fallthrough]];
+        case CmdCreateAnnotParabola:
+        case CmdCreateAnnotNegativeParabola:
+        case CmdCreateAnnotCubic:
+        case CmdCreateAnnotNegativeCubic:
+        case CmdCreateAnnotReciprocal:
+        case CmdCreateAnnotNegativeReciprocal:
+        case CmdCreateAnnotAxes2D:
+        case CmdCreateAnnotAxes3D:
+            [[fallthrough]];
         case CmdCreateAnnotCircle:
             [[fallthrough]];
         case CmdCreateAnnotPolygon:
@@ -14142,6 +14345,9 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             PointF lineEndOnPage;
             AnnotCreateArgs args{annotType};
             SetAnnotCreateArgs(args, cmd);
+            SetLineToolCreateArgs(cmdId, args);
+            ConfigureShapeCreateArgs(cmdId, args);
+            if (MathShapeForCommand(cmdId) >= 0 && cmd && cmd->firstArg) SetAnnotCreateArgsFromCommand(args, cmd);
             if (isAnnotationPlacementCommit) {
                 if (!AnnotationPlacementFillCreate(win, annotType, pt, pageNoUnderCursor, ptOnPage, lineEndOnPage,
                                                    args)) {
@@ -14285,7 +14491,7 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
     // CmdCreateAnnot* turns on Edit PDF only when the command has `openedit`
     // (Shift+A / Shift+U). Paste and insert-image still enter the mode.
     bool enterEditPdf = true;
-    if (cmdId >= CmdCreateAnnotFirst && cmdId <= CmdCreateAnnotLast) {
+    if ((cmdId >= CmdCreateAnnotFirst && cmdId <= CmdCreateAnnotLast) || CommandUsesPlacementMode(cmdId)) {
         enterEditPdf = openEdit;
     }
     if (enterEditPdf) {
@@ -14478,20 +14684,21 @@ static void HandleCaptionClick(MainWindow* win, int btnIdx) {
 }
 
 void RelayoutCaption(MainWindow* win) {
-    if (!win->captionLayout || !win->tabsInTitlebar) {
+    if (!win->captionLayout) {
         return;
     }
     DpiSetFromHwnd(win->hwndFrame);
     SyncCaptionLayout(win);
+    if (!win->tabsInTitlebar || win->annotationMode || win->isFullScreen || win->presentation) return;
     Rect rc = win->captionRect;
     if (rc.IsEmpty()) {
         return;
     }
     bool twoRow = IsShowingMenuBarRebar(win);
-    bool hasFileTabs = WinHasFileTabs(win);
+    bool hasFileTabs = !win->annotationMode && WinHasFileTabs(win);
     DeferWinPosHelper dh;
     BindSlot(win->capMenuSlot, win->hwndMenuReBar, &dh, twoRow);
-    BindSlot(win->capTabsRow1, win->tabsCtrl ? win->tabsCtrl->hwnd : nullptr, &dh, !twoRow);
+    BindSlot(win->capTabsRow1, win->tabsCtrl ? win->tabsCtrl->hwnd : nullptr, &dh, !twoRow && !win->annotationMode);
     BindSlot(win->capTabsRow2, win->tabsCtrl ? win->tabsCtrl->hwnd : nullptr, &dh, twoRow && hasFileTabs);
     int dy = win->captionLayout->MinIntrinsicHeight(rc.dx);
     if (dy <= 0) {
@@ -14929,7 +15136,7 @@ static LRESULT CustomCaptionFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
         }
 
         case WM_PAINT: {
-            if (win->isFullScreen || win->presentation) {
+            if (win->isFullScreen || win->presentation || win->annotationMode) {
                 break; // no custom caption painting in fullscreen
             }
             PAINTSTRUCT ps;
@@ -14981,6 +15188,7 @@ static LRESULT CustomCaptionFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
         }
 
         case WM_NCACTIVATE:
+            if (win->annotationMode) break;
             for (int i = CB_BTN_FIRST; i < CB_BTN_COUNT; i++) {
                 win->captionBtn[i].inactive = wp == FALSE;
             }
@@ -15107,6 +15315,11 @@ static LRESULT CustomCaptionFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
                 }
             }
 
+            if (win->annotationMode) {
+                *callDef = false;
+                return HTCLIENT;
+            }
+
             {
                 Point ptClient = HwndScreenToClient(hwnd, Point(x, y));
                 int btnIdx = CaptionButtonAt(win, ptClient);
@@ -15139,7 +15352,7 @@ static LRESULT CustomCaptionFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
             break;
 
         case WM_NCLBUTTONUP:
-            if (wp == HTMAXBUTTON) {
+            if (wp == HTMAXBUTTON && !win->annotationMode) {
                 WPARAM cmd = IsZoomed(hwnd) ? SC_RESTORE : SC_MAXIMIZE;
                 PostMessageW(hwnd, WM_SYSCOMMAND, cmd, 0);
                 *callDef = false;
@@ -15266,6 +15479,7 @@ static LRESULT CustomCaptionFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
 
         case WM_SYSCOMMAND:
             if (wp == SC_KEYMENU) {
+                if (win->annotationMode) break;
                 if (IsShowingMenuBarRebar(win)) {
                     // activate the rebar menu bar directly
                     ActivateMenuBarByAccel(win, (WCHAR)lp);
@@ -15352,7 +15566,7 @@ static LRESULT CALLBACK WndProcSumatraFrame(HWND hwnd, UINT msg, WPARAM wp, LPAR
     }
     // custom caption is incompatible with WS_CHILD hosts; skip even before
     // deferred ApplyEmbeddedWindowChrome clears tabsInTitlebar
-    if (win && win->tabsInTitlebar && !gMyWindowWasEmbedded) {
+    if (win && (win->tabsInTitlebar || win->annotationMode) && !gMyWindowWasEmbedded) {
         bool callDefault = true;
         LRESULT res = CustomCaptionFrameProc(hwnd, msg, wp, lp, &callDefault, win);
         if (!callDefault) {
@@ -15952,6 +16166,7 @@ static void ShutdownCleanup() {
     TtsRelease();
     FreeHomePageTips();
     DestroySvgPixmapIconsCache();
+    FreeShapeToolIcons();
     DisconnectLastDragDataObject();
 
     gAllowedFileTypes.Reset();
@@ -16856,6 +17071,7 @@ static void FreeLibsumatrapdfDll();
 
 static void ShutdownCommon() {
     AnnotRecoveryShutdown();
+    FlushSettingsBackups();
     PlatformFontDestroy();
     uitask::Destroy();
     FreeLibsumatrapdfDll();
@@ -18294,7 +18510,7 @@ static void ApplyHtmlBackendFlag(Str name) {
 
 static void LogCommandLine() {
     TempStr s = ToUtf8Temp(GetCommandLineW());
-    logf("'%s'\n  ver %s\n", Str(s), StrL(UPDATE_CHECK_VERA));
+    logf("'%s'\n  ver %s\n  upstream %s\n", Str(s), StrL(ENHANCED_VERSION_STRA), StrL(UPDATE_CHECK_VERA));
     LogParentProcessChain();
 }
 
@@ -18960,6 +19176,7 @@ int APIENTRY WinMain(_In_ HINSTANCE /*hInstance*/, _In_opt_ HINSTANCE /*hPrevIns
 
     LoadSettings();
     UpdateSettings(flags);
+    if (!flags.forTesting) ApplyFileTypeIcons(gSettings->fileTypeIconStyle);
 
     // UpdateDocumentColors() keeps it in sync after this
     AtomicBoolSet(&gRenderCache->grayscalePageColors, gSettings->fixedPageUI.grayscale);
@@ -19453,6 +19670,7 @@ Exit:
     // are still alive. No-op if OnMenuExit already saved (gDontSaveSettings).
     FlushScheduledSaveSettings();
     if (fastExit) {
+        FlushSettingsBackups();
         // leave all the remaining clean-up to the OS
         // (as recommended for a quick exit)
         // note: this intentionally skips freeing engines/windows, so leak
@@ -19518,6 +19736,7 @@ Exit:
         destroy_system_font_list();
     }
 
+    FlushSettingsBackups();
     PlatformFontDestroy();
     uitask::Destroy();
     trans::Destroy();

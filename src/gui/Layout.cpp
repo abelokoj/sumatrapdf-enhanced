@@ -80,6 +80,53 @@ static bool LayoutTreeContains(ILayout* l, ILayout* needle) {
     return false;
 }
 
+struct WindowRowPadding : Padding {
+    WindowRowPadding(ILayout* row, int right) : Padding(row, Insets{0, right, 0, 0}) {}
+
+    Visibility GetVisibility() override { return child->GetVisibility(); }
+};
+
+struct WindowScrollPadding : Padding {
+    Vec<WindowRowPadding*> rows;
+
+    WindowScrollPadding(VBox* box, ILayout* scrolling, Insets insets) : Padding(box, insets) {
+        for (auto& entry : box->children) {
+            if (!LayoutTreeContains(entry.layout, scrolling)) {
+                auto* row = new WindowRowPadding(entry.layout, 0);
+                entry.layout = row;
+                VecAppend(rows, row);
+            }
+        }
+        NormalizeInsets();
+    }
+
+    void NormalizeInsets() {
+        if (insets.right == 0) return;
+        for (auto* row : rows) row->insets.right = insets.right;
+        insets.right = 0;
+    }
+
+    Size Layout(Constraints bc) override {
+        NormalizeInsets();
+        return Padding::Layout(bc);
+    }
+
+    int MinIntrinsicHeight(int width) override {
+        NormalizeInsets();
+        return Padding::MinIntrinsicHeight(width);
+    }
+
+    int MinIntrinsicWidth(int height) override {
+        NormalizeInsets();
+        return Padding::MinIntrinsicWidth(height);
+    }
+};
+
+// Put the trailing inset on other rows so the scrolling lane reaches the edge.
+Padding* PadWindowScroll(VBox* box, ILayout* scrolling, Insets insets) {
+    return new WindowScrollPadding(box, scrolling, insets);
+}
+
 void PositionRB(const Rect& container, Rect& r) {
     r.x = container.dx - r.dx;
     r.y = container.dy - r.dy;
@@ -402,7 +449,7 @@ static int updateFlex(Vec<boxElementInfo>& children, MainAxisAlign alignMain) {
 }
 
 // where a child of size sz sits inside its cell
-static Rect AlignInCell(const Rect& cell, Size sz, CrossAxisAlign alignH, CrossAxisAlign alignV) {
+Rect AlignInCell(const Rect& cell, Size sz, CrossAxisAlign alignH, CrossAxisAlign alignV) {
     Rect r{cell.x, cell.y, sz.dx, sz.dy};
     switch (alignH) {
         case CrossAxisAlign::Stretch:

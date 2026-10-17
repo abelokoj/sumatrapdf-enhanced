@@ -8,7 +8,7 @@ const FONT_REVISION = "3d7870d8a8cdcd891e352e08f5c4ecc3451680f0";
 const FONT_SOURCE = join(import.meta.dir, "../src/fonts/markdown");
 const policyBase = "HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2";
 let savedBrowserPolicy: { key: string; value?: string }[] = [];
-function browserEnv(profile: string): Record<string, string> {
+export function browserEnv(profile: string): Record<string, string> {
   const env = {
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=0",
     WEBVIEW2_USER_DATA_FOLDER: profile,
@@ -31,7 +31,7 @@ function browserEnv(profile: string): Record<string, string> {
   }
   return {};
 }
-function restoreBrowserPolicy(): void {
+export function restoreBrowserPolicy(): void {
   for (const old of savedBrowserPolicy.reverse()) {
     const args =
       old.value === undefined
@@ -68,14 +68,18 @@ function cacheIsEmpty(profile: string): boolean {
 function assert(ok: unknown, message: string): asserts ok {
   if (!ok) throw new Error(`markdown-display-fonts: ${message}`);
 }
-async function browserPort(profile: string): Promise<number> {
+export async function browserPort(profile: string): Promise<number> {
   const deadline = Date.now() + TIMEOUT;
   const paths = [join(profile, "EBWebView", "DevToolsActivePort"), join(profile, "DevToolsActivePort")];
   while (Date.now() < deadline) {
     for (const path of paths) {
       if (!existsSync(path)) continue;
-      const port = Number(readFileSync(path, "utf8").split(/\r?\n/)[0]);
-      if (port > 0 && port <= 65535) return port;
+      try {
+        const port = Number(readFileSync(path, "utf8").split(/\r?\n/)[0]);
+        if (port > 0 && port <= 65535) return port;
+      } catch {
+        // WebView can hold the port file exclusively while creating it.
+      }
     }
     await Bun.sleep(100);
   }
@@ -93,7 +97,7 @@ async function browserPort(profile: string): Promise<number> {
   throw new Error(`Markdown browser did not report its debug port: ${profile}`);
 }
 
-class Page {
+export class Page {
   private id = 0;
   logs: any[] = [];
   private pending = new Map<number, { resolve: (value: any) => void; reject: (reason: Error) => void; timer: Timer }>();
@@ -184,14 +188,24 @@ async function runFontTest(): Promise<void> {
     "UiLanguage = en\nCheckForUpdates = false\nRestoreSession = false\nReuseInstance = false\nUIFontSize = 16\nInterfaceScale = 100\nTheme = Sumatra Light\nDocumentColorsFollowTheme = smart\nMarkdownUI [\nUseFixedPageUI = false\nFontName = Lora\nMathFontName = Libertinus Math\n]\n",
   );
   const fontPrefs = readFileSync(prefs, "utf8");
-  for (const requestedFont of ["", "Lora"]) {
+  for (const requestedFont of ["", "Lora", "Consolas"]) {
     writeFileSync(
       prefs,
       fontPrefs
         .replace("FontName = Lora", `FontName = ${requestedFont}`)
-        .replace("MathFontName = Libertinus Math", "MathFontName ="),
+        .replace(
+          "MathFontName = Libertinus Math",
+          requestedFont === "Consolas" ? "MathFontName = Cambria Math" : "MathFontName =",
+        ),
     );
-    const cleanProfile = join(dir, requestedFont ? "browser-missing-font" : "browser-interface-font");
+    const cleanProfile = join(
+      dir,
+      requestedFont === "Consolas"
+        ? "browser-system-font"
+        : requestedFont
+          ? "browser-missing-font"
+          : "browser-interface-font",
+    );
     mkdirSync(cleanProfile, { recursive: true });
     const clean = await launchControlled(
       ["-appdata", dir, "-log-to-file", join(cleanProfile, "native.log"), markdown],
@@ -223,6 +237,34 @@ async function runFontTest(): Promise<void> {
         "light-mode numbered list text starts below its number",
       );
       await cleanPage.eval("document.fonts.ready");
+      if (requestedFont === "Consolas") {
+        assert(
+          await cleanPage.eval("getComputedStyle(document.querySelector('main p')).fontFamily.includes('Consolas')"),
+          "installed system font was replaced by the interface font",
+        );
+        assert(
+          await cleanPage.eval(
+            "getComputedStyle(document.documentElement).getPropertyValue('--enhanced-markdown-math-font-family').includes('Cambria Math')",
+          ),
+          "system math font did not reach the renderer",
+        );
+        await cleanPage.command("DOM.enable");
+        await cleanPage.command("CSS.enable");
+        const document = await cleanPage.command("DOM.getDocument");
+        const paragraph = await cleanPage.command("DOM.querySelector", {
+          nodeId: document.root.nodeId,
+          selector: "main p",
+        });
+        const used = await cleanPage.command("CSS.getPlatformFontsForNode", { nodeId: paragraph.nodeId });
+        assert(
+          used.fonts.some(
+            (font: { familyName: string; isCustomFont: boolean; glyphCount: number }) =>
+              font.familyName === "Consolas" && !font.isCustomFont && font.glyphCount > 0,
+          ),
+          "system font did not supply the actual rendered glyphs",
+        );
+        await cleanPage.capture(join(dir, "system-font.png"));
+      }
       assert(await cleanPage.eval("Array.from(document.fonts).length===0"), "opening Markdown loaded an optional font");
       assert(
         await cleanPage.eval("document.querySelector('main').textContent.includes('Last paragraph.')"),

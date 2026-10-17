@@ -55,6 +55,7 @@ void RefHoverSchedule(RefHoverState* s, HWND hwndCanvas, int delayMs, Point scre
     }
     KillTimer(hwndCanvas, kRefHoverTimerID);
     KillTimer(hwndCanvas, kRefHoverHideTimerID);
+    if (s->resizing || s->selecting || RefHoverHasSelection(s)) return;
 
     bool sameSrc = s->displayed.srcPage == srcPage && s->displayed.srcRect == srcRect;
     if (HwndIsVisible(s->hwndPopup) && s->displayed.destPageRaw == destPage && s->displayed.destX == destX &&

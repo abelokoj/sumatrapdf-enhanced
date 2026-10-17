@@ -106,6 +106,7 @@ struct TabsCtrl : VirtCtrl {
     bool withToolTips = false;
     bool inTitleBar = false;
     bool draggingTab = false;
+    int activeStyle = 3;
     // dx of tab if there's more space available
     int tabDefaultDx = 300;
     int tabMinDx = 100;

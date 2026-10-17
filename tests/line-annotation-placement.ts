@@ -34,6 +34,7 @@ import {
   killAndWait,
   launchControlled,
   scrollToolbarToCommand,
+  selectToolbarShape,
   pressKey,
   sendCommand,
 } from "./win-automation.ts";
@@ -224,16 +225,7 @@ export async function testit(): Promise<void> {
 
     sendMessage(frame, WM_COMMAND, cmdId("CmdToggleEditPDF"), 0);
     const toolbar = findChildByClass(frame, "SUMATRA_VIRT_TOOLBAR");
-    const clickLineToolbar = async () => {
-      const toolbarDump = await scrollToolbarToCommand(client, frame, "CmdCreateAnnotLine");
-      const lineButton = toolbarButtonRect(toolbarDump, "CmdCreateAnnotLine");
-      await clickAt(
-        toolbar,
-        lineButton.x + Math.floor(lineButton.dx / 2),
-        lineButton.y + Math.floor(lineButton.dy / 2),
-        0,
-      );
-    };
+    const clickLineToolbar = () => selectToolbarShape(client, frame, proc.pid!, cmdId("CmdCreateAnnotLine"));
 
     await clickLineToolbar();
     let state = await waitForPlacement(client, true);

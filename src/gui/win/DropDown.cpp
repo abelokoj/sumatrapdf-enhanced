@@ -13,6 +13,7 @@
 #include "gui/Layout.h"
 #include "gui/PlatformFont.h"
 #include "gui/Gfx.h"
+#include "gui/GuiColors.h"
 #include "gui/win/WinGui.h"
 #include "gui/VirtHost.h"
 
@@ -81,14 +82,87 @@ static void PrepareDropDownList(DropDown* drop) {
     if (gUiInstallScrollbar && GetComboBoxInfo(drop->hwnd, &info)) gUiInstallScrollbar(info.hwndList);
 }
 
+void DropDown::EnablePreviewItems() {
+    ReportIf(hwnd);
+    previewItems = true;
+    pendingCreate.previewItems = true;
+}
+
+Rect DropDown::PreviewBounds(Rect row) const {
+    int pad = DpiScale(3);
+    int size = std::max(1, std::min(row.dy - 2 * pad, std::max(DpiScale(20), PlatformFontLineHeight(font))));
+    bool rtl = hwnd ? HwndIsRtl(hwnd) : pendingCreate.isRtl;
+    return {rtl ? row.Right() - pad - size : row.x + pad, row.y + (row.dy - size) / 2, size, size};
+}
+
+Rect DropDown::PreviewTextBounds(Rect row) const {
+    if (!previewItems) return row;
+    Rect mark = PreviewBounds(row);
+    bool rtl = hwnd ? HwndIsRtl(hwnd) : pendingCreate.isRtl;
+    int inset = mark.dx + DpiScale(9);
+    if (!rtl) row.x += inset;
+    row.dx = std::max(0, row.dx - inset);
+    return row;
+}
+
+void DropDown::PaintPreview(Gfx* gfx, Rect row, int index, Str text, Color foreground, Color background) {
+    if (!previewItems || !onPreviewItem.IsValid() || row.IsEmpty()) return;
+    PreviewItemEvent ev{this, gfx, PreviewBounds(row), index, text, foreground, background, !IsEnabled()};
+    onPreviewItem.Call(&ev);
+}
+
+static void SetPreviewMargins(DropDown* drop) {
+    HWND edit = CbEditHwnd(drop->hwnd);
+    EditSetDefaultMargins(edit);
+    if (!edit || !drop->previewItems) return;
+    DWORD margins = (DWORD)SendMessageW(edit, EM_GETMARGINS, 0, 0);
+    Rect row = HwndClientRect(edit);
+    int inset = drop->PreviewBounds(row).dx + DpiScale(9);
+    bool rtl = HwndIsRtl(drop->hwnd);
+    EditSetMargins(edit, rtl ? LOWORD(margins) : inset, rtl ? inset : HIWORD(margins));
+}
+
+static void PaintEditPreview(DropDown* drop, HWND edit, HDC dc) {
+    if (!drop->previewItems || !dc) return;
+    GfxHdc gfx(dc);
+    Color bg = IsSpecialColor(drop->bgColor) ? GetSysColor(COLOR_WINDOW) : drop->bgColor;
+    Color fg = IsSpecialColor(drop->textColor) ? GetSysColor(COLOR_WINDOWTEXT) : drop->textColor;
+    Rect row = HwndClientRect(edit);
+    gfx.FillRect(drop->PreviewBounds(row), bg);
+    drop->PaintPreview(&gfx, row, CbGetCurrentSelection(drop), drop->GetTextTemp(), fg, bg);
+}
+
+static LRESULT CALLBACK DropDownEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+    auto* drop = (DropDown*)data;
+    if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, DropDownEditProc, id);
+    LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
+    if (msg == WM_PAINT) {
+        HDC dc = GetDC(hwnd);
+        PaintEditPreview(drop, hwnd, dc);
+        if (dc) ReleaseDC(hwnd, dc);
+    } else if (msg == WM_PRINTCLIENT) {
+        PaintEditPreview(drop, hwnd, (HDC)wp);
+    }
+    return result;
+}
+
 static LRESULT CALLBACK DropDownProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR data) {
     auto* drop = (DropDown*)data;
     if (drop && ((msg == CB_SHOWDROPDOWN && wp) || msg == WM_LBUTTONDOWN || msg == WM_MOUSEWHEEL ||
                  (msg == WM_KEYDOWN && (wp == VK_UP || wp == VK_DOWN || wp == VK_HOME || wp == VK_END || wp == VK_F4))))
         PrepareDropDownList(drop);
+    if (drop && drop->sectioned && msg == WM_KEYDOWN) {
+        int selected = CbGetCurrentSelection(drop);
+        if (selected >= 0 && !VecContains(drop->sectionHeaders, selected)) drop->lastFontSelection = selected;
+    }
     if (msg == WM_SETFONT) {
         LRESULT res = DefSubclassProc(hwnd, msg, wp, lp);
-        EditSetDefaultMargins(CbEditHwnd(hwnd));
+        SetPreviewMargins(drop);
+        if (drop->previewItems) {
+            int height = PlatformFontLineHeight(drop->font) + DpiScale(6);
+            CbSetItemHeight(hwnd, 0, height);
+            CbSetItemHeight(hwnd, -1, height);
+        }
         return res;
     }
     if (msg != WM_SIZE) {
@@ -97,7 +171,7 @@ static LRESULT CALLBACK DropDownProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, 
     int start = 0, end = 0;
     CbEditGetSelection(hwnd, start, end);
     LRESULT res = DefSubclassProc(hwnd, msg, wp, lp);
-    EditSetDefaultMargins(CbEditHwnd(hwnd));
+    SetPreviewMargins(drop);
     CbEditSelectText(hwnd, start, end);
     return res;
 }
@@ -109,10 +183,22 @@ void DropDown::OnCommand(ControlBase::CommandEvent* ev) {
     auto code = HIWORD(ev->wparam);
     if (code == CBN_DROPDOWN) PrepareDropDownList(this);
     if (code == CBN_EDITCHANGE && itemsPending) pendingSelection = -1;
+    if (previewItems && (code == CBN_EDITCHANGE || code == CBN_SELCHANGE)) {
+        if (HWND edit = CbEditHwnd(hwnd)) InvalidateRect(edit, nullptr, FALSE);
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
     if (code == CBN_EDITCHANGE && onTextChanged.IsValid()) {
         onTextChanged.Call();
         ev->didHandle = true;
         return;
+    }
+    if (code == CBN_SELCHANGE && sectioned) {
+        int selected = CbGetCurrentSelection(this);
+        int direction = selected < lastFontSelection ? -1 : 1;
+        while (selected >= 0 && selected < len(items) && VecContains(sectionHeaders, selected)) selected += direction;
+        if (selected < 0 || selected >= len(items)) selected = lastFontSelection;
+        CbSetCurrentSelection(this, selected);
+        lastFontSelection = selected;
     }
     if ((code == CBN_SELCHANGE) && onSelectionChanged.IsValid()) {
         onSelectionChanged.Call();
@@ -140,6 +226,76 @@ static void PaintCheckerSwatch(Gfx* gfx, Rect r) {
             }
         }
     }
+}
+
+void DrawDropDownSwatch(Gfx* gfx, Rect r, Color color, u8 alpha) {
+    if (r.IsEmpty()) return;
+    PaintCheckerSwatch(gfx, r);
+    if (!ColorSkipsPaint(color) && alpha) {
+        Color rgb = MkRgb(GetRed(color), GetGreen(color), GetBlue(color));
+        if (alpha == 255)
+            gfx->FillRect(r, rgb);
+        else
+            gfx->FillRects(&r, 1, rgb, alpha);
+    }
+    gfx->DrawRect(r, MkRgb(110, 110, 110), 1);
+}
+
+static void DrawPreviewItem(DropDown* drop, DRAWITEMSTRUCT* item) {
+    GfxHdc gfx(item->hDC);
+    Rect row = ToRect(item->rcItem);
+    bool selected = (item->itemState & ODS_SELECTED) != 0;
+    Color bg = selected                        ? GetSysColor(COLOR_HIGHLIGHT)
+               : IsSpecialColor(drop->bgColor) ? GetSysColor(COLOR_WINDOW)
+                                               : drop->bgColor;
+    Color fg = selected                          ? GetSysColor(COLOR_HIGHLIGHTTEXT)
+               : IsSpecialColor(drop->textColor) ? GetSysColor(COLOR_WINDOWTEXT)
+                                                 : drop->textColor;
+    if (item->itemState & ODS_DISABLED) fg = GetSysColor(COLOR_GRAYTEXT);
+    gfx.FillRect(row, bg);
+    int index = item->itemID == (UINT)-1 ? -1 : (int)item->itemID;
+    if (drop->itemsPending && index >= 0) index = drop->pendingSelection;
+    Str text = index >= 0 && index < len(drop->items) ? drop->items[index] : drop->GetTextTemp();
+    drop->PaintPreview(&gfx, row, index, text, fg, bg);
+    Rect label = drop->PreviewTextBounds(row);
+    label.dx = std::max(0, label.dx - DpiScale(3));
+    bool rtl = HwndIsRtl(drop->hwnd);
+    gfx.DrawText(text, label,
+                 gfxTextVCenter | gfxTextSingleLine | gfxTextEllipsis | (rtl ? gfxTextRight | gfxTextRtl : gfxTextLeft),
+                 drop->font, fg);
+    if (item->itemState & ODS_FOCUS) gfx.DrawFocusRect(row);
+}
+
+static void DrawFontSectionItem(DropDown* w, DRAWITEMSTRUCT* item) {
+    if (item->itemID == (UINT)-1 || item->itemID >= (UINT)len(w->items)) return;
+    bool heading = VecContains(w->sectionHeaders, (int)item->itemID);
+    bool selected = !heading && (item->itemState & ODS_SELECTED);
+    COLORREF background = selected ? IsSpecialColor(gColsListBox[kColListSelFocused]) ? GetSysColor(COLOR_HIGHLIGHT)
+                                                                                      : gColsListBox[kColListSelFocused]
+                                   : (IsSpecialColor(w->bgColor) ? gColsListBox[kColListBg] : w->bgColor);
+    COLORREF foreground = selected ? gColsListBox[kColListText]
+                                   : (IsSpecialColor(w->textColor) ? gColsListBox[kColListText] : w->textColor);
+    HBRUSH brush = CreateSolidBrush(background);
+    FillRect(item->hDC, &item->rcItem, brush);
+    DeleteObject(brush);
+    RECT rect = item->rcItem;
+    if (heading) {
+        HPEN pen = CreatePen(PS_SOLID, 1, gColsBtn[kColBtnTextDisabled]);
+        HGDIOBJ previous = SelectObject(item->hDC, pen);
+        MoveToEx(item->hDC, rect.left + DpiScale(6), rect.top, nullptr);
+        LineTo(item->hDC, rect.right - DpiScale(6), rect.top);
+        SelectObject(item->hDC, previous);
+        DeleteObject(pen);
+        foreground = gColsBtn[kColBtnTextDisabled];
+    }
+    rect.left += DpiScale(heading ? 6 : 14);
+    SetBkMode(item->hDC, TRANSPARENT);
+    SetTextColor(item->hDC, foreground);
+    auto* font = heading ? GetBoldPlatformFont(w->font) : w->font;
+    HGDIOBJ previous = font ? SelectObject(item->hDC, font->GetHFont()) : nullptr;
+    DrawTextW(item->hDC, CWStrTemp(w->items[(int)item->itemID]), -1, &rect,
+              DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+    if (previous) SelectObject(item->hDC, previous);
 }
 
 static void DrawColorSwatchItem(DropDown* w, DRAWITEMSTRUCT* dis) {
@@ -186,7 +342,7 @@ static void DrawColorSwatchItem(DropDown* w, DRAWITEMSTRUCT* dis) {
 }
 
 void DropDown::OnMessageReflect(ControlBase::MessageReflectEvent* ev) {
-    if (colorSwatches && ev->msg == WM_MEASUREITEM) {
+    if ((colorSwatches || sectioned || previewItems) && ev->msg == WM_MEASUREITEM) {
         auto* mis = (MEASUREITEMSTRUCT*)ev->lparam;
         if (mis->CtlType == ODT_COMBOBOX || mis->CtlType == ODT_LISTBOX) {
             mis->itemHeight = (UINT)ColorSwatchItemDy(font);
@@ -194,10 +350,15 @@ void DropDown::OnMessageReflect(ControlBase::MessageReflectEvent* ev) {
         }
         return;
     }
-    if (colorSwatches && ev->msg == WM_DRAWITEM) {
+    if ((colorSwatches || sectioned || previewItems) && ev->msg == WM_DRAWITEM) {
         auto* dis = (DRAWITEMSTRUCT*)ev->lparam;
         if (dis->CtlType == ODT_COMBOBOX || dis->CtlType == ODT_LISTBOX) {
-            DrawColorSwatchItem(this, dis);
+            if (previewItems)
+                DrawPreviewItem(this, dis);
+            else if (sectioned)
+                DrawFontSectionItem(this, dis);
+            else
+                DrawColorSwatchItem(this, dis);
             ev->result = TRUE;
         }
         return;
@@ -221,6 +382,8 @@ HWND DropDown::Create(const CreateArgs& args) {
     onCommand = MkMethod1<DropDown, ControlBase::CommandEvent*, &DropDown::OnCommand>(this);
     onMessageReflect = MkMethod1<DropDown, ControlBase::MessageReflectEvent*, &DropDown::OnMessageReflect>(this);
     colorSwatches = args.colorSwatches;
+    previewItems = args.previewItems;
+    sectioned = args.sectioned;
     deferItems = args.deferItems;
     CreateControlArgs cargs;
     cargs.parent = args.parent;
@@ -231,7 +394,7 @@ HWND DropDown::Create(const CreateArgs& args) {
     } else {
         cargs.style |= CBS_DROPDOWNLIST | WS_VSCROLL;
     }
-    if (colorSwatches) {
+    if (colorSwatches || sectioned || previewItems) {
         cargs.style |= CBS_OWNERDRAWFIXED | CBS_HASSTRINGS;
         static UINT nextId = 0x500;
         cargs.ctrlId = (HMENU)(INT_PTR)nextId++;
@@ -247,11 +410,15 @@ HWND DropDown::Create(const CreateArgs& args) {
     }
 
     // SetDropDownItems(hwnd, items);
-    EditSetDefaultMargins(CbEditHwnd(hwnd));
+    SetPreviewMargins(this);
+    if (previewItems) {
+        if (HWND edit = CbEditHwnd(hwnd))
+            SetWindowSubclass(edit, DropDownEditProc, (UINT_PTR)DropDownEditProc, (DWORD_PTR)this);
+    }
     SetWindowSubclass(hwnd, DropDownProc, 0, (DWORD_PTR)this);
     CbSetCurrentSelection(hwnd, -1);
     CbSetMinVisible(hwnd, 10);
-    if (colorSwatches) {
+    if (colorSwatches || sectioned || previewItems) {
         int dy = ColorSwatchItemDy(font);
         CbSetItemHeight(hwnd, 0, dy);
         CbSetItemHeight(hwnd, -1, dy);
@@ -268,6 +435,8 @@ void DropDown::DeferCreate(const CreateArgs& args) {
     pendingCreate = args;
     font = args.font ? args.font : GetDefaultGuiFont();
     colorSwatches = args.colorSwatches;
+    previewItems = args.previewItems;
+    sectioned = args.sectioned;
     deferItems = args.deferItems;
     windowPending = true;
 }
@@ -350,6 +519,10 @@ void DropDown::SetText(Str text) {
         return;
     }
     HwndBase::SetText(text);
+    if (previewItems && hwnd) {
+        InvalidateRect(hwnd, nullptr, FALSE);
+        if (HWND edit = CbEditHwnd(hwnd)) InvalidateRect(edit, nullptr, FALSE);
+    }
 }
 
 TempStr DropDown::GetTextTemp() {
@@ -462,7 +635,7 @@ Size DropDown::GetIdealSize() {
     if (maxDx > 0 && dx > maxDx) {
         dx = maxDx;
     }
-    if (colorSwatches) {
+    if (colorSwatches || sectioned || previewItems) {
         dx += s1.dy + DpiScale(10);
     }
     // TODO: 5 is a guessed number.
@@ -559,6 +732,86 @@ bool CbEditIsModified(DropDown* dd) {
 }
 
 #if IS_DEBUG
+struct PreviewTrace {
+    int calls = 0;
+    int index = -1;
+    bool expectedText = false;
+};
+static PreviewTrace* gPreviewTrace = nullptr;
+static void RecordDropDownPreview(DropDown::PreviewItemEvent* ev) {
+    gPreviewTrace->calls++;
+    gPreviewTrace->index = ev->itemIndex;
+    gPreviewTrace->expectedText = str::Eq(ev->text, StrL("Third"));
+    DrawDropDownSwatch(ev->gfx, ev->bounds, kColRed);
+}
+
+void DropDown_UnitTestsPreviews() {
+    HWND parent =
+        CreateWindowExW(0, L"STATIC", L"", WS_OVERLAPPED, 0, 0, 400, 240, nullptr, nullptr, GetInstance(), nullptr);
+    BITMAPINFO bitmapInfo{};
+    bitmapInfo.bmiHeader = {sizeof(BITMAPINFOHEADER), 220, -48, 1, 32, BI_RGB};
+    void* pixels = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP bitmap = CreateDIBSection(dc, &bitmapInfo, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    utassert(parent && bitmap && pixels);
+    if (!parent || !bitmap || !pixels) return;
+    HGDIOBJ previous = SelectObject(dc, bitmap);
+    for (bool rtl : {false, true}) {
+        DropDown drop;
+        DropDown::CreateArgs args;
+        args.parent = parent;
+        args.font = GetPlatformFont((HFONT)GetStockObject(DEFAULT_GUI_FONT));
+        args.isRtl = rtl;
+        args.deferItems = true;
+        drop.DeferCreate(args);
+        drop.EnablePreviewItems();
+        drop.onPreviewItem = MkFunc1Void<DropDown::PreviewItemEvent*>(RecordDropDownPreview);
+        StrVec labels;
+        for (const char* label : {"First", "Second", "Third"}) labels.Append(Str(label));
+        drop.SetItems(labels);
+        CbSetCurrentSelection(&drop, 2);
+        utassert(drop.EnsureCreated());
+        PreviewTrace trace;
+        gPreviewTrace = &trace;
+        DRAWITEMSTRUCT item{};
+        item.itemID = 0;
+        item.hDC = dc;
+        item.rcItem = {0, 0, 220, 32};
+        DrawPreviewItem(&drop, &item);
+        utassert(trace.index == 2 && trace.expectedText);
+        drop.EnsureItems();
+        item.itemID = 2;
+        DrawPreviewItem(&drop, &item);
+        utassert(trace.calls == 2 && trace.index == 2 && trace.expectedText);
+        Rect row{0, 0, 220, 32};
+        Rect mark = drop.PreviewBounds(row), text = drop.PreviewTextBounds(row);
+        utassert(rtl ? text.Right() <= mark.x : text.x >= mark.Right());
+        utassert(mark.dy > 0 && mark.dy <= row.dy && text.dx > 0);
+        drop.SetIsEnabled(false);
+        DrawPreviewItem(&drop, &item);
+        utassert(trace.calls == 3);
+        DestroyWindow(drop.hwnd);
+    }
+    GfxHdc gfx(dc);
+    gfx.FillRect({0, 0, 220, 48}, kColWhite);
+    DrawDropDownSwatch(&gfx, {2, 2, 24, 24}, kColRed);
+    DrawDropDownSwatch(&gfx, {32, 2, 24, 24}, kColRed, 0);
+    DrawDropDownSwatch(&gfx, {62, 2, 24, 24}, kColRed, 128);
+    GdiFlush();
+    auto* bytes = (u8*)pixels;
+    auto* opaque = bytes + (10 * 220 + 10) * 4;
+    auto* clear = bytes + (10 * 220 + 40) * 4;
+    auto* translucent = bytes + (10 * 220 + 70) * 4;
+    utassert(opaque[0] == 0 && opaque[1] == 0 && opaque[2] == 255);
+    utassert(clear[0] == clear[1] && clear[1] == clear[2] && clear[0] >= 180);
+    utassert(translucent[2] > translucent[1] && translucent[1] > 0 && translucent[1] < 180);
+    gPreviewTrace = nullptr;
+    SelectObject(dc, previous);
+    DeleteObject(bitmap);
+    DeleteDC(dc);
+    DestroyWindow(parent);
+}
+
 void DropDown_UnitTestsDeferred() {
     HWND parent =
         CreateWindowExW(0, L"STATIC", L"", WS_OVERLAPPED, 0, 0, 400, 240, nullptr, nullptr, GetInstance(), nullptr);

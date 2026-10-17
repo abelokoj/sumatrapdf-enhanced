@@ -1116,9 +1116,8 @@ bool RenderCache::VisibleTargetTilesReady(DisplayModel* dm, Str* whyNot) {
     if (!dm || !dm->GetEngine()) {
         return no(StrL("no-dm"));
     }
-    int pageCount = dm->PageCount();
     bool anyVisible = false;
-    for (int pageNo = 1; pageNo <= pageCount; pageNo++) {
+    for (int pageNo = dm->FirstVisiblePageNo(); pageNo > 0 && pageNo <= dm->LastVisiblePageNo(); pageNo++) {
         PageInfo* pi = dm->GetPageInfo(pageNo);
         if (!pi || !pi->isShown || pi->visibleRatio == 0) {
             continue;

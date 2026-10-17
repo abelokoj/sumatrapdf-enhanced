@@ -26,6 +26,7 @@ struct Edit;
 struct HwndBase;
 struct VirtRoot;
 struct PlatformFont;
+struct Gfx;
 
 HwndBase* HwndBaseFromHwnd(HWND);
 WindowBase* WindowBaseFromHwnd(HWND);
@@ -445,7 +446,13 @@ bool PreTranslateMessage(MSG& msg);
 
 HRGN RoundedControlRegion(HWND hwnd, Size size);
 void RoundControlCorners(HWND hwnd);
+void RoundControlSetClip(HWND hwnd, Rect clip);
 void RoundControlUseCustomPaint(HWND hwnd);
+enum class RoundedControlPaint {
+    Native,
+    Custom
+};
+void RoundControlSetPaint(HWND hwnd, RoundedControlPaint);
 void RoundChildControls(HWND hwnd);
 
 // Base of the controls that a layout positions: the win32 controls (Static,
@@ -901,17 +908,34 @@ struct DropDown : ControlBase {
         bool visible = true;
         // draw a color swatch to the left of each item (annotation color lists)
         bool colorSwatches = false;
+        bool previewItems = false;
+        bool sectioned = false;
         // Initial native bounds, when already known, avoid a provisional resize.
         Rect pos{};
         // TODO: model or items
     };
 
     using SelectionChangedHandler = Func0;
+    struct PreviewItemEvent {
+        DropDown* dropDown = nullptr;
+        Gfx* gfx = nullptr;
+        Rect bounds{};
+        int itemIndex = -1;
+        Str text;
+        Color foreground = 0;
+        Color background = 0;
+        bool disabled = false;
+    };
+    Func1<PreviewItemEvent*> onPreviewItem;
 
     // TODO: use DropDownModel
     StrVec items;
     Vec<Color> itemColors; // parallel to items when colorSwatches
     bool colorSwatches = false;
+    bool previewItems = false;
+    bool sectioned = false;
+    Vec<int> sectionHeaders;
+    int lastFontSelection = 0;
     bool deferItems = false;
     bool itemsPending = false;
     int pendingSelection = -1;
@@ -936,6 +960,10 @@ struct DropDown : ControlBase {
     HWND Create(const DropDown::CreateArgs&);
     void DeferCreate(const DropDown::CreateArgs&);
     HWND EnsureCreated();
+    void EnablePreviewItems();
+    Rect PreviewBounds(Rect row) const;
+    Rect PreviewTextBounds(Rect row) const;
+    void PaintPreview(Gfx*, Rect row, int index, Str text, Color foreground, Color background);
 
     Size GetIdealSize() override;
     void OnCommand(ControlBase::CommandEvent* ev);
@@ -955,6 +983,7 @@ struct DropDown : ControlBase {
     void SetItemsSeqStrings(SeqStrings items);
     void SetCursorId(LPWSTR);
 };
+void DrawDropDownSwatch(Gfx*, Rect, Color, u8 alpha = 255);
 
 //--- Trackbar
 
@@ -1102,6 +1131,7 @@ struct TreeView : ControlBase {
 
     TreeModel* treeModel = nullptr; // not owned by us
     bool lazyChildren = false;
+    bool needsVisibleRebuild = false;
 
     // for WM_NOTIFY with TVN_GETINFOTIP
     GetTooltipHandler onGetTooltip;

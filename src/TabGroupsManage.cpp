@@ -367,7 +367,7 @@ bool TabGroupsWnd::Create(MainWindow* winIn, TabGroupDialogMode modeIn) {
         vbox->AddChild(new Padding(btnRow, DpiScaledInsets(kPadding, 0, 0, 0)));
     }
 
-    layout = new Padding(vbox, DpiScaledInsets(kPadding, kPadding));
+    layout = PadWindowScroll(vbox, listBox, DpiScaledInsets(kPadding, kPadding));
 
     int winW = DpiScale(400);
     int winH = DpiScale(350);

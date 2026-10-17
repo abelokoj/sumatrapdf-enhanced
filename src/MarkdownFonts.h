@@ -9,6 +9,8 @@ int MarkdownFontCount(MarkdownFontKind);
 Str MarkdownFontName(MarkdownFontKind, int index);
 int MarkdownFontIndex(MarkdownFontKind, Str name);
 void MarkdownFontChoices(MarkdownFontKind, StrVec& names);
+void InstalledMarkdownFonts(StrVec& names);
+bool IsMarkdownSystemFont(Str name);
 TempStr MarkdownFontCss(Str fontName, Str mathFontName);
 int MarkdownMathFontIndex(Str text, Str math);
 TempStr MarkdownFontsCacheDir();

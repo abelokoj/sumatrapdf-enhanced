@@ -792,7 +792,7 @@ void AnnotFilterWindow::BuildLayout() {
     vbox->AddChild(buttonsHelpGap);
     vbox->AddChild(NewFilterHelp(gap));
 
-    rootPadding = new Padding(vbox, Insets{pad, pad, pad, pad});
+    rootPadding = PadWindowScroll(vbox, listBox, Insets{pad, pad, pad, pad});
     layout = rootPadding;
     layoutDpi = GetDpi();
 }

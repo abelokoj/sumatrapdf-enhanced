@@ -84,7 +84,8 @@ struct Gfx {
     virtual void DrawRect(const Rect&, Color, int thickness = 1) = 0;
     virtual void DrawDashedRect(const Rect&, Color) = 0;
     // anti-aliased; transparent / unset skip fill / border
-    virtual void FillRoundedRect(const Rect&, int radius, Color fill, Color border = kColorTransparent) = 0;
+    virtual void FillRoundedRect(const Rect&, int radius, Color fill, Color border = kColorTransparent,
+                                 float borderWidth = 1.0f) = 0;
     virtual void FillEllipse(const Rect&, Color, u8 alpha = 255) = 0;
     virtual void DrawLine(const Rect&, Color, int thickness = 1) = 0;
     // anti-aliased line between two points, for diagonals
@@ -127,7 +128,8 @@ struct GfxHdc : Gfx {
     void FillQuads(const Point* pts, int nQuads, Color, u8 alpha = 255, int outlineWidth = 0) override;
     void DrawRect(const Rect&, Color, int thickness = 1) override;
     void DrawDashedRect(const Rect&, Color) override;
-    void FillRoundedRect(const Rect&, int radius, Color fill, Color border = kColorTransparent) override;
+    void FillRoundedRect(const Rect&, int radius, Color fill, Color border = kColorTransparent,
+                         float borderWidth = 1.0f) override;
     void FillEllipse(const Rect&, Color, u8 alpha = 255) override;
     void DrawLine(const Rect&, Color, int thickness = 1) override;
     void DrawLineAA(Point, Point, Color, float thickness = 1.0f, u8 alpha = 255) override;
@@ -162,7 +164,8 @@ struct GfxGdiplus : Gfx {
     void FillQuads(const Point* pts, int nQuads, Color, u8 alpha = 255, int outlineWidth = 0) override;
     void DrawRect(const Rect&, Color, int thickness = 1) override;
     void DrawDashedRect(const Rect&, Color) override;
-    void FillRoundedRect(const Rect&, int radius, Color fill, Color border = kColorTransparent) override;
+    void FillRoundedRect(const Rect&, int radius, Color fill, Color border = kColorTransparent,
+                         float borderWidth = 1.0f) override;
     void FillEllipse(const Rect&, Color, u8 alpha = 255) override;
     void DrawLine(const Rect&, Color, int thickness = 1) override;
     void DrawLineAA(Point, Point, Color, float thickness = 1.0f, u8 alpha = 255) override;
@@ -206,7 +209,8 @@ struct GfxDirect2D : Gfx {
     void FillQuads(const Point* pts, int nQuads, Color, u8 alpha = 255, int outlineWidth = 0) override;
     void DrawRect(const Rect&, Color, int thickness = 1) override;
     void DrawDashedRect(const Rect&, Color) override;
-    void FillRoundedRect(const Rect&, int radius, Color fill, Color border = kColorTransparent) override;
+    void FillRoundedRect(const Rect&, int radius, Color fill, Color border = kColorTransparent,
+                         float borderWidth = 1.0f) override;
     void FillEllipse(const Rect&, Color, u8 alpha = 255) override;
     void DrawLine(const Rect&, Color, int thickness = 1) override;
     void DrawLineAA(Point, Point, Color, float thickness = 1.0f, u8 alpha = 255) override;
@@ -226,7 +230,7 @@ bool Direct2DAvailable();
 
 // measure text the way GfxCreate()'s backend draws it
 Size GfxMeasureText(PlatformFont*, Str);
-Size D2DMeasureText(PlatformFont*, Str);
+Size D2DMeasureText(PlatformFont*, Str, int width = INT_MAX);
 Size GdiplusMeasureText(PlatformFont*, Str);
 
 // flip to draw with Direct2D instead of gdiplus, for comparing the two

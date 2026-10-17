@@ -49,6 +49,7 @@ constexpr int kFindBarPinCmdId = (int)CmdLast + 52;
 constexpr int kFindBarOptionsCmdId = (int)CmdLast + 53;
 constexpr UINT_PTR kFindBarCollapseTimer = 0x201;
 constexpr int kFindBarNarrowEditDx = 40;
+constexpr int kFindBarDragGripDx = 18;
 
 static int FindIconSize(int dpi) {
     return ToolbarIconSize(dpi);
@@ -78,6 +79,12 @@ static FindFieldFit FitFindField(int available, int fullFixed, int navigationFix
     return {editDx, compact};
 }
 
+static Rect FindBarRectAtDpi(Rect saved, int savedDpi, int dpi, Rect frame) {
+    int prevDpi = std::max(1, savedDpi);
+    return {frame.x + MulDiv(saved.x, dpi, prevDpi), frame.y + MulDiv(saved.y, dpi, prevDpi),
+            MulDiv(saved.dx, dpi, prevDpi), MulDiv(saved.dy, dpi, prevDpi)};
+}
+
 #if IS_DEBUG
 void FindBarLayout_UnitTests() {
     auto wide = FitFindField(400, 160, 70, 80);
@@ -88,6 +95,11 @@ void FindBarLayout_UnitTests() {
     utassert(tight.compact && tight.editDx == 10);
     auto scaled = FitFindField(500, 400, 175, 200);
     utassert(scaled.compact && scaled.editDx == 325);
+
+    Rect moved = FindBarRectAtDpi({100, 160, 360, 32}, 96, 96, {20, 30, 900, 700});
+    utassert(moved.x == 120 && moved.y == 190 && moved.dx == 360 && moved.dy == 32);
+    Rect dpiMoved = FindBarRectAtDpi({100, 160, 360, 32}, 96, 144, {40, 60, 900, 700});
+    utassert(dpiMoved.x == 190 && dpiMoved.y == 300 && dpiMoved.dx == 540 && dpiMoved.dy == 48);
 
     Settings* savedSettings = gSettings;
     Settings* fixture = NewSettings({});
@@ -242,6 +254,7 @@ struct FindBarWnd : WindowBase {
     bool statusCapped = false;
     Spacer* gapAfterEdit = nullptr;
     Spacer* gapAfterStatus = nullptr;
+    Spacer* dragGrip = nullptr;
     Padding* padLayout = nullptr;
     int layoutDpi = 96;
     // prev / next / match-case / match-whole-word / pop-out / close
@@ -256,6 +269,8 @@ struct FindBarWnd : WindowBase {
     // doesn't re-enter Layout()
     bool inLayout = false;
     bool inOptionsMenu = false;
+    bool inSizeMove = false;
+    Rect dragStartRect;
     Func1List<MainWindow*> onWindowMoved;
 
     FindBarWnd() = default;
@@ -270,11 +285,14 @@ struct FindBarWnd : WindowBase {
     // slack to the edit box. 0: the default edit width.
     void Layout(int forceBarDx = 0);
     int MinBarDx() const;
+    Rect DragRect() const;
+    void SavePos();
 
     void OnTextChanged();
     void OnHistoryCommitted();
 
     void OnSize(WindowBase::SizeEvent* ev);
+    void OnMove(WindowBase::MoveEvent* ev);
     void OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent* ev);
     void OnNcHitTest(WindowBase::NcHitTestEvent* ev);
     void OnDpiChanged(WindowBase::DpiChangedEvent* ev);
@@ -458,6 +476,8 @@ void FindBarWnd::BuildLayout() {
 
     auto* row = new HBox();
     row->alignCross = CrossAxisAlign::CrossCenter;
+    dragGrip = new Spacer(UiScalePxForDpi(layoutDpi, kFindBarDragGripDx), 0);
+    row->AddChild(dragGrip);
     row->AddChild(edit, 1);
     gapAfterEdit = new Spacer(gap, 0);
     row->AddChild(gapAfterEdit);
@@ -477,7 +497,7 @@ int FindBarWnd::MinBarDx() const {
     if (!layout) {
         return 0;
     }
-    int client = 2 * UiScalePxForDpi(layoutDpi, kFindBarPadding) + gapAfterEdit->dx +
+    int client = 2 * UiScalePxForDpi(layoutDpi, kFindBarPadding) + dragGrip->dx + gapAfterEdit->dx +
                  UiScalePxForDpi(layoutDpi, kFindBarNarrowEditDx);
     for (int i : {0, 1, 4, 5}) client += btns[i]->MinIntrinsicWidth(0);
     Rect wr = HwndWindowRect(hwnd);
@@ -587,6 +607,19 @@ void FindBarWnd::OnHistoryCommitted() {
 }
 
 void FindBarWnd::OnSize(WindowBase::SizeEvent* ev) {
+    if (ev->msg == WM_ENTERSIZEMOVE) {
+        inSizeMove = true;
+        dragStartRect = HwndWindowRect(hwnd);
+        KillTimer(hwnd, kFindBarCollapseTimer);
+        return;
+    }
+    if (ev->msg == WM_EXITSIZEMOVE) {
+        Rect rect = HwndWindowRect(hwnd);
+        if (rect.x != dragStartRect.x || rect.y != dragStartRect.y || !win->findBarPos.IsEmpty()) SavePos();
+        inSizeMove = false;
+        FindBarReposition(win);
+        return;
+    }
     if (ev->msg != WM_SIZE) {
         return;
     }
@@ -596,6 +629,25 @@ void FindBarWnd::OnSize(WindowBase::SizeEvent* ev) {
         Rect wr = HwndWindowRect(hwnd);
         Layout(wr.dx);
     }
+}
+
+void FindBarWnd::OnMove(WindowBase::MoveEvent*) {
+    if (inSizeMove && !inLayout) SavePos();
+}
+
+void FindBarWnd::SavePos() {
+    Rect frame = HwndMapLtrClientRectToScreen(win->hwndFrame, HwndClientRect(win->hwndFrame));
+    Rect rect = HwndWindowRect(hwnd);
+    win->findBarPos = {rect.x - frame.x, rect.y - frame.y, rect.dx, rect.dy};
+    win->findBarPosDpi = layoutDpi;
+}
+
+Rect FindBarWnd::DragRect() const {
+    if (!dragGrip) return {};
+    Rect rect = dragGrip->lastBounds;
+    rect.y = 0;
+    rect.dy = HwndClientRect(hwnd).dy;
+    return rect;
 }
 
 void FindBarWnd::OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent* ev) {
@@ -610,14 +662,16 @@ void FindBarWnd::OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent* ev) {
     mmi->ptMaxTrackSize.y = barDy;
 }
 
-// The bar is pinned to the right edge of the frame, so only its left edge
-// can be dragged; report that edge as a sizing border and the default
-// handling turns a drag there into a resize.
 void FindBarWnd::OnNcHitTest(WindowBase::NcHitTestEvent* ev) {
-    if (!ToolbarFindScreenRect(win).IsEmpty()) return;
     Rect wr = HwndWindowRect(hwnd);
-    if (ev->screenPos.x < wr.x + UiScalePxForDpi(layoutDpi, kFindBarResizeGripDx)) {
+    bool canResize = !win->findBarPos.IsEmpty() || ToolbarFindScreenRect(win).IsEmpty();
+    if (canResize && ev->screenPos.x < wr.x + UiScalePxForDpi(layoutDpi, kFindBarResizeGripDx)) {
         ev->result = HTLEFT;
+        ev->didHandle = true;
+        return;
+    }
+    if (HwndMapLtrClientRectToScreen(hwnd, DragRect()).Contains(ev->screenPos)) {
+        ev->result = HTCAPTION;
         ev->didHandle = true;
     }
 }
@@ -649,6 +703,7 @@ void FindBarWnd::UpdateDpi(int dpi) {
     if (gapAfterStatus) {
         gapAfterStatus->dx = gap;
     }
+    if (dragGrip) dragGrip->dx = UiScalePxForDpi(dpi, kFindBarDragGripDx);
     if (padLayout) {
         padLayout->insets = Insets{p, p, p, p};
     }
@@ -787,7 +842,8 @@ void FindBarWnd::OnTimer(WindowBase::TimerEvent* ev) {
     if (ev->timerId != kFindBarCollapseTimer) return;
     KillTimer(hwnd, kFindBarCollapseTimer);
     HWND focus = GetFocus();
-    if (!inOptionsMenu && !CbIsDropped(edit) && focus != hwnd && !IsChild(hwnd, focus)) CollapseFindBar(win);
+    if (!inSizeMove && !inOptionsMenu && !CbIsDropped(edit) && focus != hwnd && !IsChild(hwnd, focus))
+        CollapseFindBar(win);
 }
 
 void FindBarWnd::OnPaint(WindowBase::PaintEvent* ev) {
@@ -796,6 +852,16 @@ void FindBarWnd::OnPaint(WindowBase::PaintEvent* ev) {
     gfx->FillRect(rect, ThemeControlBackgroundColor());
     gfx->FillRoundedRect(rect, rect.dy / 2, ThemeWindowControlBackgroundColor(), ThemeEdgeColor());
     if (vroot) vroot->Paint(gfx, rect);
+    Rect grip = DragRect();
+    int dot = std::max(1, UiScalePxForDpi(layoutDpi, 2));
+    int gap = UiScalePxForDpi(layoutDpi, 3);
+    int x = grip.x + (grip.dx - 2 * dot - gap) / 2;
+    int y = grip.y + (grip.dy - 3 * dot - 2 * gap) / 2;
+    for (int row = 0; row < 3; row++) {
+        for (int col = 0; col < 2; col++) {
+            gfx->FillEllipse({x + col * (dot + gap), y + row * (dot + gap), dot, dot}, ThemeWindowTextDisabledColor());
+        }
+    }
     delete gfx;
 }
 
@@ -807,6 +873,7 @@ FindBarWnd* CreateFindBar(MainWindow* win) {
     auto* bar = new FindBarWnd();
     bar->onCommand = MkMethod1<FindBarWnd, WindowBase::CommandEvent*, &FindBarWnd::OnCommand>(bar);
     bar->onSize = MkMethod1<FindBarWnd, WindowBase::SizeEvent*, &FindBarWnd::OnSize>(bar);
+    bar->onMove = MkMethod1<FindBarWnd, WindowBase::MoveEvent*, &FindBarWnd::OnMove>(bar);
     bar->onGetMinMaxInfo = MkMethod1<FindBarWnd, WindowBase::GetMinMaxInfoEvent*, &FindBarWnd::OnGetMinMaxInfo>(bar);
     bar->onNcHitTest = MkMethod1<FindBarWnd, WindowBase::NcHitTestEvent*, &FindBarWnd::OnNcHitTest>(bar);
     bar->onDpiChanged = MkMethod1<FindBarWnd, WindowBase::DpiChangedEvent*, &FindBarWnd::OnDpiChanged>(bar);
@@ -898,6 +965,19 @@ void RecreateFindBar(MainWindow* win) {
 // is shown, else just below the frame top.
 static void PositionFindBar(FindBarWnd* bar) {
     MainWindow* win = bar->win;
+    if (!win->findBarPos.IsEmpty()) {
+        Rect frame = HwndMapLtrClientRectToScreen(win->hwndFrame, HwndClientRect(win->hwndFrame));
+        Rect rect = FindBarRectAtDpi(win->findBarPos, win->findBarPosDpi, bar->layoutDpi, frame);
+        Rect work = PlatformWindowWorkArea(win->hwndFrame);
+        int available = std::max(1, std::min(frame.dx, work.dx));
+        int width = std::min(rect.dx, available);
+        if (bar->barDx != width) bar->Layout(width);
+        rect.dx = bar->barDx;
+        rect.dy = bar->barDy;
+        rect = ShiftRectToWorkArea(rect, win->hwndFrame, true);
+        SetWindowPos(bar->hwnd, HWND_TOP, rect.x, rect.y, rect.dx, rect.dy, SWP_NOACTIVATE);
+        return;
+    }
     Rect slot = ToolbarFindScreenRect(win);
     if (!slot.IsEmpty()) {
         if (bar->barDx != slot.dx) bar->Layout(slot.dx);
@@ -945,7 +1025,7 @@ static void ShowCompactBar(MainWindow* win) {
     // reflect the current match-case / whole-word state on the toggle buttons
     FindBarSetMatchCaseChecked(win, win->findMatchCase);
     FindBarSetMatchWholeWordChecked(win, win->findMatchWholeWord);
-    ToolbarSetFindExpanded(win, true, bar->MinBarDx(), UiScalePxForDpi(bar->layoutDpi, 360));
+    ToolbarSetFindExpanded(win, win->findBarPos.IsEmpty(), bar->MinBarDx(), UiScalePxForDpi(bar->layoutDpi, 360));
     PositionFindBar(bar);
     ShowWindow(bar->hwnd, SW_SHOW);
     win->findEdit->SetFocus();
@@ -1176,13 +1256,15 @@ void FindBarReposition(MainWindow* win) {
     if (!IsFindBarVisible(win)) {
         return;
     }
+    if (win->findBar->inSizeMove) return;
     // the current document may not support find (e.g. switched to an
     // image-only doc / CHM); don't leave an orphaned, inert bar floating
     if (!NeedsFindUI(win)) {
         HideFindBar(win);
         return;
     }
-    ToolbarSetFindExpanded(win, true, win->findBar->MinBarDx(), UiScalePxForDpi(win->findBar->layoutDpi, 360));
+    ToolbarSetFindExpanded(win, win->findBarPos.IsEmpty(), win->findBar->MinBarDx(),
+                           UiScalePxForDpi(win->findBar->layoutDpi, 360));
     PositionFindBar(win->findBar);
 }
 

@@ -1536,10 +1536,7 @@ int ScrollBox::MaxScrollY() const {
 bool ScrollBox::ScrollTo(int y) {
     int maxY = MaxScrollY();
     y = ClampI(y, 0, maxY);
-    if (y == scrollY) {
-        UpdateScrollbar();
-        return false;
-    }
+    if (y == scrollY) return false;
     scrollY = y;
     if (child) {
         Rect r = lastBounds;

@@ -4,21 +4,36 @@
 // thumbnails are 150px high and have a ratio of sqrt(2) : 1
 constexpr int kThumbnailDx = 212;
 constexpr int kThumbnailDy = 150;
+constexpr int kThumbnailFullPageDy = 300;
+
+enum class ThumbnailMode {
+    Cropped,
+    FullPage
+};
 
 struct Pixmap;
 struct FileState;
 
 Pixmap* LoadThumbnail(FileState* fs);
 bool HasThumbnail(FileState* fs);
-void SetThumbnail(FileState* fs, Pixmap* bmp);
-void SaveThumbnail(FileState* fs);
+bool ThumbnailIsReady(const Pixmap*, Size, ThumbnailMode);
+Pixmap* LoadCachedThumbnail(Str cachePath, Str filePath);
+void SetThumbnail(FileState* fs, Pixmap* bmp, ThumbnailMode);
+void SaveThumbnail(Str cachePath, Pixmap*);
 void RemoveThumbnail(FileState* fs);
 
 TempStr GetThumbnailCacheDirTemp();
 TempStr GetThumbnailPathTemp(Str filePath);
+TempStr GetThumbnailPathTemp(Str filePath, ThumbnailMode);
 void DeleteThumbnailForFile(Str path);
 void EmptyThumbnailCacheDirectory();
 
-// Render enough pixels for the largest home grid size at the current display DPI.
+ThumbnailMode GetThumbnailMode();
 Size GetThumbnailRenderSize();
+Size GetThumbnailRenderSize(ThumbnailMode);
+float ThumbnailZoom(RectF& pageRect, Size, ThumbnailMode);
 void RequestHomeThumbnail(FileState* fs);
+
+#if IS_DEBUG
+bool FileThumbnails_UnitTests();
+#endif

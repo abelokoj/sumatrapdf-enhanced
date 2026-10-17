@@ -94,6 +94,10 @@ IDI_SUMATRAPDF          ICON "gfx\\SumatraPDF-smaller.ico"
 // have icon as ,1, which is index of this icon. unless we delete
 // those old registry on install, the icon would change
 2                       ICON "gfx\\SumatraPDF-smaller.ico"
+#include "gfx/filetype-icons.rcinc"
+FILE_ICON_PREVIEW_1 RCDATA "gfx\\filetypes\\previews\\folded-pages.png"
+FILE_ICON_PREVIEW_2 RCDATA "gfx\\filetypes\\previews\\color-covers.png"
+FILE_ICON_PREVIEW_3 RCDATA "gfx\\filetypes\\previews\\outlined-pages.png"
 // Document-type icons (resource id = registry DefaultIcon ,-N). See RegisterForOpenWith.
 3                       ICON "gfx\\epub-32bit.ico"
 4                       ICON "gfx\\cbx-32bit.ico"

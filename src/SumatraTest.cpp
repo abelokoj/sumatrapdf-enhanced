@@ -2835,18 +2835,41 @@ TempStr RefHoverResultTemp(Str action, int x, int y, int* exitCodeOut) {
     }
     MainWindow* win = len(gWindows) > 0 ? gWindows[0] : nullptr;
     DisplayModel* dm = win ? win->AsFixed() : nullptr;
-    if (str::Eq(action, StrL("show")) && dm) {
+    bool showText = str::Eq(action, StrL("show-text"));
+    if ((str::Eq(action, StrL("show")) || showText) && dm) {
         if (!win->refHover) {
             win->refHover = RefHoverCreate(win->hwndCanvas);
         }
         win->refHover->ctrl = win->ctrl;
         win->refHover->linkHandler = win->linkHandler;
-        IPageElement* el = dm->GetElementAtPos({x, y}, nullptr);
-        if (!RefHoverScheduleLink(win->refHover, win->hwndCanvas, dm, x, y, el, 0)) {
-            if (exitCodeOut) {
-                *exitCodeOut = 1;
+        if (showText) {
+            RefHoverHide(win->refHover, win->hwndCanvas);
+            int srcPage = dm->GetPageNoByPoint({x, y});
+            if (!dm->ValidPageNo(srcPage)) {
+                return fmt("OK visible=0");
             }
-            return fmt("ERROR no-link x=%d y=%d", x, y);
+            PointF pt = dm->CvtFromScreen({x, y}, srcPage);
+            int destPage = -1;
+            float destX = -1.f, destY = -1.f;
+            RectF srcRect{};
+            if (!RefHoverTryPlainText(win->refHover, dm->GetEngine(), srcPage, {(int)pt.x, (int)pt.y}, destPage, destX,
+                                      destY, srcRect)) {
+                return fmt("OK visible=0");
+            }
+            Rect pageRect = dm->GetPageInfo(srcPage)->pageOnScreen;
+            Point pageTopLeft = HwndClientToScreen(win->hwndCanvas, pageRect.TL());
+            pageRect.x = pageTopLeft.x;
+            pageRect.y = pageTopLeft.y;
+            RefHoverSchedule(win->refHover, win->hwndCanvas, 0, HwndClientToScreen(win->hwndCanvas, {x, y}), destPage,
+                             destX, destY, 0.f, srcPage, srcRect, pageRect);
+        } else {
+            IPageElement* el = dm->GetElementAtPos({x, y}, nullptr);
+            if (!RefHoverScheduleLink(win->refHover, win->hwndCanvas, dm, x, y, el, 0)) {
+                if (exitCodeOut) {
+                    *exitCodeOut = 1;
+                }
+                return fmt("ERROR no-link x=%d y=%d", x, y);
+            }
         }
     }
     RefHoverState* s = win ? win->refHover : nullptr;

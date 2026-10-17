@@ -485,7 +485,8 @@ static void PatchCreateAnnotEditAccelerators() {
         if (gBuiltInAccelerators[i].fVirt & (FCONTROL | FALT)) {
             continue;
         }
-        if (origId < CmdCreateAnnotFirst || origId > CmdCreateAnnotLast) {
+        if ((origId < CmdCreateAnnotFirst || origId > CmdCreateAnnotLast) && origId != CmdCreateAnnotArrow &&
+            origId != CmdCreateAnnotDashedLine) {
             continue;
         }
         Str name = GetCommandName(origId);

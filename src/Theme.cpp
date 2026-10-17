@@ -19,6 +19,9 @@ License: GPLv3 */
 #include "Translations.h"
 #include "PdfDarkMode.h"
 #include "base/Win.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 
 #include "Theme.h"
 
@@ -412,6 +415,56 @@ static int GetPreferredDarkThemeIndex() {
     return idx >= 0 ? idx : 0;
 }
 
+static void ReadThemePalette(Theme* theme, Color& foreground, Color& background, Color& accent) {
+    ParsedColor text = theme->textColor;
+    ParsedColor control = theme->controlBackgroundColor;
+    ParsedColor link = theme->linkColor;
+    foreground = GetParsedColor(text, SysWindowTextColor());
+    background = GetParsedColor(control, SysWindowBgColor());
+    accent = GetParsedColor(link, SysLinkColor());
+}
+
+// -1 previews Follow Windows without selecting it or changing the parse cache.
+bool ThemeGetPaletteAt(int idx, Color& foreground, Color& background, Color& accent) {
+    if (!gThemes || !gSettings || idx < -1 || idx >= gThemeCount) {
+        return false;
+    }
+    if (idx == -1) {
+        idx = OsAppsUseDarkMode() ? GetPreferredDarkThemeIndex() : GetPreferredLightThemeIndex();
+    }
+    if (idx == 0 && gIsHighContrast) {
+        foreground = SysWindowTextColor();
+        background = SysWindowBgColor();
+        accent = SysLinkColor();
+        return true;
+    }
+    ReadThemePalette((*gThemes)[idx], foreground, background, accent);
+    return true;
+}
+
+#if IS_DEBUG
+void ThemePalettePreviewTest() {
+    Theme theme{};
+    theme.textColor.s = StrL("#123456");
+    theme.controlBackgroundColor.s = StrL("#aabbcc");
+    theme.linkColor.s = StrL("#abcdef");
+    Color foreground, background, accent;
+    ReadThemePalette(&theme, foreground, background, accent);
+    utassert(foreground == MkRgb(0x12, 0x34, 0x56));
+    utassert(background == MkRgb(0xaa, 0xbb, 0xcc));
+    utassert(accent == MkRgb(0xab, 0xcd, 0xef));
+    utassert(!theme.textColor.wasParsed && !theme.controlBackgroundColor.wasParsed && !theme.linkColor.wasParsed);
+    theme.textColor.s = StrL("invalid");
+    theme.controlBackgroundColor.s = {};
+    theme.linkColor.s = {};
+    ReadThemePalette(&theme, foreground, background, accent);
+    utassert(foreground == SysWindowTextColor());
+    utassert(background == SysWindowBgColor());
+    utassert(accent == SysLinkColor());
+    utassert(!theme.textColor.wasParsed && !theme.controlBackgroundColor.wasParsed && !theme.linkColor.wasParsed);
+}
+#endif
+
 void SetTheme(Str name) {
     if (str::EqI(name, StrL("System"))) {
         // resolve to the preferred light/dark theme from the OS setting; keep
@@ -520,6 +573,7 @@ static void UpdateGuiColorsFromTheme() {
     gColsTab[kColTabText] = text;
     gColsTab[kColTabBg] = ThemeActiveTabBackgroundColor();
     gColsTab[kColTabInactiveBg] = ThemeInactiveTabBackgroundColor();
+    gColsTab[kColTabAccent] = GetParsedColor(gSettings->activeTabAccent, MkRgb(0x26, 0x75, 0xe8));
 
     // custom top-level windows (dialogs, popups) sit their content on ctlBg,
     // like the side panels; a window that wants something else (the toolbar's

@@ -372,6 +372,62 @@ void MarkdownFontChoices(MarkdownFontKind kind, StrVec& names) {
     names.Append(kind == MarkdownFontKind::Text ? Tr("Follow interface font") : Tr("Match text font"));
     for (int i = 1; i < MarkdownFontCount(kind); i++) names.Append(MarkdownFontName(kind, i));
 }
+static bool SystemFontName(Str name) {
+    WStr wide = ToWStrTemp(name);
+    if (!len(wide) || len(wide) >= LF_FACESIZE || wide.s[0] == L'@' || str::StartsWith(name, StrL("EDict")))
+        return false;
+    for (int i = 0; i < len(name); i++) {
+        u8 c = (u8)name.s[i];
+        if (c < 32 || c == 127) return false;
+    }
+    return true;
+}
+
+static int CALLBACK MarkdownFontEnum(const LOGFONTW* font, const TEXTMETRICW*, DWORD, LPARAM data) {
+    auto* names = (StrVec*)data;
+    Str name = ToUtf8Temp(font->lfFaceName);
+    if (!SystemFontName(name)) return 1;
+    for (Str existing : *names) {
+        if (str::EqI(existing, name)) return 1;
+    }
+    names->Append(name);
+    return 1;
+}
+
+void InstalledMarkdownFonts(StrVec& names) {
+    HDC dc = GetDC(nullptr);
+    if (!dc) return;
+    LOGFONTW font{};
+    font.lfCharSet = DEFAULT_CHARSET;
+    EnumFontFamiliesExW(dc, &font, MarkdownFontEnum, (LPARAM)&names, 0);
+    ReleaseDC(nullptr, dc);
+    SortNoCase(&names);
+}
+
+struct MarkdownSystemFontMatch {
+    Str name;
+    bool found = false;
+};
+
+static int CALLBACK MatchMarkdownFont(const LOGFONTW* font, const TEXTMETRICW*, DWORD, LPARAM data) {
+    auto* match = (MarkdownSystemFontMatch*)data;
+    match->found = str::EqI(ToUtf8Temp(font->lfFaceName), match->name);
+    return match->found ? 0 : 1;
+}
+
+bool IsMarkdownSystemFont(Str name) {
+    if (!SystemFontName(name)) return false;
+    HDC dc = GetDC(nullptr);
+    if (!dc) return false;
+    LOGFONTW font{};
+    font.lfCharSet = DEFAULT_CHARSET;
+    wstr::BufSet(WStr(font.lfFaceName, dimof(font.lfFaceName)), ToWStrTemp(name));
+    MarkdownSystemFontMatch match{name};
+    EnumFontFamiliesExW(dc, &font, MatchMarkdownFont, (LPARAM)&match, 0);
+    ReleaseDC(nullptr, dc);
+    return match.found;
+}
+
 static Str FontResource(const WCHAR* name) {
     HMODULE module = GetModuleHandleW(nullptr);
     HRSRC resource = FindResourceW(module, name, RT_RCDATA);
@@ -398,6 +454,7 @@ Str MarkdownFontResource(Str url) {
 }
 int MarkdownMathFontIndex(Str text, Str math) {
     int mathIndex = MarkdownFontIndex(MarkdownFontKind::Math, math);
+    if (!mathIndex && IsMarkdownSystemFont(math)) return 0;
     int textIndex = MarkdownFontIndex(MarkdownFontKind::Text, text);
     if (mathIndex || !textIndex) return mathIndex;
     if (textIndex == 4) return 3;
@@ -405,7 +462,7 @@ int MarkdownMathFontIndex(Str text, Str math) {
     return textIndex >= 3 ? 2 : 1;
 }
 static bool ValidFontChoice(MarkdownFontKind kind, Str name) {
-    return !len(name) || MarkdownFontIndex(kind, name) != 0;
+    return !len(name) || MarkdownFontIndex(kind, name) != 0 || IsMarkdownSystemFont(name);
 }
 static void FontChoiceAssets(Str text, Str math, Vec<const MarkdownFontAsset*>& assets) {
     const MarkdownFontFamily* fonts[] = {
@@ -648,6 +705,20 @@ static void AppendFontCss(str::Builder& css, const MarkdownFontFamily* font) {
                 str::EndsWith(Str(face.file), StrL(".woff2")) ? StrL("woff2") : StrL("opentype")));
     }
 }
+static TempStr QuotedFontCss(Str name) {
+    str::Builder css;
+    css.AppendChar('\'');
+    for (int i = 0; i < len(name); i++) {
+        u8 c = (u8)name.s[i];
+        if (c < 32 || c == 127 || c == '\'' || c == '\\' || c == '<' || c == '>' || c == '&')
+            css.Append(fmt("\\%x ", c));
+        else
+            css.AppendChar((char)c);
+    }
+    css.AppendChar('\'');
+    return ToStrTemp(css);
+}
+
 static TempStr BuildMarkdownFontCss(Str fontName, Str mathFontName) {
     int textIndex = MarkdownFontIndex(MarkdownFontKind::Text, fontName);
     auto* font = FontFamily(MarkdownFontKind::Text, textIndex);
@@ -656,9 +727,16 @@ static TempStr BuildMarkdownFontCss(Str fontName, Str mathFontName) {
     str::Builder css;
     AppendFontCss(css, font);
     AppendFontCss(css, math);
-    Str family = font->count ? fmt("'%s','%s',serif", Str(font->cssName), Str(math->cssName))
-                             : StrL("var(--enhanced-ui-font-family)");
-    Str mathFamily = math->count ? fmt("'%s',math", Str(math->cssName)) : StrL("math");
+    bool systemText = !textIndex && IsMarkdownSystemFont(fontName);
+    bool systemMath = !mathIndex && IsMarkdownSystemFont(mathFontName);
+    Str family = font->count  ? (math->count ? fmt("'%s','%s',serif", Str(font->cssName), Str(math->cssName))
+                                             : fmt("'%s',serif", Str(font->cssName)))
+                 : systemText ? fmt("%s,serif", QuotedFontCss(fontName))
+                              : StrL("var(--enhanced-ui-font-family)");
+    Str mathFamily = math->count                        ? fmt("'%s',math", Str(math->cssName))
+                     : systemMath                       ? fmt("%s,math", QuotedFontCss(mathFontName))
+                     : systemText && !len(mathFontName) ? fmt("%s,math", QuotedFontCss(fontName))
+                                                        : StrL("math");
     css.Append(
         fmt(":root{--enhanced-markdown-font-family:%s;--enhanced-markdown-math-font-family:%s;"
             "--font-serif:var(--enhanced-markdown-font-family);"
@@ -736,11 +814,37 @@ void MarkdownFonts_UnitTests() {
     utassert(len(MarkdownFontResource(fmt("%s../Settings.h", Str(kMarkdownFontHost)))) == 0);
     utassert(MarkdownFontsAvailable({}, {}));
     utassert(!MarkdownFontsAvailable(StrL("Not a font"), {}));
+    StrVec systemFonts;
+    InstalledMarkdownFonts(systemFonts);
+    utassert(len(systemFonts) > 0);
+    for (Str name : systemFonts) {
+        utassert(IsMarkdownSystemFont(name));
+        utassert(name.s[0] != '@');
+    }
+    utassert(!IsMarkdownSystemFont(StrL("Not a font")));
+    utassert(!IsMarkdownSystemFont(StrL("@Arial")));
+    utassert(!IsMarkdownSystemFont(StrL("Arial\n")));
+    Str systemFont = len(systemFonts) ? systemFonts[0] : StrL("Arial");
+    utassert(MarkdownFontsAvailable(systemFont, {}));
+    utassert(MarkdownFontsAvailable({}, systemFont));
+    utassert(MarkdownFontsAvailable(systemFont, systemFont));
+    utassert(MarkdownMathFontIndex(StrL("Lora"), systemFont) == 0);
+    utassert(MarkdownMathFontIndex(systemFont, {}) == 0);
+    TempStr systemCss = MarkdownFontCss(systemFont, {});
+    utassert(str::Contains(systemCss, systemFont));
+    utassert(!str::Contains(systemCss, StrL("@font-face")));
+    utassert(str::Contains(MarkdownFontCss({}, systemFont), systemFont));
+    Str systemError;
+    utassert(DownloadMarkdownFonts(systemFont, systemFont, &systemError));
+    utassert(len(systemError) == 0);
+    str::Free(systemError);
     utassert(MarkdownMathFontIndex({}, {}) == 0);
     utassert(MarkdownMathFontIndex(StrL("Lora"), {}) == 1);
     utassert(MarkdownMathFontIndex(StrL("New Computer Modern Book"), {}) == 3);
     utassert(MarkdownMathFontIndex(StrL("New Computer Modern Sans"), {}) == 4);
     utassert(!str::Contains(MarkdownFontCss({}, {}), StrL("@font-face")));
+    utassert(str::Eq(QuotedFontCss(StrL("a\'b\\c<d")), StrL("\'a\\27 b\\5c c\\3c d\'")));
+    utassert(!str::Contains(MarkdownFontCss(StrL("Not a font"), {}), StrL("Not a font")));
     MarkdownFontAsset sample{"sample", "sample", 3, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"};
     utassert(ValidFontAsset(StrL("abc"), &sample));
     utassert(!ValidFontAsset(StrL("abd"), &sample));

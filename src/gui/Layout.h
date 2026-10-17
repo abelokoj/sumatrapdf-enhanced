@@ -156,6 +156,8 @@ enum class CrossAxisAlign : u8 {
     CrossEnd,    // Children will be aligned to the right or bottom of the box
 };
 
+Rect AlignInCell(const Rect&, Size, CrossAxisAlign alignH, CrossAxisAlign alignV);
+
 struct boxElementInfo {
     ILayout* layout = nullptr;
     Size size;
@@ -188,6 +190,8 @@ struct VBox : ILayout {
     int ChildrenCount() const;
     int NonCollapsedChildrenCount();
 };
+
+Padding* PadWindowScroll(VBox*, ILayout* scrolling, Insets);
 
 // hbox.go
 

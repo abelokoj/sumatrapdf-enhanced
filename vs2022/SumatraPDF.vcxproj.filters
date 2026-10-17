@@ -138,6 +138,12 @@
     <ClInclude Include="..\src\Annotation.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\AnnotationTransfer.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\AnnotationTransferDialog.h">
+      <Filter>src</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\AppSettings.h">
       <Filter>src</Filter>
     </ClInclude>
@@ -247,6 +253,9 @@
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\FileThumbnails.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\FileTypeIcons.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\FilterHighlightDraw.h">
@@ -692,6 +701,12 @@
     <ClCompile Include="..\src\Annotation.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\AnnotationTransfer.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\AnnotationTransferDialog.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\AppSettings.cpp">
       <Filter>src</Filter>
     </ClCompile>
@@ -837,6 +852,9 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\FileThumbnails.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\FileTypeIcons.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\FilterHighlightDraw.cpp">

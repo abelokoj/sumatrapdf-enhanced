@@ -59,6 +59,7 @@ constexpr int kInkEraserRadiusPx = 10;
 
 constexpr float kInkMinWidth = 0.1f;
 constexpr float kInkDefaultWidths[] = {2.f, 3.f, 5.f, 1.f, 12.f};
+constexpr int kClosedArrowLineEnding = 5;
 
 static InkPenStyle NormalizeInkPenStyle(InkPenStyle style) {
     return (int)style >= 0 && (int)style < dimofi(kInkDefaultWidths) ? style : InkPenStyle::Ballpoint;
@@ -225,6 +226,8 @@ static HCURSOR gCursorInkAnnotationPlacement = nullptr;
 static int gCursorInkAnnotationPlacementDx = 0;
 static int gCursorInkAnnotationPlacementDy = 0;
 static Color gCursorInkAnnotationPlacementColor = 0;
+static Color gCursorInkAccent = 0;
+static int gCursorInkStyle = 0;
 
 void AnnotPlacement::Reset() {
     kind = AnnotPlacementKind::None;
@@ -278,6 +281,7 @@ static int OrigCommandId(int cmdId) {
 }
 
 AnnotPlacementKind PlacementKindFromCommand(int cmdId) {
+    if (MathShapeForCommand(OrigCommandId(cmdId)) >= 0) return AnnotPlacementKind::Shape;
     switch (OrigCommandId(cmdId)) {
         case CmdCreateAnnotText:
             return AnnotPlacementKind::Text;
@@ -290,6 +294,8 @@ AnnotPlacementKind PlacementKindFromCommand(int cmdId) {
         case CmdCreateAnnotFileAttachment:
             return AnnotPlacementKind::FileAttachment;
         case CmdCreateAnnotLine:
+        case CmdCreateAnnotArrow:
+        case CmdCreateAnnotDashedLine:
             return AnnotPlacementKind::Line;
         case CmdCreateAnnotPolyLine:
             return AnnotPlacementKind::PolyLine;
@@ -308,6 +314,12 @@ AnnotPlacementKind PlacementKindFromCommand(int cmdId) {
 
 bool CommandUsesPlacementMode(int cmdId) {
     return PlacementKindFromCommand(cmdId) != AnnotPlacementKind::None;
+}
+
+void SetLineToolCreateArgs(int cmd, AnnotCreateArgs& args) {
+    cmd = OrigCommandId(cmd);
+    if (cmd == CmdCreateAnnotArrow) args.lineEndStyle = kClosedArrowLineEnding;
+    if (cmd == CmdCreateAnnotDashedLine) args.linePattern = AnnotationLinePattern::Dashed;
 }
 
 bool IsPlacingAnnotation(MainWindow* win) {
@@ -392,26 +404,31 @@ static HCURSOR GetTextAnnotationPlacementCursor() {
 }
 
 static HCURSOR GetInkAnnotationPlacementCursor() {
-    int dx = std::max(ToolbarIconSize(), DpiGetSystemMetrics(SM_CXCURSOR));
-    int dy = std::max(ToolbarIconSize(), DpiGetSystemMetrics(SM_CYCURSOR));
+    int size = gSettings ? std::clamp(gSettings->penCursorSize, 0, 100) : 20;
+    if (size == 0) return nullptr;
+    int dx = std::max(1, DpiScale(size));
+    int dy = dx;
     Color color = ThemeWindowTextColor();
+    Color accent =
+        gSettings ? GetParsedColor(gSettings->penCursorAccent, MkRgb(0x26, 0x75, 0xe8)) : MkRgb(0x26, 0x75, 0xe8);
+    int style = gSettings ? gSettings->penCursorStyle : (int)PenCursorStyle::Rollerball;
     if (gCursorInkAnnotationPlacement && dx == gCursorInkAnnotationPlacementDx &&
-        dy == gCursorInkAnnotationPlacementDy && color == gCursorInkAnnotationPlacementColor) {
+        dy == gCursorInkAnnotationPlacementDy && color == gCursorInkAnnotationPlacementColor &&
+        accent == gCursorInkAccent && style == gCursorInkStyle) {
         return gCursorInkAnnotationPlacement;
     }
-    DWORD hotspotX = (DWORD)((4 * dx) / 24);
-    DWORD hotspotY = (DWORD)((20 * dy) / 24);
-    HCURSOR cursor = CreateSvgPlacementCursor(gIconEditAnnotations, dx, dy, color, hotspotX, hotspotY);
-    if (!cursor) {
-        return gCursorInkAnnotationPlacement;
-    }
-    if (gCursorInkAnnotationPlacement) {
-        DestroyCursor(gCursorInkAnnotationPlacement);
-    }
+    DWORD hotspotX = (DWORD)std::min(dx - 1, (3 * dx + 12) / 24);
+    DWORD hotspotY = (DWORD)std::min(dy - 1, (21 * dy + 12) / 24);
+    TempStr svg = GetPenCursorSvgTemp((PenCursorStyle)style, accent, color);
+    HCURSOR cursor = CreateSvgPlacementCursor(CStrTemp(svg), dx, dy, color, hotspotX, hotspotY);
+    if (!cursor) return gCursorInkAnnotationPlacement;
+    if (gCursorInkAnnotationPlacement) DestroyCursor(gCursorInkAnnotationPlacement);
     gCursorInkAnnotationPlacement = cursor;
     gCursorInkAnnotationPlacementDx = dx;
     gCursorInkAnnotationPlacementDy = dy;
     gCursorInkAnnotationPlacementColor = color;
+    gCursorInkAccent = accent;
+    gCursorInkStyle = style;
     return cursor;
 }
 
@@ -431,6 +448,8 @@ void DeleteAnnotationPlacementCursors() {
     gCursorInkAnnotationPlacementDx = 0;
     gCursorInkAnnotationPlacementDy = 0;
     gCursorInkAnnotationPlacementColor = 0;
+    gCursorInkAccent = 0;
+    gCursorInkStyle = 0;
 }
 
 static void SetTextAnnotationPlacementCursor() {
@@ -443,6 +462,10 @@ static void SetTextAnnotationPlacementCursor() {
 }
 
 static void SetInkAnnotationPlacementCursor() {
+    if (gSettings && gSettings->penCursorSize <= 0) {
+        SetCursor(nullptr);
+        return;
+    }
     HCURSOR cursor = GetInkAnnotationPlacementCursor();
     if (cursor) {
         SetCursor(cursor);
@@ -485,6 +508,8 @@ static bool HasPreview(AnnotPlacementKind kind) {
 }
 
 static Str PlacementNotification(AnnotPlacementKind kind, bool circle, int cmdId) {
+    if (MathShapeForCommand(OrigCommandId(cmdId)) >= 0)
+        return Tr("Place mathematical shape. Drag or click twice. **Esc** to cancel.");
     if (OrigCommandId(cmdId) == CmdCreateAnnotRedact) {
         return Tr("Mark content for redaction. Drag or click twice. **Esc** to cancel.");
     }
@@ -692,7 +717,7 @@ void StartAnnotationPlacement(MainWindow* win, int cmdId) {
     ScheduleRepaint(win, 0);
 
     // edit PDF toolbar buttons are disabled for the duration of the mode
-    HideToolbarHoverDropdown(win);
+    if (!IsShapesToolbarPopupOpen(win)) HideToolbarHoverDropdown(win);
     ToolbarUpdateStateForWindow(win, false);
 
     NotificationCreateArgs args;
@@ -1428,7 +1453,18 @@ static void PaintLinePlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
     gs.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     Gdiplus::Color blue(255, 0, 80, 200);
     Gdiplus::Pen pen(blue, (Gdiplus::REAL)std::max(DpiScale(2), 1));
+    int command = OrigCommandId(p.cmdId);
+    if (command == CmdCreateAnnotDashedLine) pen.SetDashStyle(Gdiplus::DashStyleDash);
     gs.DrawLine(&pen, start.x, start.y, end.x, end.y);
+    if (command == CmdCreateAnnotArrow) {
+        float width = gSettings ? std::max(gSettings->annotations.lineBorderWidth, 1.f) : 1.f;
+        PointF pageEnd = dm->CvtFromScreen(end, pageNo), left, right;
+        if (BuildArrowHead(p.start, pageEnd, width, left, right)) {
+            Point a = dm->CvtToScreen(pageNo, left), b = dm->CvtToScreen(pageNo, right);
+            Gdiplus::Point head[] = {{a.x, a.y}, {end.x, end.y}, {b.x, b.y}};
+            gs.DrawPolygon(&pen, head, dimof(head));
+        }
+    }
 
     int markerSize = std::max(DpiScale(6), 4);
     int markerHalf = markerSize / 2;
@@ -1482,8 +1518,40 @@ static void PaintShapePlacement(MainWindow* win, HDC hdc, DisplayModel* dm) {
     gs.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     Gdiplus::Color blue(255, 0, 80, 200);
     Gdiplus::Pen pen(blue, (Gdiplus::REAL)std::max(DpiScale(2), 1));
-    if (p.circle) {
+    int mathShape = MathShapeForCommand(OrigCommandId(p.cmdId));
+    if (mathShape >= 0) {
+        Vec<int> counts;
+        Vec<PointF> points;
+        if (BuildMathShape(mathShape, dm->CvtFromScreen(rect, pageNo), counts, points)) {
+            int first = 0;
+            for (int count : counts) {
+                for (int i = first + 1; i < first + count; i++) {
+                    Point a = dm->CvtToScreen(pageNo, points[i - 1]), b = dm->CvtToScreen(pageNo, points[i]);
+                    gs.DrawLine(&pen, a.x, a.y, b.x, b.y);
+                }
+                first += count;
+            }
+        }
+    } else if (p.circle) {
         gs.DrawEllipse(&pen, rect.x, rect.y, rect.dx, rect.dy);
+    } else if (OrigCommandId(p.cmdId) == CmdCreateAnnotSquare && gSettings->annotations.shapeCornerRadius > 0) {
+        RectF pageRect = dm->CvtFromScreen(rect, pageNo);
+        float radius = std::min(gSettings->annotations.shapeCornerRadius, std::min(pageRect.dx, pageRect.dy) / 2.f);
+        PointF a = dm->CvtFromScreen(rect.TL(), pageNo);
+        Point b = dm->CvtToScreen(pageNo, {a.x + radius, a.y});
+        Point c = dm->CvtToScreen(pageNo, {a.x, a.y + radius});
+        float d = std::min((float)std::min(rect.dx, rect.dy),
+                           2.f * std::max(hypotf((float)b.x - rect.x, (float)b.y - rect.y),
+                                          hypotf((float)c.x - rect.x, (float)c.y - rect.y)));
+        Gdiplus::GraphicsPath path;
+        if (d > 0) {
+            path.AddArc((float)rect.x, (float)rect.y, d, d, 180, 90);
+            path.AddArc(rect.Right() - d, (float)rect.y, d, d, 270, 90);
+            path.AddArc(rect.Right() - d, rect.Bottom() - d, d, d, 0, 90);
+            path.AddArc((float)rect.x, rect.Bottom() - d, d, d, 90, 90);
+            path.CloseFigure();
+            gs.DrawPath(&pen, &path);
+        }
     } else {
         gs.DrawRectangle(&pen, rect.x, rect.y, rect.dx, rect.dy);
     }
@@ -1622,8 +1690,9 @@ bool AnnotationPlacementFillCreate(MainWindow* win, AnnotationType type, Point& 
             args.inkPoints = &p.points;
             return true;
         case AnnotPlacementKind::Shape: {
-            bool validType =
-                type == AnnotationType::Square || type == AnnotationType::Circle || type == AnnotationType::Redact;
+            bool validType = type == AnnotationType::Square || type == AnnotationType::Circle ||
+                             type == AnnotationType::Redact ||
+                             (type == AnnotationType::Ink && MathShapeForCommand(OrigCommandId(p.cmdId)) >= 0);
             if (!validType) {
                 return false;
             }
@@ -1636,6 +1705,7 @@ bool AnnotationPlacementFillCreate(MainWindow* win, AnnotationType type, Point& 
             pt = screenRect.BR();
             args.hasRect = true;
             args.rect = p.rect;
+            ConfigureShapeCreateArgs(OrigCommandId(p.cmdId), args);
             return true;
         }
         case AnnotPlacementKind::Line:
@@ -1651,6 +1721,7 @@ bool AnnotationPlacementFillCreate(MainWindow* win, AnnotationType type, Point& 
             pt = p.end;
             args.hasLineEnd = true;
             args.lineEnd = lineEndOnPage;
+            SetLineToolCreateArgs(p.cmdId, args);
             return true;
         case AnnotPlacementKind::PolyLine:
             if (type != AnnotationType::PolyLine || len(p.points) < 2) {
@@ -1895,6 +1966,78 @@ static void ApplyInkPenCommand(InkPenStyle& style, int cmdId) {
 }
 
 #if IS_DEBUG
+bool AnnotPlacement_UnitTestPenCursor() {
+    Settings* saved = gSettings;
+    int oldDpiX = dpiX, oldDpiY = dpiY;
+    gSettings = NewSettings({});
+    if (!ThemeGetCount()) CreateThemeCommands();
+    SetCurrentThemeFromSettings();
+    defer {
+        DeleteAnnotationPlacementCursors();
+        DeleteSettings(gSettings);
+        gSettings = saved;
+        if (saved) SetCurrentThemeFromSettings();
+        DpiSet(oldDpiX, oldDpiY);
+    };
+    bool ok = gSettings->penCursorStyle == 11 && gSettings->penCursorSize == 20;
+    for (int dpi : {96, 144, 192}) {
+        DpiSet(dpi, dpi);
+        for (int style : {11, 12, 9}) {
+            gSettings->penCursorStyle = style;
+            for (int size : {1, 7, 12, 20, 31, 48, 100}) {
+                gSettings->penCursorSize = size;
+                for (Str accent : {StrL("#2675e8"), StrL("#e43d46"), StrL("#00a879")}) {
+                    SetColorText(gSettings->penCursorAccent, accent);
+                    HCURSOR cursor = GetInkAnnotationPlacementCursor();
+                    if (!cursor) return false;
+                    ok &= GetInkAnnotationPlacementCursor() == cursor;
+                    ICONINFO info{};
+                    if (!GetIconInfo(cursor, &info)) return false;
+                    BITMAP bmp{};
+                    ok &= !info.fIcon && GetObject(info.hbmColor, sizeof(bmp), &bmp) == sizeof(bmp);
+                    ok &= bmp.bmWidth == DpiScale(size) && bmp.bmHeight == DpiScale(size);
+                    ok &= info.xHotspot < (DWORD)bmp.bmWidth && info.yHotspot < (DWORD)bmp.bmHeight;
+                    ok &= info.xHotspot == (DWORD)std::min(bmp.bmWidth - 1, (3 * bmp.bmWidth + 12) / 24);
+                    ok &= info.yHotspot == (DWORD)std::min(bmp.bmHeight - 1, (21 * bmp.bmHeight + 12) / 24);
+                    DeleteObject(info.hbmColor);
+                    DeleteObject(info.hbmMask);
+                }
+            }
+        }
+    }
+    DpiSet(96, 96);
+    gSettings->penCursorSize = 20;
+    HCURSOR cursor = GetInkAnnotationPlacementCursor();
+    gSettings->toolbarSize = 64;
+    gSettings->interfaceScale = 250;
+    ok &= GetInkAnnotationPlacementCursor() == cursor;
+    for (Color foreground : {kColBlack, kColWhite}) {
+        for (int style : {11, 12, 9}) {
+            TempStr svg = GetPenCursorSvgTemp((PenCursorStyle)style, MkRgb(0, 168, 121), foreground);
+            ok &= GetCachedPixmapForSvg(svg, 20, 20, foreground) != nullptr;
+        }
+    }
+    HCURSOR previousCursor = GetCursor();
+    gSettings->penCursorSize = 0;
+    ok &= GetInkAnnotationPlacementCursor() == nullptr;
+    SetInkAnnotationPlacementCursor();
+    ok &= GetCursor() == nullptr;
+    gSettings->penCursorSize = 20;
+    SetInkAnnotationPlacementCursor();
+    ok &= GetCursor() == gCursorInkAnnotationPlacement;
+    SetCursor(previousCursor);
+    gSettings->penCursorSize = 0;
+    gSettings->penCursorStyle = 9;
+    SetColorText(gSettings->penCursorAccent, StrL("#00a879"));
+    Str serialized = SerializeSettings(gSettings, {});
+    Settings* restored = NewSettings(serialized);
+    ok &= restored->penCursorSize == 0 && restored->penCursorStyle == 9 &&
+          GetParsedColor(restored->penCursorAccent, kColorUnset) == MkRgb(0, 168, 121);
+    str::Free(serialized);
+    DeleteSettings(restored);
+    return ok;
+}
+
 bool AnnotPlacement_UnitTestInkProfiles() {
     Settings* savedSettings = gSettings;
     bool savedDontSave = gDontSaveSettings;

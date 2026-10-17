@@ -8,6 +8,7 @@
 #include "gui/Dpi.h"
 #include "base/File.h"
 #include "base/Pixmap.h"
+#include "base/GdiPlusUtil.h"
 #include "base/UITask.h"
 #include "base/Win.h"
 
@@ -28,9 +29,11 @@
 #include "SumatraPDF.h"
 #include "SumatraConfig.h"
 #include "MainWindow.h"
+#include "Annotation.h"
 #include "AnnotPlacement.h"
 #include "Notifications.h"
 #include "Canvas.h"
+#include "SelectionToolbar.h"
 #include "WindowTab.h"
 #include "resource.h"
 #include "Commands.h"
@@ -81,10 +84,14 @@ struct ToolbarButtonInfo {
 
 static void CollectPaletteControls(ILayout*, Vec<VirtCtrl*>&);
 static int PinnedToolCommand(Str);
+static int OriginalCommandId(int);
 static int PinnedToolIndex(MainWindow*, int, Color = kColorUnset);
 static void TogglePinnedTool(MainWindow*, int, Color = kColorUnset);
 static ILayout* NewPaletteHeader(MainWindow*, Str, int, ILayout* = nullptr);
 static bool ShowPinToolMenu(MainWindow*, int);
+static const char* kToolSettingsIcon =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M3 6h4m4 0h10M7 3v6M3 12h10m4 0h4M17 9v6M3 18h5m4 0h9M8 15v6"/></svg>)";
+
 static const char* kTextSelectToolIcon =
     R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M8 4h2c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H8m8-16h-2c-1.1 0-2 .9-2 2m4 14h-2c-1.1 0-2-.9-2-2M9 12h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>)";
 static const char* kHandToolIcon =
@@ -175,6 +182,15 @@ static int LocationEditCap(int available, int fixedDx, int reservedDx, int field
     return std::min(available / 4, budget / std::max(1, fieldCount));
 }
 
+static TempStr CompactZoomText(float zoom) {
+    char text[64];
+    for (int decimals = 0; decimals <= 9; decimals++) {
+        snprintf(text, dimof(text), "%.*f", decimals, (double)zoom);
+        if ((float)strtod(text, nullptr) == zoom) return fmt("%s%%", Str(text));
+    }
+    return fmt("%s%%", Str(text));
+}
+
 #if IS_DEBUG
 static void ToolbarInteractionTests();
 static void ToolbarPaletteTests();
@@ -234,16 +250,82 @@ void ToolbarLayout_UnitTests() {
     utassert(LocationEditCap(200, 140, 36, 2) == 12);
     utassert(LocationEditCap(100, 140, 36, 1) == 0);
     utassert(LocationEditCap(1200, 160, 72, 1) == 300);
+    utassert(str::Eq(CompactZoomText(150.0f), StrL("150%")));
+    utassert(str::Eq(CompactZoomText(150.125f), StrL("150.125%")));
+    utassert(str::Eq(CompactZoomText(100.1f), StrL("100.1%")));
     ToolbarInteractionTests();
     ToolbarPaletteTests();
 }
 #endif
 
+enum class ToolbarFieldKind {
+    Page,
+    Chapter,
+    Zoom
+};
+
+static bool AnnotationToolbarRail(ToolbarVirt* tb) {
+    return tb && tb->win && tb->win->annotationMode && tb->vertical;
+}
+
+static bool SingleToolbarColumn(ToolbarVirt* tb) {
+    return AnnotationToolbarRail(tb) && tb->annotationColumns == 1;
+}
+
+static bool MultiToolbarColumns(ToolbarVirt* tb) {
+    return AnnotationToolbarRail(tb) && tb->annotationColumns > 1;
+}
+
+static int ToolbarColumnWidth(ToolbarVirt* tb) {
+    for (VirtCtrl* control : tb->items) {
+        if (control && control->id == CmdOpenFile) {
+            if (auto* button = AsVirtIconButton(control)) return button->MinIntrinsicWidth(0);
+        }
+    }
+    return tb->rowDy;
+}
+
+static int ToolbarOuterPad();
+static Color TbDisabledColor();
+
 struct ToolbarLocationEdit : Edit {
     MainWindow* win = nullptr;
+    ToolbarFieldKind fieldKind = ToolbarFieldKind::Page;
     int preferredDx = 0;
     int minimumDx = 0;
     int widthCap = Inf;
+    Tooltip* detailsTip = nullptr;
+    bool mouseInside = false;
+    bool railPaint = false;
+    bool originalFrame = false;
+    LONG_PTR originalAlignment = 0;
+    DWORD originalMargins = 0;
+    Rect railBounds;
+
+    ~ToolbarLocationEdit() override { delete detailsTip; }
+
+    bool CompactVertical() const { return win->annotationMode && win->toolbarVirt && win->toolbarVirt->vertical; }
+
+    bool InRail() const { return AnnotationToolbarRail(win->toolbarVirt); }
+
+    void SetRailPaint(bool active) {
+        if (railPaint == active || !hwnd) return;
+        if (active) {
+            originalFrame = createdWithFrame;
+            originalAlignment = GetWindowLongPtrW(hwnd, GWL_STYLE) & (ES_CENTER | ES_RIGHT);
+            originalMargins = (DWORD)SendMessageW(hwnd, EM_GETMARGINS, 0, 0);
+        }
+        railPaint = active;
+        createdWithFrame = active ? false : originalFrame;
+        LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE) & ~(ES_CENTER | ES_RIGHT);
+        SetWindowLongPtrW(hwnd, GWL_STYLE, style | (active ? ES_CENTER : originalAlignment));
+        EditSetMargins(this, active ? UiScalePx(2) : LOWORD(originalMargins),
+                       active ? UiScalePx(2) : HIWORD(originalMargins));
+        RoundControlSetPaint(hwnd, active ? RoundedControlPaint::Custom : RoundedControlPaint::Native);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
 
     int PreferredWidth() const { return LocationEditWidth(preferredDx, minimumDx, widthCap); }
 
@@ -251,13 +333,21 @@ struct ToolbarLocationEdit : Edit {
         int previous = PreferredWidth();
         int dpi = win->frameDpi > 0 ? win->frameDpi : DpiGet();
         int breathingRoom = UiScalePxForDpi(dpi, 8);
-        minimumDx = GetPreferredWidth(StrL("00"), 0, Inf) + breathingRoom;
+        minimumDx =
+            GetPreferredWidth(fieldKind == ToolbarFieldKind::Zoom ? StrL("100%") : StrL("00"), 0, Inf) + breathingRoom;
         preferredDx = GetPreferredWidth(GetTextTemp(), 0, Inf) + breathingRoom;
         return previous != PreferredWidth();
     }
 
     void OnTextChanged() {
-        if (!MeasureWidth()) return;
+        int oldPreferred = preferredDx;
+        bool changed = MeasureWidth();
+        if (InRail()) return;
+        if (CompactVertical() && oldPreferred != preferredDx) {
+            ScheduleUiUpdate(win, kUiForceRelayout | kUiRelayout);
+            return;
+        }
+        if (!changed) return;
         auto* tb = win->toolbarVirt;
         if (!tb || !tb->host->layout) return;
         tb->host->Relayout();
@@ -266,11 +356,89 @@ struct ToolbarLocationEdit : Edit {
 
     Size GetIdealSize() override {
         Size size = Edit::GetIdealSize();
-        size.dx = PreferredWidth();
+        if (InRail()) {
+            size.dx = widthCap < Inf ? widthCap : ToolbarColumnWidth(win->toolbarVirt);
+            return size;
+        }
+        if (fieldKind != ToolbarFieldKind::Zoom || CompactVertical()) size.dx = PreferredWidth();
         return size;
     }
 
+    TempStr DetailsText() const {
+        auto* ctrl = win->ctrl;
+        if (!ctrl || fieldKind == ToolbarFieldKind::Zoom) return {};
+        if (ShowChapterUi(ctrl)) {
+            Location location = ctrl->CurrentLocation();
+            return fmt("%s %d / %d\n%s %d / %d", Tr("Chapter:"), location.chapter, ctrl->ChapterCount(), Tr("Page:"),
+                       location.page, ctrl->ChapterPageCount(location.chapter));
+        }
+        int physical = ctrl->CurrentPageNo();
+        int physicalTotal = ctrl->PageCount();
+        int logicalTotal = physicalTotal;
+        if (auto* dm = ctrl->AsFixed()) logicalTotal = dm->LogicalPageCount();
+        TempStr label = ctrl->GetPageLabeTemp(physical);
+        if (ctrl->HasPageLabels() && logicalTotal > 0 && logicalTotal != physicalTotal)
+            return fmt("%s %s / %d\n%s %d / %d", Tr("Page:"), label, logicalTotal, Tr("Physical page:"), physical,
+                       physicalTotal);
+        return fmt("%s %s / %d", Tr("Page:"), label, physicalTotal);
+    }
+
+    void HideDetails() {
+        if (detailsTip) detailsTip->Delete();
+        if (InRail() && win->toolbarVirt->host) win->toolbarVirt->host->Invalidate(true);
+    }
+
+    void ShowDetails() {
+        if (InRail() && win->toolbarVirt->host) win->toolbarVirt->host->Invalidate(true);
+        TempStr text = DetailsText();
+        if (!CompactVertical() || !len(text) || !IsVisible()) return;
+        if (!detailsTip) {
+            detailsTip = new Tooltip();
+            Tooltip::CreateArgs args;
+            args.parent = hwnd;
+            args.font = GetFont();
+            args.isRtl = IsUIRtl();
+            detailsTip->Create(args);
+        }
+        Rect rect = HwndWindowRect(hwnd);
+        int gap = UiScalePx(4);
+        bool right = ToolbarPositionForWindow(win) == kToolbarRight;
+        Point position{right ? rect.x - gap : rect.Right() + gap, rect.y};
+        detailsTip->SetSingleAt(text, HwndClientRect(hwnd), position, true, right ? position.x : 0);
+    }
+
+    LRESULT OnMessage(HWND native, UINT msg, WPARAM wp, LPARAM lp) override {
+        if (msg == WM_NCPAINT && railPaint) {
+            HDC dc = GetWindowDC(native);
+            if (dc) {
+                RECT strip{0, 0, HwndWindowRect(native).dx, ncCenterTop};
+                if (HBRUSH brush = BackgroundBrush()) FillRect(dc, &strip, brush);
+                ReleaseDC(native, dc);
+            }
+            return 0;
+        }
+        if (msg == WM_MOUSEMOVE && !mouseInside) {
+            mouseInside = true;
+            TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, native, 0};
+            TrackMouseEvent(&track);
+            ShowDetails();
+        } else if (msg == WM_MOUSELEAVE) {
+            mouseInside = false;
+            if (!IsFocused()) HideDetails();
+        } else if (msg == WM_SHOWWINDOW && !wp) {
+            mouseInside = false;
+            HideDetails();
+        }
+        return Edit::OnMessage(native, msg, wp, lp);
+    }
+
     void SetBounds(Rect bounds) override {
+        railBounds = bounds;
+        if (InRail() && fieldKind != ToolbarFieldKind::Page) {
+            int inset = UiScalePx(2);
+            bounds = {bounds.x + inset, bounds.y + inset, std::max(1, bounds.dx - 2 * inset),
+                      std::max(1, bounds.dy - 2 * inset)};
+        }
         bool resizing = bounds.dx != lastBounds.dx && IsFocused();
         int start = 0, end = 0;
         if (resizing) EditGetSelection(this, start, end);
@@ -283,9 +451,243 @@ struct ToolbarLocationEdit : Edit {
     }
 };
 
+static Kind kindToolbarPageBox = "toolbarPageBox";
+
+struct ToolbarPageBox : ILayout {
+    ToolbarVirt* tb;
+    ToolbarLocationEdit* edit;
+    VirtText* total;
+
+    ToolbarPageBox(ToolbarVirt* toolbar, ToolbarLocationEdit* field) : tb(toolbar), edit(field) {
+        kind = kindToolbarPageBox;
+        total = new VirtText(Str{}, tb->platformFont);
+        total->id = PageInfoId;
+        total->align = VirtTextAlign::Center;
+        total->ellipsis = true;
+        total->SetColor(kColText, TbTextColor());
+        total->SetVisibility(Visibility::Collapse);
+    }
+
+    ~ToolbarPageBox() override {
+        delete edit;
+        delete total;
+    }
+
+    bool Active() const { return AnnotationToolbarRail(tb); }
+    bool Horizontal() const {
+        return Active() && (tb->annotationColumns == 2 ||
+                            (tb->annotationColumns == 3 && gSettings->annotationThreeColumnPageStyle != 1));
+    }
+    bool FullWidth() const {
+        return Active() && (tb->annotationColumns == 2 ||
+                            (tb->annotationColumns == 3 && gSettings->annotationThreeColumnPageStyle == 2));
+    }
+    int Style() const { return limitValue(gSettings->annotationPageNumberStyle, 1, 3); }
+    int Gap() const { return Style() == 3 ? UiScalePx(3) : 1; }
+    int RowHeight() const { return std::max(PlatformFontLineHeight(tb->platformFont) + UiScalePx(4), edit->idealDy); }
+
+    void UpdateTotal() {
+        DocController* ctrl = tb->win->ctrl;
+        int count = ctrl ? ctrl->PageCount() : 0;
+        if (ShowChapterUi(ctrl))
+            count = ctrl->ChapterPageCount(ctrl->CurrentLocation().chapter);
+        else if (ctrl && ctrl->HasPageLabels() && ctrl->AsFixed())
+            count = ctrl->AsFixed()->LogicalPageCount();
+        total->SetText(count > 0 ? fmt("%d", count) : Str{});
+        total->SetColor(kColText, edit->IsEnabled() ? TbTextColor() : TbDisabledColor());
+        total->SetTooltip(edit->DetailsText());
+    }
+
+    void SetVisibility(Visibility value) override {
+        ILayout::SetVisibility(value);
+        edit->SetVisibility(value);
+        total->SetVisibility(Active() ? value : Visibility::Collapse);
+    }
+
+    Visibility GetVisibility() override { return edit->GetVisibility(); }
+    int LayoutChildCount() override { return 2; }
+    ILayout* LayoutChildAt(int index) override { return index == 0 ? (ILayout*)edit : total; }
+    int MinIntrinsicWidth(int height) override {
+        return Active() ? ToolbarColumnWidth(tb) * (FullWidth() ? tb->annotationColumns : 1)
+                        : edit->MinIntrinsicWidth(height);
+    }
+    int MinIntrinsicHeight(int width) override {
+        return Active() ? (Horizontal() ? RowHeight() : 2 * RowHeight() + Gap()) : edit->MinIntrinsicHeight(width);
+    }
+
+    Size Layout(Constraints bc) override {
+        total->SetVisibility(Active() && edit->GetVisibility() == Visibility::Visible ? Visibility::Visible
+                                                                                      : Visibility::Collapse);
+        if (!Active()) return edit->Layout(bc);
+        int width = bc.HasBoundedWidth() ? bc.max.dx : ToolbarColumnWidth(tb);
+        int fieldWidth = Horizontal() ? width / 2 : width;
+        edit->widthCap = fieldWidth;
+        edit->Layout(Loose({fieldWidth, RowHeight()}));
+        total->Layout(Loose({fieldWidth, RowHeight()}));
+        return bc.Constrain({width, Horizontal() ? RowHeight() : 2 * RowHeight() + Gap()});
+    }
+
+    Rect TopBounds() const {
+        return {lastBounds.x, lastBounds.y, Horizontal() ? lastBounds.dx / 2 : lastBounds.dx, RowHeight()};
+    }
+    Rect TotalBounds() const {
+        if (Horizontal()) {
+            int half = lastBounds.dx / 2;
+            return {lastBounds.x + half, lastBounds.y, lastBounds.dx - half, RowHeight()};
+        }
+        return {lastBounds.x, lastBounds.y + RowHeight() + Gap(), lastBounds.dx, RowHeight()};
+    }
+
+    void SetBounds(Rect bounds) override {
+        lastBounds = bounds;
+        if (!Active()) {
+            edit->SetBounds(bounds);
+            return;
+        }
+        int inset = UiScalePx(2);
+        Rect top = TopBounds();
+        edit->SetBounds(
+            {top.x + inset, top.y + inset, std::max(1, top.dx - 2 * inset), std::max(1, top.dy - 2 * inset)});
+        total->SetBounds(TotalBounds());
+    }
+
+    void Paint(Gfx* gfx) const {
+        if (!Active() || edit->GetVisibility() != Visibility::Visible || lastBounds.IsEmpty()) return;
+        Color fill = ThemeWindowControlBackgroundColor();
+        Color edge = edit->IsFocused() ? ThemeBrandColor() : ThemeEdgeColor();
+        int radius = UiScalePx(6);
+        if (Horizontal()) {
+            gfx->FillRoundedRect(lastBounds, radius, fill, edge);
+            gfx->FillRect({lastBounds.x + lastBounds.dx / 2, lastBounds.y + 1, 1, lastBounds.dy - 2}, ThemeEdgeColor());
+            return;
+        }
+        if (Style() == 3) {
+            gfx->FillRoundedRect(TopBounds(), radius, fill, edge);
+            gfx->FillRoundedRect(TotalBounds(), radius, fill, ThemeEdgeColor());
+            return;
+        }
+        gfx->FillRoundedRect(lastBounds, radius, fill, edge);
+        int inset = Style() == 1 ? lastBounds.dx / 3 : 1;
+        gfx->FillRect({lastBounds.x + inset, lastBounds.y + RowHeight(), lastBounds.dx - 2 * inset, 1},
+                      ThemeEdgeColor());
+    }
+};
+
+static Kind kindToolbarGroup = "toolbarGroup";
+
+struct ToolbarGroup : Wrap {
+    ToolbarVirt* tb;
+    Vec<Rect> cells;
+
+    explicit ToolbarGroup(ToolbarVirt* toolbar) : tb(toolbar) { kind = kindToolbarGroup; }
+
+    bool NavigationColumn() const {
+        if (!tb->win || !tb->win->annotationMode) return false;
+        for (auto& child : children)
+            if (child.layout == tb->win->pageEdit || child.layout == tb->win->chapterEdit ||
+                child.layout == tb->zoomEdit || child.layout == tb->pageBox)
+                return true;
+        return false;
+    }
+
+    Size LayoutVertical(int width) {
+        VecReset(cells);
+        for (int i = 0; i < len(children); i++) VecAppend(cells, Rect{});
+        bool navigation = NavigationColumn();
+        int columns = navigation ? 1 : tb->annotationColumns;
+        int cellDx = std::max(1, (width - (tb->annotationColumns - 1) * colGap) / tb->annotationColumns);
+        int spacing = navigation ? UiScalePx(1) : std::max(rowGap, UiScalePx(2));
+        int y = 0, column = 0, rowHeight = 0;
+        Vec<int> rowItems;
+        auto finishRow = [&]() {
+            if (rowHeight == 0) return;
+            for (int i : rowItems) cells[i].dy = rowHeight;
+            y += rowHeight + spacing;
+            VecReset(rowItems);
+            column = rowHeight = 0;
+        };
+        Vec<int> order;
+        int zoomIdx = -1;
+        for (int i = 0; i < len(children); i++)
+            if (children[i].layout == tb->zoomEdit) zoomIdx = i;
+        for (int i = 0; i < len(children); i++) {
+            if (i == zoomIdx) continue;
+            auto* control = children[i].layout->AsVirtCtrl();
+            if (zoomIdx >= 0 && control && control->id == CmdZoomIn) VecAppend(order, zoomIdx);
+            VecAppend(order, i);
+        }
+        if (zoomIdx >= 0 && VecFind(order, zoomIdx) < 0) VecAppend(order, zoomIdx);
+        for (int i : order) {
+            auto& child = children[i];
+            if (IsCollapsed(child.layout)) {
+                child.size = {};
+                continue;
+            }
+            bool span = !navigation && !AsVirtIconButton(child.layout->AsVirtCtrl());
+            if (span && column) finishRow();
+            int dx = span ? width : cellDx;
+            child.size = child.layout->Layout(Loose({dx, Inf}));
+            if (navigation || SingleToolbarColumn(tb)) child.size.dx = dx;
+            int x = navigation ? (width - dx) / 2 : span ? 0 : column * (cellDx + colGap);
+            if (rtl && !span) x = width - x - dx;
+            cells[i] = {x, y, dx, child.size.dy};
+            VecAppend(rowItems, i);
+            rowHeight = std::max(rowHeight, child.size.dy);
+            if (span || ++column == columns) finishRow();
+        }
+        finishRow();
+        return {width, std::max(0, y - spacing)};
+    }
+
+    Size Layout(Constraints bc) override {
+        if (tb->vertical) return bc.Constrain(LayoutVertical(bc.HasBoundedWidth() ? bc.max.dx : UiScalePx(80)));
+        Constraints row = bc;
+        row.max.dx = Inf;
+        return bc.Constrain(Wrap::Layout(row));
+    }
+
+    void SetBounds(Rect bounds) override {
+        if (!tb->vertical) {
+            Wrap::SetBounds(bounds);
+            return;
+        }
+        lastBounds = bounds;
+        for (int i = 0; i < len(children) && i < len(cells); i++) {
+            auto& child = children[i];
+            if (IsCollapsed(child.layout) || cells[i].IsEmpty()) continue;
+            Rect cell = cells[i];
+            cell.x += bounds.x;
+            cell.y += bounds.y;
+            child.layout->SetBounds(SingleToolbarColumn(tb)
+                                        ? cell
+                                        : AlignInCell(cell, child.size, CrossAxisAlign::CrossCenter, alignCross));
+        }
+    }
+
+    int MinIntrinsicHeight(int width) override {
+        if (tb->vertical) return LayoutVertical(width).dy;
+        return Wrap::MinIntrinsicHeight(Inf);
+    }
+
+    int MinIntrinsicWidth(int height) override {
+        if (tb->vertical) return Wrap::MinIntrinsicWidth(height);
+        int width = 0;
+        int count = 0;
+        for (auto& child : children) {
+            if (IsCollapsed(child.layout)) continue;
+            width += child.layout->MinIntrinsicWidth(height) + (count++ ? colGap : 0);
+        }
+        return width;
+    }
+};
+
+static ToolbarGroup* AsToolbarGroup(ILayout* layout) {
+    return layout && layout->GetKind() == kindToolbarGroup ? (ToolbarGroup*)layout : nullptr;
+}
+
 struct ToolbarLocationField {
     ToolbarLocationEdit* edit = nullptr;
-    HBox* group = nullptr;
+    ToolbarGroup* group = nullptr;
 };
 
 struct ToolbarHiddenLayout {
@@ -297,6 +699,26 @@ enum class ToolbarLineKind {
     Main,
     Annotations
 };
+
+enum class ToolbarRailRole {
+    Tool,
+    Page,
+    Chapter,
+    Zoom,
+    Pin
+};
+
+struct ToolbarRailCell {
+    ILayout* layout = nullptr;
+    Rect bounds;
+    ToolbarRailRole role = ToolbarRailRole::Tool;
+    int cmd = 0;
+    int pinIndex = -1;
+    int group = 0;
+    int rowTop = 0;
+};
+
+static int ToolbarOuterPad();
 
 // Hide complete groups, including native fields, while retaining document availability.
 struct ToolbarLine : HBox {
@@ -310,6 +732,14 @@ struct ToolbarLine : HBox {
     VirtIconButton* nextButton = nullptr;
     int firstGroup = 0;
     int wheelRemainder = 0;
+    int verticalScrollY = 0;
+    int verticalMaxScroll = 0;
+    int verticalViewportDy = 0;
+    int railContentDy = 0;
+    Vec<ToolbarRailCell> railCells;
+    Vec<Rect> railGroups;
+
+    int FixedCount() const { return lineKind == ToolbarLineKind::Main && tb->annotationModeButton ? 4 : 3; }
     bool canScrollBefore = false;
     bool canScrollAfter = false;
 
@@ -328,15 +758,49 @@ struct ToolbarLine : HBox {
 
     bool Scroll(int direction) {
         if ((direction < 0 && !canScrollBefore) || (direction > 0 && !canScrollAfter)) return false;
+        if (tb->vertical) {
+            int target = verticalScrollY + direction * (tb->rowDy + UiScalePx(2));
+            if (AnnotationToolbarRail(tb) && len(railCells)) {
+                target = direction > 0 ? verticalMaxScroll : 0;
+                for (auto& cell : railCells) {
+                    if (direction > 0 && cell.rowTop > verticalScrollY) target = std::min(target, cell.rowTop);
+                    if (direction < 0 && cell.rowTop < verticalScrollY) target = std::max(target, cell.rowTop);
+                }
+            }
+            verticalScrollY = limitValue(target, 0, verticalMaxScroll);
+            tb->host->Relayout();
+            tb->host->Invalidate(true);
+            return true;
+        }
         Restore();
         int next = firstGroup + direction;
-        int count = len(children) - 3;
+        int count = len(children) - FixedCount();
         while (next >= 0 && next < count && (next == brandIdx || children[next].layout->MinIntrinsicWidth(0) == 0))
             next += direction;
         firstGroup = std::clamp(next, 0, std::max(0, count - 1));
         tb->host->Relayout();
         tb->host->Invalidate(true);
         return true;
+    }
+
+    bool Wheel(int delta) {
+        if (!delta) return false;
+        if ((delta < 0 && !canScrollBefore) || (delta > 0 && !canScrollAfter)) {
+            wheelRemainder = 0;
+            return false;
+        }
+        wheelRemainder += delta;
+        bool moved = false;
+        while (std::abs(wheelRemainder) >= WHEEL_DELTA) {
+            int direction = wheelRemainder > 0 ? 1 : -1;
+            wheelRemainder -= direction * WHEEL_DELTA;
+            moved |= Scroll(direction);
+            if ((direction < 0 && !canScrollBefore) || (direction > 0 && !canScrollAfter)) {
+                wheelRemainder = 0;
+                break;
+            }
+        }
+        return moved;
     }
 
     void Restore() {
@@ -357,8 +821,11 @@ struct ToolbarLine : HBox {
     int MinIntrinsicWidth(int) override { return OverflowButton() ? OverflowButton()->MinIntrinsicWidth(0) : 0; }
 
     int MinIntrinsicHeight(int) override {
-        int height = tb->rowDy - UiScalePx(12);
-        for (auto& child : children) height = std::max(height, child.layout->MinIntrinsicHeight(Inf));
+        if (tb->vertical) return tb->rowDy;
+        int height = tb->rowDy - 2 * ToolbarOuterPad();
+        for (auto& child : children) {
+            if (!IsCollapsed(child.layout)) height = std::max(height, child.layout->MinIntrinsicHeight(Inf));
+        }
         return height;
     }
 
@@ -380,6 +847,8 @@ struct ToolbarLine : HBox {
 
     Size Layout(Constraints bc) override {
         Restore();
+        if (AnnotationToolbarRail(tb) && lineKind == ToolbarLineKind::Main) return LayoutRail(bc);
+        if (tb->vertical) return LayoutVertical(bc);
         if (lineKind == ToolbarLineKind::Main && tb->findSlot) {
             tb->findSlot->SetVisibility(tb->findExpanded ? Visibility::Visible : Visibility::Collapse);
             tb->findSlot->dx = tb->findExpanded ? tb->findPreferredWidth : 0;
@@ -395,11 +864,13 @@ struct ToolbarLine : HBox {
         nextButton->SetVisibility(Visibility::Collapse);
         int available = bc.HasBoundedWidth() ? bc.max.dx : Inf;
         int pickerDx = overflowButton->MinIntrinsicWidth(0) + gap;
+        if (tb->annotationModeButton && tb->annotationModeButton->IsVisible())
+            pickerDx += tb->annotationModeButton->MinIntrinsicWidth(0) + gap;
         available = std::max(0, available - pickerDx);
         int overflowDx = previousButton->MinIntrinsicWidth(0) + nextButton->MinIntrinsicWidth(0) + gap;
         SizeLocationFields(available, overflowDx);
         Vec<int> widths;
-        for (int i = 0; i < len(children) - 3; i++) {
+        for (int i = 0; i < len(children) - FixedCount(); i++) {
             auto* child = children[i].layout;
             VecAppend(widths, IsCollapsed(child) ? 0 : child->MinIntrinsicWidth(0));
         }
@@ -443,19 +914,477 @@ struct ToolbarLine : HBox {
         return size;
     }
 
-    void SetBounds(Rect r) override {
-        HBox::SetBounds(r);
-        auto* overflowButton = OverflowButton();
-        if (overflowButton->GetVisibility() == Visibility::Visible) {
-            Rect button = overflowButton->lastBounds;
-            button.x = rtl ? r.x : r.Right() - button.dx;
-            overflowButton->SetBounds(button);
-            for (VirtIconButton* nav : {nextButton, previousButton}) {
-                Rect next = nav->lastBounds;
-                next.x = rtl ? button.Right() + gap : button.x - gap - next.dx;
-                nav->SetBounds(next);
-                button = next;
+    bool RailDrawingCommand(int command) const {
+        command = OriginalCommandId(command);
+        return (command >= CmdCreateAnnotFirst && command <= CmdCreateAnnotLast) || command == CmdToggleEditPDF ||
+               command == CmdHandTool || command == CmdTextSelectTool || command == CmdAnnotationLasso ||
+               command == CmdAnnotationShapes || command == CmdAnnotationHighlightBrush || command == CmdInkEraser ||
+               command == CmdToggleLaserPointer;
+    }
+
+    void CollectRailCells(ILayout* layout, Vec<ToolbarRailCell>& cells) {
+        if (!layout || layout->GetVisibility() != Visibility::Visible) return;
+        if (layout == tb->pageBox) {
+            VecAppend(cells, ToolbarRailCell{layout, {}, ToolbarRailRole::Page, PageInfoId});
+            return;
+        }
+        if (layout == tb->zoomEdit || layout == tb->win->chapterEdit) {
+            bool zoom = layout == tb->zoomEdit;
+            VecAppend(cells, ToolbarRailCell{layout,
+                                             {},
+                                             zoom ? ToolbarRailRole::Zoom : ToolbarRailRole::Chapter,
+                                             zoom ? CmdZoomCustom : PageInfoId});
+            return;
+        }
+        if (VirtCtrl* control = layout->AsVirtCtrl()) {
+            if (!control->id || control == tb->annotationModeButton || control == tb->pageLabel ||
+                control == tb->pageLabel2 || control == tb->pageTotal || control == tb->chapterTotal ||
+                VecFind(tb->pinnedItems, control) >= 0)
+                return;
+            VecAppend(cells, ToolbarRailCell{layout, {}, ToolbarRailRole::Tool, control->id});
+            return;
+        }
+        for (int i = 0; i < layout->LayoutChildCount(); i++) CollectRailCells(layout->LayoutChildAt(i), cells);
+    }
+
+    void HideRailDecorations(ILayout* layout) {
+        if (!layout || IsCollapsed(layout)) return;
+        if (auto* control = layout->AsVirtCtrl()) {
+            if (!control->id && control->HasFlag(vwfNoHitTest)) HideLayout(control);
+            return;
+        }
+        if (layout == tb->pageBox) return;
+        for (int i = 0; i < layout->LayoutChildCount(); i++) HideRailDecorations(layout->LayoutChildAt(i));
+    }
+
+    void PlaceRailRows(const Vec<ToolbarRailCell>& cells, int width, int& y, int group, bool fullWidth = false,
+                       bool navigation = false) {
+        if (!len(cells)) return;
+        int columns = fullWidth ? 1 : tb->annotationColumns;
+        int rows = (len(cells) + columns - 1) / columns;
+        int baseCount = len(cells) / rows;
+        int extra = len(cells) % rows;
+        int next = 0;
+        int spacing = UiScalePx(navigation ? 1 : 2);
+        for (int row = 0; row < rows; row++) {
+            int count = baseCount + (row < extra ? 1 : 0);
+            int cellWidth = fullWidth ? width : width / tb->annotationColumns;
+            int rowHeight = 0;
+            for (int i = 0; i < count; i++) {
+                auto& cell = cells[next + i];
+                if (auto* edit = cell.layout->AsControl()) {
+                    if (cell.role == ToolbarRailRole::Zoom || cell.role == ToolbarRailRole::Chapter)
+                        ((ToolbarLocationEdit*)edit)->widthCap = cellWidth;
+                }
+                rowHeight = std::max(rowHeight, cell.layout->MinIntrinsicHeight(cellWidth));
             }
+            for (int i = 0; i < count; i++) {
+                ToolbarRailCell cell = cells[next++];
+                int dy = cell.layout->MinIntrinsicHeight(cellWidth);
+                int x = (width - count * cellWidth) / 2 + i * cellWidth;
+                if (rtl) x = width - x - cellWidth;
+                cell.bounds = {x, y + (rowHeight - dy) / 2, cellWidth, dy};
+                cell.rowTop = y;
+                cell.group = group;
+                cell.layout->Layout(Tight(cell.bounds.Size()));
+                VecAppend(railCells, cell);
+            }
+            y += rowHeight + spacing;
+        }
+    }
+
+    void AddRailGroup(const Vec<ToolbarRailCell>& cells, int width, int& y) {
+        if (!len(cells)) return;
+        int start = y;
+        int group = len(railGroups);
+        int page = -1, zoom = -1;
+        for (int i = 0; i < len(cells); i++) {
+            if (cells[i].role == ToolbarRailRole::Page) page = i;
+            if (cells[i].role == ToolbarRailRole::Zoom) zoom = i;
+        }
+        bool navigation = page >= 0 || zoom >= 0;
+        bool widePage = page >= 0 && tb->pageBox && tb->pageBox->FullWidth();
+        if ((tb->annotationColumns == 2 && navigation) || widePage) {
+            Vec<ToolbarRailCell> icons;
+            Vec<ToolbarRailCell> fields;
+            for (auto& cell : cells) {
+                if (cell.role == ToolbarRailRole::Tool || cell.role == ToolbarRailRole::Pin)
+                    VecAppend(icons, cell);
+                else
+                    VecAppend(fields, cell);
+            }
+            if (zoom >= 0) PlaceRailRows(fields, width, y, group, true, true);
+            PlaceRailRows(icons, width, y, group, false, true);
+            if (page >= 0) PlaceRailRows(fields, width, y, group, true, true);
+        } else {
+            Vec<ToolbarRailCell> ordered;
+            for (int i = 0; i < len(cells); i++) {
+                if (i == zoom) continue;
+                if (zoom >= 0 && OriginalCommandId(cells[i].cmd) == CmdZoomIn) VecAppend(ordered, cells[zoom]);
+                VecAppend(ordered, cells[i]);
+            }
+            if (zoom >= 0) {
+                bool inserted = false;
+                for (auto& cell : ordered) inserted |= cell.role == ToolbarRailRole::Zoom;
+                if (!inserted) VecAppend(ordered, cells[zoom]);
+            }
+            PlaceRailRows(ordered, width, y, group, false, navigation);
+        }
+        int spacing = UiScalePx(navigation ? 1 : 2);
+        int height = std::max(0, y - start - spacing);
+        VecAppend(railGroups, Rect{0, start, width, height});
+        y = start + height + gap;
+    }
+
+    void AddPinnedRail(int width, int& y) {
+        Vec<ToolbarRailCell> pins;
+        auto* presets = gSettings->pinnedAnnotationTools;
+        for (int i = 0; i < len(tb->pinnedItems); i++) {
+            VirtCtrl* control = tb->pinnedItems[i];
+            if (!control || !control->IsVisible()) continue;
+            int command = presets && i < len(*presets) ? PinnedToolCommand((*presets)[i]->tool) : control->id;
+            VecAppend(pins, ToolbarRailCell{control, {}, ToolbarRailRole::Pin, command, i});
+        }
+        AddRailGroup(pins, width, y);
+    }
+
+    void BuildNavigationRail(const Vec<ToolbarRailCell>& source, int width, int& y, Vec<ILayout*>& consumed,
+                             Vec<ToolbarRailCell>& drawingPrefix) {
+        auto take = [&](Vec<ToolbarRailCell>& target, int command, ToolbarRailRole role = ToolbarRailRole::Tool) {
+            for (auto& cell : source) {
+                if (cell.role != role || VecFind(consumed, cell.layout) >= 0) continue;
+                if (role == ToolbarRailRole::Tool && OriginalCommandId(cell.cmd) != command) continue;
+                VecAppend(target, cell);
+                VecAppend(consumed, cell.layout);
+                return;
+            }
+        };
+        Vec<ToolbarRailCell> row;
+        take(row, CmdOpenFile);
+        take(row, CmdFindFirst);
+        if (tb->annotationColumns == 3) take(row, CmdSinglePageView);
+        AddRailGroup(row, width, y);
+        VecReset(row);
+        int start = y;
+        int group = len(railGroups);
+        bool fullPage = tb->pageBox && tb->pageBox->FullWidth();
+        take(row, CmdGoToPrevPage);
+        if (tb->annotationColumns == 3) {
+            if (fullPage)
+                take(row, CmdZoomFitWidthAndContinuous);
+            else
+                take(row, PageInfoId, ToolbarRailRole::Page);
+        }
+        take(row, CmdGoToNextPage);
+        PlaceRailRows(row, width, y, group, false, true);
+        VecReset(row);
+        take(row, PageInfoId, ToolbarRailRole::Chapter);
+        PlaceRailRows(row, width, y, group, true, true);
+        VecReset(row);
+        if (fullPage) {
+            take(row, PageInfoId, ToolbarRailRole::Page);
+            PlaceRailRows(row, width, y, group, true, true);
+            VecReset(row);
+        }
+        if (tb->annotationColumns == 2) {
+            take(row, CmdZoomCustom, ToolbarRailRole::Zoom);
+            PlaceRailRows(row, width, y, group, true, true);
+            VecReset(row);
+        }
+        take(row, CmdZoomOut);
+        if (tb->annotationColumns == 3) take(row, CmdZoomCustom, ToolbarRailRole::Zoom);
+        take(row, CmdZoomIn);
+        PlaceRailRows(row, width, y, group, false, true);
+        VecReset(row);
+        if (tb->annotationColumns == 2) {
+            take(row, CmdZoomFitWidthAndContinuous);
+            take(row, CmdSinglePageView);
+            PlaceRailRows(row, width, y, group, false, true);
+            VecReset(row);
+        }
+        if (tb->annotationColumns == 3 && fullPage) {
+            take(drawingPrefix, CmdRotateLeft);
+            take(drawingPrefix, CmdRotateRight);
+        } else {
+            if (tb->annotationColumns == 3) take(row, CmdZoomFitWidthAndContinuous);
+            take(row, CmdRotateLeft);
+            take(row, CmdRotateRight);
+            PlaceRailRows(row, width, y, group, false, true);
+        }
+        if (y > start) {
+            int height = y - start - UiScalePx(1);
+            VecAppend(railGroups, Rect{0, start, width, height});
+            y = start + height + gap;
+        }
+    }
+
+    void BuildRail(int width) {
+        VecReset(railCells);
+        VecReset(railGroups);
+        if (tb->findSlot) tb->findSlot->SetVisibility(Visibility::Collapse);
+        for (auto* label : {tb->pageLabel, tb->pageLabel2, tb->pageTotal, tb->chapterTotal})
+            if (label && !IsCollapsed(label)) HideLayout(label);
+        int count = len(children) - FixedCount();
+        int lastDrawing = -1;
+        Vec<ToolbarRailCell> source;
+        for (int i = 0; i < count; i++) {
+            ILayout* group = children[i].layout;
+            if (i == brandIdx) {
+                if (!IsCollapsed(group)) HideLayout(group);
+                continue;
+            }
+            HideRailDecorations(group);
+            Vec<ToolbarRailCell> cells;
+            CollectRailCells(group, cells);
+            for (auto& cell : cells) VecAppend(source, cell);
+            for (auto& cell : cells) {
+                if (RailDrawingCommand(cell.cmd) || VecFind(tb->annotationGroups, group) >= 0) lastDrawing = i;
+            }
+        }
+        int y = 0;
+        Vec<ILayout*> consumed;
+        Vec<ToolbarRailCell> drawingPrefix;
+        bool defaultOrder = str::IsEmptyOrWhiteSpace(gSettings->toolbarCustomLayout) && !len(gSettings->toolbarOrder);
+        if (MultiToolbarColumns(tb) && defaultOrder) BuildNavigationRail(source, width, y, consumed, drawingPrefix);
+        for (int i = 0; i < count; i++) {
+            Vec<ToolbarRailCell> cells;
+            CollectRailCells(children[i].layout, cells);
+            Vec<ToolbarRailCell> remaining;
+            bool drawing = false;
+            for (auto& cell : cells) drawing |= RailDrawingCommand(cell.cmd);
+            if (drawing && len(drawingPrefix)) {
+                for (auto& cell : drawingPrefix) VecAppend(remaining, cell);
+                VecReset(drawingPrefix);
+            }
+            for (auto& cell : cells)
+                if (VecFind(consumed, cell.layout) < 0) VecAppend(remaining, cell);
+            AddRailGroup(remaining, width, y);
+            if (i == lastDrawing) AddPinnedRail(width, y);
+        }
+        if (lastDrawing < 0) AddPinnedRail(width, y);
+        railContentDy = std::max(0, y - gap);
+    }
+
+    int RailFooterHeight(bool scrolling) const {
+        if (SingleToolbarColumn(tb)) {
+            int height = OverflowButton()->MinIntrinsicHeight(0) + gap;
+            if (tb->annotationModeButton && tb->annotationModeButton->IsVisible())
+                height += tb->annotationModeButton->MinIntrinsicHeight(0) + gap;
+            if (scrolling)
+                height += previousButton->MinIntrinsicHeight(0) + nextButton->MinIntrinsicHeight(0) + 2 * gap;
+            return height;
+        }
+        int height = std::max(OverflowButton()->MinIntrinsicHeight(0), previousButton->MinIntrinsicHeight(0));
+        int rows = tb->annotationColumns == 2 ? (scrolling ? 2 : 1) : 2;
+        return rows * height + (rows - 1) * UiScalePx(2) + gap;
+    }
+
+    Size LayoutRail(Constraints bc) {
+        int width = bc.HasBoundedWidth() ? bc.max.dx : ToolbarColumnWidth(tb) * tb->annotationColumns;
+        BuildRail(width);
+        auto* overflow = OverflowButton();
+        overflow->SetVisibility(Visibility::Visible);
+        previousButton->SetVisibility(Visibility::Collapse);
+        nextButton->SetVisibility(Visibility::Collapse);
+        int fixedDy = RailFooterHeight(false);
+        if (!bc.HasBoundedHeight()) return {width, railContentDy + fixedDy};
+        bool scrolling = railContentDy > std::max(0, bc.max.dy - fixedDy);
+        fixedDy = RailFooterHeight(scrolling);
+        verticalViewportDy = std::max(0, bc.max.dy - fixedDy);
+        verticalMaxScroll = std::max(0, railContentDy - verticalViewportDy);
+        verticalScrollY = limitValue(verticalScrollY, 0, verticalMaxScroll);
+        canScrollBefore = verticalScrollY > 0;
+        canScrollAfter = verticalScrollY < verticalMaxScroll;
+        for (auto& cell : railCells) {
+            int top = cell.bounds.y - verticalScrollY;
+            if (top < 0 || top + cell.bounds.dy > verticalViewportDy) HideLayout(cell.layout);
+        }
+        previousButton->SetVisibility(scrolling ? Visibility::Visible : Visibility::Collapse);
+        nextButton->SetVisibility(scrolling ? Visibility::Visible : Visibility::Collapse);
+        previousButton->SetIsEnabled(canScrollBefore);
+        nextButton->SetIsEnabled(canScrollAfter);
+        return bc.Constrain({width, railContentDy + fixedDy});
+    }
+
+    void SetRailBounds(Rect bounds) {
+        lastBounds = bounds;
+        auto containers = [&](auto&& self, ILayout* layout) -> void {
+            if (!layout || layout->AsControl() || layout->AsVirtCtrl() || layout == tb->pageBox) return;
+            layout->lastBounds = bounds;
+            for (int i = 0; i < layout->LayoutChildCount(); i++) self(self, layout->LayoutChildAt(i));
+        };
+        for (int i = 0; i < len(children) - FixedCount(); i++) containers(containers, children[i].layout);
+        for (auto& cell : railCells) {
+            if (cell.layout->GetVisibility() != Visibility::Visible) continue;
+            Rect rect = cell.bounds;
+            rect.x += bounds.x;
+            rect.y += bounds.y - verticalScrollY;
+            cell.layout->SetBounds(rect);
+        }
+        if (MultiToolbarColumns(tb)) {
+            int cellWidth = bounds.dx / tb->annotationColumns;
+            int height = std::max(OverflowButton()->MinIntrinsicHeight(0), previousButton->MinIntrinsicHeight(0));
+            int bottomY = bounds.Bottom() - height;
+            auto place = [&](VirtIconButton* control, int column, int y) {
+                if (control && control->IsVisible())
+                    control->SetBounds({bounds.x + column * cellWidth, y, cellWidth, height});
+            };
+            if (tb->annotationColumns == 2) {
+                place(OverflowButton(), 0, bottomY);
+                place(tb->annotationModeButton, 1, bottomY);
+                place(previousButton, 0, bottomY - height - UiScalePx(2));
+                place(nextButton, 1, bottomY - height - UiScalePx(2));
+            } else {
+                place(tb->annotationModeButton, 1, bottomY);
+                int commandsY = bottomY - height - UiScalePx(2);
+                place(OverflowButton(), previousButton->IsVisible() ? 2 : 1, commandsY);
+                place(previousButton, 0, commandsY);
+                place(nextButton, 1, commandsY);
+            }
+            return;
+        }
+        int bottom = bounds.Bottom();
+        Vec<VirtIconButton*> fixed;
+        FixedControls(fixed);
+        for (auto* control : fixed) {
+            Size size = control->GetIdealSize();
+            if (SingleToolbarColumn(tb)) size.dx = bounds.dx;
+            bottom -= size.dy;
+            control->SetBounds({bounds.x + (bounds.dx - size.dx) / 2, bottom, size.dx, size.dy});
+            bottom -= gap;
+        }
+    }
+
+    Size LayoutVertical(Constraints bc) {
+        if (tb->findSlot) tb->findSlot->SetVisibility(Visibility::Collapse);
+        int width = bc.HasBoundedWidth() ? bc.max.dx : UiScalePx(80);
+        int fieldWidth = tb->win->annotationMode ? std::max(1, width / tb->annotationColumns) : width;
+        for (auto& field : locationFields) {
+            field.edit->MeasureWidth();
+            field.edit->widthCap = fieldWidth;
+        }
+        if (tb->zoomEdit && tb->win->annotationMode) {
+            auto* zoom = (ToolbarLocationEdit*)tb->zoomEdit;
+            zoom->MeasureWidth();
+            zoom->widthCap = fieldWidth;
+        }
+        if (tb->win->annotationMode) {
+            for (auto* label : {tb->pageLabel, tb->pageLabel2, tb->pageTotal, tb->chapterTotal})
+                if (label && !IsCollapsed(label)) HideLayout(label);
+        }
+        auto* overflow = OverflowButton();
+        overflow->SetVisibility(Visibility::Visible);
+        previousButton->SetVisibility(Visibility::Collapse);
+        nextButton->SetVisibility(Visibility::Collapse);
+        int fixedDy = overflow->MinIntrinsicHeight(width) + gap;
+        if (lineKind == ToolbarLineKind::Main && tb->annotationModeButton && tb->annotationModeButton->IsVisible())
+            fixedDy += tb->annotationModeButton->MinIntrinsicHeight(width) + gap;
+        int arrowsDy = previousButton->MinIntrinsicHeight(width) + nextButton->MinIntrinsicHeight(width) + gap;
+        int count = len(children) - FixedCount();
+        int contentDy = 0;
+        for (int i = 0; i < count; i++) {
+            auto* group = children[i].layout;
+            if (i == brandIdx && !IsCollapsed(group)) HideLayout(group);
+            if (auto* column = AsToolbarGroup(group)) {
+                for (auto& child : column->children) {
+                    VirtCtrl* ctrl = child.layout->AsVirtCtrl();
+                    if (ctrl && !ctrl->id && ctrl->HasFlag(vwfNoHitTest) && !IsCollapsed(ctrl)) HideLayout(ctrl);
+                }
+            }
+            children[i].size = IsCollapsed(group) ? Size{} : group->Layout(Loose({width, Inf}));
+            if (children[i].size.dy > 0) contentDy += children[i].size.dy + gap;
+        }
+        contentDy = std::max(0, contentDy - gap);
+        // Intrinsic measurement must not reset the bounded viewport's scroll position.
+        if (!bc.HasBoundedHeight()) {
+            for (int i = count; i < len(children); i++) {
+                auto& child = children[i];
+                if (!IsCollapsed(child.layout)) child.size = child.layout->Layout(Loose({width, Inf}));
+            }
+            return {width, contentDy + fixedDy};
+        }
+        int available = bc.HasBoundedHeight() ? std::max(0, bc.max.dy - fixedDy) : Inf;
+        bool scrolling = contentDy > available;
+        verticalViewportDy = scrolling ? std::max(0, available - arrowsDy - gap) : available;
+        verticalMaxScroll = std::max(0, contentDy - verticalViewportDy);
+        verticalScrollY = limitValue(verticalScrollY, 0, verticalMaxScroll);
+        canScrollBefore = verticalScrollY > 0;
+        canScrollAfter = verticalScrollY < verticalMaxScroll;
+        int y = -verticalScrollY;
+        for (int i = 0; i < count; i++) {
+            auto& group = children[i];
+            if (group.size.dy <= 0) continue;
+            if (y + group.size.dy <= 0 || y >= verticalViewportDy) {
+                HideLayout(group.layout);
+            } else if (auto* column = AsToolbarGroup(group.layout)) {
+                for (int j = 0; j < len(column->children); j++) {
+                    ILayout* item = column->children[j].layout;
+                    if (IsCollapsed(item) || column->cells[j].IsEmpty()) continue;
+                    Rect cell = column->cells[j];
+                    if (y + cell.y < 0 || y + cell.Bottom() > verticalViewportDy) HideLayout(item);
+                }
+            }
+            y += group.size.dy + gap;
+        }
+        previousButton->SetVisibility(scrolling ? Visibility::Visible : Visibility::Collapse);
+        nextButton->SetVisibility(scrolling ? Visibility::Visible : Visibility::Collapse);
+        previousButton->SetIsEnabled(canScrollBefore);
+        nextButton->SetIsEnabled(canScrollAfter);
+        for (int i = count; i < len(children); i++) {
+            auto& child = children[i];
+            if (IsCollapsed(child.layout)) continue;
+            child.size = child.layout->Layout(Loose({width, Inf}));
+        }
+        return bc.Constrain({width, contentDy + fixedDy + (scrolling ? arrowsDy + gap : 0)});
+    }
+
+    void FixedControls(Vec<VirtIconButton*>& out) {
+        if (lineKind == ToolbarLineKind::Main && tb->annotationModeButton && tb->annotationModeButton->IsVisible())
+            VecAppend(out, tb->annotationModeButton);
+        for (auto* control : {OverflowButton(), nextButton, previousButton})
+            if (control && control->IsVisible()) VecAppend(out, control);
+    }
+
+    void SetVerticalBounds(Rect r) {
+        lastBounds = r;
+        int y = r.y - verticalScrollY;
+        int count = len(children) - FixedCount();
+        for (int i = 0; i < count; i++) {
+            auto& child = children[i];
+            if (child.size.dy <= 0) continue;
+            if (!IsCollapsed(child.layout)) child.layout->SetBounds({r.x, y, r.dx, child.size.dy});
+            y += child.size.dy + gap;
+        }
+        int bottom = r.Bottom();
+        Vec<VirtIconButton*> fixed;
+        FixedControls(fixed);
+        for (auto* control : fixed) {
+            Size size = control->GetIdealSize();
+            if (SingleToolbarColumn(tb)) size.dx = r.dx;
+            bottom -= size.dy;
+            control->SetBounds({r.x + (r.dx - size.dx) / 2, bottom, size.dx, size.dy});
+            bottom -= gap;
+        }
+    }
+
+    void SetBounds(Rect r) override {
+        if (AnnotationToolbarRail(tb) && lineKind == ToolbarLineKind::Main) {
+            SetRailBounds(r);
+            return;
+        }
+        if (tb->vertical) {
+            SetVerticalBounds(r);
+            return;
+        }
+        HBox::SetBounds(r);
+        int edge = rtl ? r.x : r.Right();
+        Vec<VirtIconButton*> fixed;
+        FixedControls(fixed);
+        for (auto* control : fixed) {
+            Rect button = control->lastBounds;
+            button.x = rtl ? edge : edge - button.dx;
+            control->SetBounds(button);
+            edge = rtl ? button.Right() + gap : button.x - gap;
         }
     }
 };
@@ -476,6 +1405,7 @@ static ToolbarButtonInfo gToolbarButtons[] = {
     {gIconRotateLeft, CmdRotateLeft, TrN("Rotate Left")},
     {gIconRotateRight, CmdRotateRight, TrN("Rotate Right")},
     {nullptr, 0, {}},
+    {gIconAnnotationMode, CmdAnnotationMode, TrN("Annotation Mode (Esc to exit)")},
     {kHandQuillIcon, CmdToggleEditPDF, TrN("Edit PDF")},
     {kHandToolIcon, CmdHandTool, TrN("Hand tool: drag to pan")},
     {kTextSelectToolIcon, CmdTextSelectTool, TrN("Select text: drag to select; Shift-click to extend")},
@@ -486,6 +1416,7 @@ static ToolbarButtonInfo gToolbarButtons[] = {
     {kEnhancedIconStrikeOut, CmdCreateAnnotStrikeOut, TrN("Strike Out")},
     {kEnhancedIconEraser, CmdInkEraser, TrN("Stroke eraser")},
     {gIconLaserPointer, CmdToggleLaserPointer, TrN("Laser pointer: styles and colors")},
+    {gIconAnnotSquare, CmdAnnotationShapes, TrN("Shapes: border, fill and thickness")},
     {nullptr, 0, {}},
     {kEnhancedIconBookmark, CmdToggleBookmarks, TrN("Bookmarks")},
     {kEnhancedIconStar, CmdCommandPaletteFavorites, TrN("Favorites")},
@@ -513,6 +1444,175 @@ static ToolbarButtonInfo gToolbarButtons[] = {
 
 constexpr int kButtonsCount = dimof(gToolbarButtons);
 
+static const int kShapeFillCommands[] = {CmdCreateAnnotLine,
+                                         CmdCreateAnnotPolyLine,
+                                         CmdCreateAnnotSquare,
+                                         CmdCreateAnnotCircle,
+                                         CmdCreateAnnotPolygon,
+                                         CmdCreateAnnotArrow,
+                                         CmdCreateAnnotDashedLine,
+                                         CmdCreateAnnotParabola,
+                                         CmdCreateAnnotNegativeParabola,
+                                         CmdCreateAnnotCubic,
+                                         CmdCreateAnnotNegativeCubic,
+                                         CmdCreateAnnotReciprocal,
+                                         CmdCreateAnnotNegativeReciprocal,
+                                         CmdCreateAnnotAxes2D,
+                                         CmdCreateAnnotAxes3D};
+
+static int SelectedShapeCmd() {
+    return kShapeFillCommands[gSettings
+                                  ? std::clamp(gSettings->annotations.shapeTool, 0, dimofi(kShapeFillCommands) - 1)
+                                  : 2];
+}
+
+static TempStr ShapeToolTitle() {
+    const char* names[] = {"Line",
+                           "Polyline",
+                           "Rectangle",
+                           "Ellipse",
+                           "Polygon",
+                           "Arrow",
+                           "Dashed line",
+                           "Parabola",
+                           "Negative parabola",
+                           "Cubic curve",
+                           "Negative cubic curve",
+                           "Reciprocal curve",
+                           "Negative reciprocal curve",
+                           "2D axes",
+                           "3D axes"};
+    int selected = gSettings ? std::clamp(gSettings->annotations.shapeTool, 0, dimofi(names) - 1) : 2;
+    return fmt("%s (%s)", Tr("Shapes"), Tr(names[selected]));
+}
+
+static const char* ShapeToolIcon() {
+    if (MathShapeForCommand(SelectedShapeCmd()) >= 0) return gIconAnnotPolyLine;
+    const char* icons[] = {gIconAnnotLine,    gIconAnnotPolyLine, gIconAnnotSquare, gIconAnnotCircle,
+                           gIconAnnotPolygon, gIconArrowUp,       gIconAnnotLine};
+    return icons[gSettings ? std::clamp(gSettings->annotations.shapeTool, 0, dimofi(icons) - 1) : 2];
+}
+
+struct ShapeIconCacheEntry {
+    int cmd = 0;
+    int size = 0;
+    Color color = 0;
+    Pixmap* pixmap = nullptr;
+    int style = 0;
+    Color fill = kColorUnset;
+};
+
+static Vec<ShapeIconCacheEntry> gShapeIconCache;
+
+void FreeShapeToolIcons() {
+    for (auto& entry : gShapeIconCache) delete entry.pixmap;
+    VecReset(gShapeIconCache);
+}
+
+static bool IsLineVariant(int cmd) {
+    return cmd == CmdCreateAnnotArrow || cmd == CmdCreateAnnotDashedLine || MathShapeForCommand(cmd) >= 0;
+}
+
+static Pixmap* LineVariantIcon(int cmd, int size, Color color, Color fill = kColorUnset) {
+    for (auto& entry : gShapeIconCache)
+        if (entry.cmd == cmd && entry.size == size && entry.color == color && entry.fill == fill) return entry.pixmap;
+    Gdiplus::Bitmap image(size, size, PixelFormat32bppPARGB);
+    {
+        Gdiplus::Graphics graphics(&image);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        graphics.Clear(Gdiplus::Color(0, 0, 0, 0));
+        float scale = size / 24.f;
+        graphics.ScaleTransform(scale, scale);
+        Gdiplus::Pen pen(GdiRgbFromColor(color), 1.8f);
+        pen.SetStartCap(Gdiplus::LineCapRound);
+        pen.SetEndCap(Gdiplus::LineCapRound);
+        if (cmd == CmdCreateAnnotDashedLine) pen.SetDashStyle(Gdiplus::DashStyleDash);
+        int math = MathShapeForCommand(cmd);
+        if (math >= 0) {
+            Vec<int> counts;
+            Vec<PointF> points;
+            BuildMathShape(math, {3, 3, 18, 18}, counts, points);
+            int first = 0;
+            for (int count : counts) {
+                for (int i = first + 1; i < first + count; i++)
+                    graphics.DrawLine(&pen, points[i - 1].x, points[i - 1].y, points[i].x, points[i].y);
+                first += count;
+            }
+        } else
+            graphics.DrawLine(&pen, 5.f, 19.f, 19.f, 5.f);
+        if (cmd == CmdCreateAnnotArrow) {
+            PointF left, right;
+            BuildArrowHead({5, 19}, {19, 5}, 1, left, right);
+            Gdiplus::PointF head[] = {{19.f, 5.f}, {left.x, left.y}, {right.x, right.y}};
+            if (fill != kColorUnset) {
+                Gdiplus::SolidBrush interior(
+                    Gdiplus::Color(GetAlpha(fill), GetRed(fill), GetGreen(fill), GetBlue(fill)));
+                graphics.FillPolygon(&interior, head, dimof(head));
+            }
+            graphics.DrawPolygon(&pen, head, dimof(head));
+        }
+    }
+    Pixmap* pixmap = PixmapFromGdiplus(&image);
+    if (pixmap) VecAppend(gShapeIconCache, ShapeIconCacheEntry{cmd, size, color, pixmap, 0, fill});
+    return pixmap;
+}
+
+static Pixmap* ShapeToolPixmap(int size, Color color) {
+    int cmd = SelectedShapeCmd();
+    return IsLineVariant(cmd)
+               ? LineVariantIcon(cmd, size, color)
+               : GetCachedPixmapForSvg(Str(ShapeToolIcon()), size, size, color, ThemeControlBackgroundColor());
+}
+
+Pixmap* AnnotationModeIconPixmap(int size, Color color, int style) {
+    style = limitValue(style > 0 ? style : gSettings ? gSettings->annotationModeIconStyle : 1, 1, 2);
+    for (auto& entry : gShapeIconCache)
+        if (entry.cmd == CmdAnnotationMode && entry.size == size && entry.color == color && entry.style == style)
+            return entry.pixmap;
+    Gdiplus::Bitmap image(size, size, PixelFormat32bppPARGB);
+    {
+        Gdiplus::Graphics graphics(&image);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        graphics.Clear(Gdiplus::Color(0, 0, 0, 0));
+        float scale = size / 24.f;
+        graphics.ScaleTransform(scale, scale);
+        Gdiplus::Color ink = GdiRgbFromColor(color);
+        Gdiplus::Pen pen(ink, 1.75f);
+        pen.SetStartCap(Gdiplus::LineCapRound);
+        pen.SetEndCap(Gdiplus::LineCapRound);
+        pen.SetLineJoin(Gdiplus::LineJoinRound);
+        Gdiplus::GraphicsPath frame;
+        frame.AddArc(3.f, 3.f, 4.f, 4.f, 180.f, 90.f);
+        frame.AddArc(17.f, 3.f, 4.f, 4.f, 270.f, 90.f);
+        frame.AddArc(17.f, 12.f, 4.f, 4.f, 0.f, 90.f);
+        frame.AddArc(3.f, 12.f, 4.f, 4.f, 90.f, 90.f);
+        frame.CloseFigure();
+        graphics.DrawPath(&pen, &frame);
+        graphics.DrawLine(&pen, 12.f, 16.f, 12.f, 21.f);
+        graphics.DrawLine(&pen, 8.f, 21.f, 16.f, 21.f);
+        Gdiplus::SolidBrush fill(ink);
+        if (style == 1) {
+            Gdiplus::PointF body[] = {{9.8f, 11.1f}, {13.3f, 7.6f}, {14.9f, 9.2f}, {11.4f, 12.7f}, {8.9f, 13.5f}};
+            Gdiplus::PointF cap[] = {{14.5f, 6.4f}, {16.1f, 8.f}, {15.3f, 8.8f}, {13.7f, 7.2f}};
+            graphics.FillPolygon(&fill, body, dimof(body));
+            graphics.FillPolygon(&fill, cap, dimof(cap));
+        } else {
+            pen.SetWidth(1.15f);
+            Gdiplus::PointF outline[] = {{8.3f, 13.5f}, {9.4f, 10.9f}, {14.4f, 5.9f},
+                                         {16.f, 7.5f},  {11.f, 12.5f}, {8.3f, 13.5f}};
+            graphics.DrawLines(&pen, outline, dimof(outline));
+            pen.SetWidth(.95f);
+            graphics.DrawLine(&pen, 13.f, 7.3f, 14.6f, 8.9f);
+            graphics.DrawLine(&pen, 9.4f, 10.9f, 11.f, 12.5f);
+            Gdiplus::PointF tip[] = {{8.3f, 13.5f}, {9.1f, 11.7f}, {10.1f, 12.8f}};
+            graphics.FillPolygon(&fill, tip, dimof(tip));
+        }
+    }
+    Pixmap* pixmap = PixmapFromGdiplus(&image);
+    if (pixmap) VecAppend(gShapeIconCache, ShapeIconCacheEntry{CmdAnnotationMode, size, color, pixmap, style});
+    return pixmap;
+}
+
 static ToolbarButtonInfo gPdfAnnotationButtons[] = {
     {kHandToolIcon, CmdHandTool, TrN("Hand tool: drag to pan")},
     {kTextSelectToolIcon, CmdTextSelectTool, TrN("Select text: drag to select; Shift-click to extend")},
@@ -527,11 +1627,7 @@ static ToolbarButtonInfo gPdfAnnotationButtons[] = {
     {gIconAnnotText, CmdCreateAnnotText, TrN("Text")},
     {gIconAnnotFreeText, CmdCreateAnnotFreeText, TrN("Free Text")},
     {nullptr, 0, {}},
-    {gIconAnnotLine, CmdCreateAnnotLine, TrN("Line")},
-    {gIconAnnotPolyLine, CmdCreateAnnotPolyLine, TrN("Polyline")},
-    {gIconAnnotSquare, CmdCreateAnnotSquare, TrN("Square")},
-    {gIconAnnotCircle, CmdCreateAnnotCircle, TrN("Circle")},
-    {gIconAnnotPolygon, CmdCreateAnnotPolygon, TrN("Polygon")},
+    {gIconAnnotSquare, CmdAnnotationShapes, TrN("Shapes")},
     {nullptr, 0, {}},
     {gIconAnnotRedact, CmdCreateAnnotRedact, TrN("Redact")},
     {gIconApplyRedactions, CmdApplyRedactions, TrN("Apply Redactions")},
@@ -618,9 +1714,17 @@ static int ToolbarCyPad() {
     return UiScalePx(4);
 }
 
+static int ToolbarOuterPad() {
+    return std::max(1, UiScalePx(6) / 5);
+}
+
+static int ToolbarSidePad() {
+    return std::max(1, UiScalePx(8) / 5);
+}
+
 static int ToolbarRowDy(int iconSize) {
-    return std::max(iconSize + (2 * ToolbarCyPad()), PlatformFontLineHeight(GetAppFont()) * 2 + UiScalePx(4)) +
-           UiScalePx(12);
+    return std::max(iconSize + (2 * ToolbarCyPad()), PlatformFontLineHeight(GetAppFont()) + UiScalePx(4)) +
+           2 * ToolbarOuterPad();
 }
 
 static bool HasToolbarButtonContent(const ToolbarButtonInfo& tbi) {
@@ -655,7 +1759,7 @@ VirtCtrl* ToolbarItemFromPoint(MainWindow* win, Point pt) {
     if (!tb) {
         return nullptr;
     }
-    for (VirtCtrl* button : {tb->overflowButton, tb->annotationOverflowButton}) {
+    for (VirtCtrl* button : {tb->overflowButton, tb->annotationOverflowButton, tb->annotationModeButton}) {
         if (button && button->IsVisible() && button->BoundsInWindow().Contains(pt)) return button;
     }
     for (ToolbarLine* line : {tb->mainRow, tb->annotationLine}) {
@@ -786,6 +1890,7 @@ static bool SetToolbarButtonHiddenByIdx(MainWindow* win, int idx, bool isHidden)
         if (win->pageEdit) {
             win->pageEdit->SetVisibility(want);
         }
+        if (tb->pageBox) tb->pageBox->SetVisibility(want);
         if (tb->pageTotal) {
             tb->pageTotal->SetVisibility(want);
         }
@@ -842,7 +1947,11 @@ static void ApplyToolbarOrder(ToolbarButtonInfo* buttons, int count, Str order) 
 
 static void PopulateAnnotationOrder() {
     for (int i = 0; i < kPdfAnnotationButtonsCount; i++) gAnnotationButtons[i] = gPdfAnnotationButtons[i];
-    ApplyToolbarOrder(gAnnotationButtons, kPdfAnnotationButtonsCount, gSettings->toolbarAnnotationOrder);
+    Str order = gSettings->toolbarAnnotationOrder;
+    for (Str old : {StrL("CmdCreateAnnotLine"), StrL("CmdCreateAnnotPolyLine"), StrL("CmdCreateAnnotSquare"),
+                    StrL("CmdCreateAnnotCircle"), StrL("CmdCreateAnnotPolygon")})
+        order = str::ReplaceTemp(order, old, StrL("CmdAnnotationShapes"));
+    ApplyToolbarOrder(gAnnotationButtons, kPdfAnnotationButtonsCount, order);
 }
 
 // Work out which built-in buttons the toolbar has, and in which order. Empty
@@ -1159,7 +2268,6 @@ static void SetPdfAnnotationsToolbarVisible(MainWindow* win, bool visible) {
     tb->annotationExpanded = visible;
     for (auto* group : tb->annotationGroups) group->SetVisibility(want);
     SetToolbarButtonCheckedState(win, CmdToggleEditPDF, visible);
-    ToolbarSetHeight(win, tb->rowDy);
     tb->host->Relayout();
     tb->host->Invalidate(true);
     if (visible) {
@@ -1171,6 +2279,16 @@ static void SetPdfAnnotationsToolbarVisible(MainWindow* win, bool visible) {
 
 // TODO: this is called too often
 // TODO: also set checked state instead of calling SetToolbarButtonCheckedState() all over
+static void UpdateZoomFieldText(MainWindow* win) {
+    auto* tb = win->toolbarVirt;
+    Edit* zoom = tb ? tb->zoomEdit : nullptr;
+    if (!zoom) return;
+    zoom->SetIsEnabled(win->IsDocLoaded());
+    if (GetFocus() != zoom->hwnd && win->IsDocLoaded())
+        zoom->SetText(win->annotationMode && tb->vertical ? CompactZoomText(win->ctrl->GetZoomVirtual(true))
+                                                          : fmt("%.1f%%", win->ctrl->GetZoomVirtual(true)));
+}
+
 void ToolbarUpdateStateForWindow(MainWindow* win, bool setButtonsVisibility) {
     if (win->toolbarVirt && win->toolbarVirt->mainRow) win->toolbarVirt->mainRow->Restore();
     if (win->toolbarVirt && win->toolbarVirt->annotationLine) win->toolbarVirt->annotationLine->Restore();
@@ -1187,7 +2305,8 @@ void ToolbarUpdateStateForWindow(MainWindow* win, bool setButtonsVisibility) {
         // separators are always drawn. Which ones to drop is decided below,
         // by position, not by command availability.
         if (setButtonsVisibility && cmdId != WarningMsgId && cmdId != 0) {
-            bool hide = !IsCmdAvailable(win, cmdId, ctx) || ToolbarItemHidden(cmdId);
+            bool hide = (cmdId == CmdAnnotationMode && win->annotationMode) || !IsCmdAvailable(win, cmdId, ctx) ||
+                        ToolbarItemHidden(cmdId);
             visibilityChanged |= SetToolbarButtonHiddenByIdx(win, i, hide);
         }
         if (!HasToolbarButtonContent(tb)) {
@@ -1215,15 +2334,21 @@ void ToolbarUpdateStateForWindow(MainWindow* win, bool setButtonsVisibility) {
         for (int i = 0; presets && i < len(win->toolbarVirt->pinnedItems) && i < len(*presets); i++)
             win->toolbarVirt->pinnedItems[i]->SetIsEnabled(
                 IsCmdEnabled(win, PinnedToolCommand((*presets)[i]->tool), ctx));
-        if (Edit* zoom = win->toolbarVirt->zoomEdit) {
-            zoom->SetIsEnabled(win->IsDocLoaded());
-            if (GetFocus() != zoom->hwnd && win->IsDocLoaded())
-                zoom->SetText(fmt("%.1f%%", win->ctrl->GetZoomVirtual(true)));
-        }
+        UpdateZoomFieldText(win);
     }
     SetToolbarButtonCheckedState(win, CmdCreateAnnotInk, IsPlacingInkAnnotation(win) && win->inkEraseMode == 0);
     SetToolbarButtonCheckedState(win, CmdInkEraser, win->inkEraseMode == 1);
     SetToolbarButtonCheckedState(win, CmdToggleLaserPointer, IsLaserPointerActive(win));
+    SetToolbarButtonCheckedState(win, CmdAnnotationMode, win->annotationMode);
+    if (win->toolbarVirt && win->toolbarVirt->annotationModeButton) {
+        auto* mode = win->toolbarVirt->annotationModeButton;
+        if (win->annotationMode)
+            mode->SetVisibility(Visibility::Visible);
+        else if (VecFind(win->toolbarVirt->items, (VirtCtrl*)mode) < 0)
+            mode->SetVisibility(Visibility::Collapse);
+        mode->SetIsEnabled(win->annotationMode || win->IsDocLoaded());
+        mode->isSelected = win->annotationMode;
+    }
     SetToolbarButtonCheckedState(win, CmdHandTool, win->handTool);
     SetToolbarButtonCheckedState(win, CmdTextSelectTool, win->textSelectTool);
     SetToolbarButtonCheckedState(win, CmdAnnotationLasso, win->annotationLasso.active);
@@ -1387,7 +2512,12 @@ void EnablePdfAnnotationsToolbar(MainWindow* win) {
 }
 
 // toolbar mode for this window: Fullscreen.Toolbar in fullscreen, else Toolbar
+int ToolbarPositionForWindow(MainWindow* win) {
+    return win->annotationMode ? win->annotationToolbarPosition : ToolbarPositionFromPrefs();
+}
+
 static int ToolbarModeForWindow(MainWindow* win) {
+    if (win->annotationMode) return kToolbarShow;
     if (win->isFullScreen) {
         return FullscreenToolbarModeFromPrefs();
     }
@@ -1673,6 +2803,7 @@ void UpdateToolbarPageText(MainWindow* win, int pageCount, bool updateOnly) {
     }
 
     bool hasChapters = ShowChapterUi(win->ctrl);
+    if (tb->pageBox) tb->pageBox->UpdateTotal();
     if (tb->pageLabel) {
         bool compact = !hasChapters && str::IsEmptyOrWhiteSpace(gSettings->toolbarCustomLayout);
         tb->pageLabel->SetText(compact ? Str{} : hasChapters ? Tr("Chapter:") : Tr("Page:"));
@@ -1874,9 +3005,15 @@ static void RefreshToolbarIcons(MainWindow* win) {
         if (!HasToolbarButtonContent(bi)) {
             continue;
         }
-        Str svg = bi.svgIcon ? bi.svgIcon : Str(bi.icon);
-        ib->pixmap = GetCachedPixmapForSvg(svg, sz, sz, w->id == CmdOpenFile ? ThemeBrandTextColor() : fg, TbBgColor());
-        ib->pixmapDisabled = GetCachedPixmapForSvg(svg, sz, sz, dis, TbBgColor());
+        Str svg = bi.svgIcon ? bi.svgIcon : Str(bi.cmdId == CmdAnnotationShapes ? ShapeToolIcon() : bi.icon);
+        ib->pixmap =
+            len(bi.svgIcon) == 0 && bi.cmdId == CmdAnnotationMode ? AnnotationModeIconPixmap(sz, fg)
+            : bi.cmdId == CmdAnnotationShapes
+                ? ShapeToolPixmap(sz, fg)
+                : GetCachedPixmapForSvg(svg, sz, sz, w->id == CmdOpenFile ? ThemeBrandTextColor() : fg, TbBgColor());
+        ib->pixmapDisabled = len(bi.svgIcon) == 0 && bi.cmdId == CmdAnnotationMode ? AnnotationModeIconPixmap(sz, dis)
+                             : bi.cmdId == CmdAnnotationShapes                     ? ShapeToolPixmap(sz, dis)
+                                                               : GetCachedPixmapForSvg(svg, sz, sz, dis, TbBgColor());
     }
     for (int i = 0; i < len(tb->annotationItems); i++) {
         VirtCtrl* w = tb->annotationItems[i];
@@ -1889,8 +3026,30 @@ static void RefreshToolbarIcons(MainWindow* win) {
         if (!HasToolbarButtonContent(bi)) {
             continue;
         }
-        ib->pixmap = GetCachedPixmapForSvg(Str(bi.icon), sz, sz, fg, TbBgColor());
-        ib->pixmapDisabled = GetCachedPixmapForSvg(Str(bi.icon), sz, sz, dis, TbBgColor());
+        ib->pixmap = bi.cmdId == CmdAnnotationShapes ? ShapeToolPixmap(sz, fg)
+                                                     : GetCachedPixmapForSvg(Str(bi.icon), sz, sz, fg, TbBgColor());
+        ib->pixmapDisabled = bi.cmdId == CmdAnnotationShapes
+                                 ? ShapeToolPixmap(sz, dis)
+                                 : GetCachedPixmapForSvg(Str(bi.icon), sz, sz, dis, TbBgColor());
+    }
+    if (tb->overflowButton) {
+        tb->overflowButton->pixmap = GetCachedPixmapForSvg(Str(kToolSettingsIcon), sz, sz, fg, TbBgColor());
+        tb->overflowButton->pixmapDisabled = GetCachedPixmapForSvg(Str(kToolSettingsIcon), sz, sz, dis, TbBgColor());
+    }
+    if (tb->annotationModeButton) {
+        tb->annotationModeButton->pixmap = AnnotationModeIconPixmap(sz, fg);
+        tb->annotationModeButton->pixmapDisabled = AnnotationModeIconPixmap(sz, dis);
+    }
+    for (auto* control : tb->pinnedItems) {
+        auto* button = AsVirtIconButton(control);
+        if (!button) continue;
+        auto* presets = gSettings->pinnedAnnotationTools;
+        int index = button->id - (CmdLast + 2000);
+        if (!presets || index < 0 || index >= len(*presets) ||
+            !str::Eq((*presets)[index]->tool, StrL("CmdAnnotationMode")))
+            continue;
+        button->pixmap = AnnotationModeIconPixmap(sz, fg);
+        button->pixmapDisabled = AnnotationModeIconPixmap(sz, dis);
     }
     if (tb->pageLabel) {
         tb->pageLabel->SetColor(kColText, TbTextColor());
@@ -1933,6 +3092,8 @@ static VirtCtrl* ToolbarItemForCmd(MainWindow* win, int cmdId) {
     if (!tb) {
         return nullptr;
     }
+    if (cmdId == CmdAnnotationMode && tb->annotationModeButton && tb->annotationModeButton->IsVisible())
+        return tb->annotationModeButton;
     if (cmdId == ToolbarOverflowId) return tb->overflowButton;
     if (cmdId == ToolbarAnnotOverflowId) return tb->annotationOverflowButton;
     for (VirtCtrl* w : tb->items) {
@@ -1953,6 +3114,8 @@ static Rect ToolbarButtonRect(MainWindow* win, int cmdId) {
     if (!tb) {
         return {};
     }
+    if (cmdId == CmdAnnotationMode && tb->annotationModeButton && tb->annotationModeButton->IsVisible())
+        return tb->annotationModeButton->BoundsInWindow();
     if (cmdId == ToolbarOverflowId && tb->overflowButton && tb->overflowButton->IsVisible()) {
         return tb->overflowButton->BoundsInWindow();
     }
@@ -2017,7 +3180,7 @@ Rect GetToolbarButtonScreenRect(MainWindow* win, int cmdId) {
 // command id, so duplicate command ids silently collapse into one tooltip.
 static TempStr HoverDropdownStateTemp(MainWindow* win);
 
-TempStr ToolbarButtonsResultTemp(int* exitCodeOut) {
+TempStr ToolbarButtonsResultTemp(int* exitCodeOut, Str action) {
     str::Builder out;
     MainWindow* win = len(gWindows) == 0 ? nullptr : gWindows[0];
     if (!win || !ToolbarHost(win)) {
@@ -2026,6 +3189,29 @@ TempStr ToolbarButtonsResultTemp(int* exitCodeOut) {
         return ToStrTemp(out);
     }
     ToolbarVirt* tb = win->toolbarVirt;
+    // Observe synthetic hover before TrackMouseEvent delivers WM_MOUSELEAVE
+    // for the untouched desktop cursor. The test drives the real edit handler.
+    if (str::Eq(action, StrL("page-hover")) && win->pageEdit) {
+        SendMessageW(win->pageEdit->hwnd, WM_MOUSELEAVE, 0, 0);
+        SendMessageW(win->pageEdit->hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(3, 3));
+    } else if (str::Eq(action, StrL("page-focus")) && win->pageEdit) {
+        HwndSetFocus(win->pageEdit->hwnd);
+    } else if (str::Eq(action, StrL("dock-left")) || str::Eq(action, StrL("dock-right"))) {
+        // Keep the three drag messages together; real desktop mouse moves
+        // between cross-process test calls would otherwise cancel capture.
+        Rect frame = HwndClientRect(win->hwndFrame);
+        Rect bar = HwndClientRect(win->hwndToolbar);
+        Point start = tb->vertical ? Point{bar.dx / 2, UiScalePx(7)} : Point{UiScalePx(7), bar.dy / 2};
+        Point target{str::Eq(action, StrL("dock-left")) ? 1 : frame.dx - 1, frame.dy / 2};
+        target = HwndMapWindowPoint(win->hwndFrame, win->hwndToolbar, target);
+        SendMessageW(win->hwndToolbar, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(start.x, start.y));
+        SendMessageW(win->hwndToolbar, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(target.x, target.y));
+        SendMessageW(win->hwndToolbar, WM_LBUTTONUP, 0, MAKELPARAM(target.x, target.y));
+    } else if (len(action) > 0) {
+        *exitCodeOut = 1;
+        out.Append(StrL("ERROR unknown-toolbar-action\n"));
+        return ToStrTemp(out);
+    }
     int n = tb ? len(tb->items) : 0;
     int nTools = 0;
     for (int i = 0; i < n; i++) {
@@ -2034,11 +3220,75 @@ TempStr ToolbarButtonsResultTemp(int* exitCodeOut) {
         }
     }
     out.Append(fmt("buttons=%d tooltipTools=%d\n", n, nTools));
+    out.Append(fmt("annotationMode=%d dock=%d vertical=%d\n", win->annotationMode ? 1 : 0,
+                   ToolbarPositionForWindow(win), tb->vertical ? 1 : 0));
+    out.Append(fmt("annotationColumns=%d scroll=%d,%d viewport=%d\n", tb->annotationColumns,
+                   tb->mainRow->verticalScrollY, tb->mainRow->verticalMaxScroll, tb->mainRow->verticalViewportDy));
+    out.Append(fmt("toolbarStyle=%d\nthreeColumnPageStyle=%d\n", gSettings->annotationToolbarStyle,
+                   gSettings->annotationThreeColumnPageStyle));
+    if (AnnotationToolbarRail(tb)) {
+        ToolbarLine* line = tb->mainRow;
+        out.Append(fmt("railScroll offset=%d max=%d viewport=%d content=%d\n", line->verticalScrollY,
+                       line->verticalMaxScroll, line->verticalViewportDy, line->railContentDy));
+        for (auto& cell : line->railCells) {
+            Str role = StrL("tool");
+            if (cell.role == ToolbarRailRole::Page) role = StrL("page");
+            if (cell.role == ToolbarRailRole::Chapter) role = StrL("chapter");
+            if (cell.role == ToolbarRailRole::Zoom) role = StrL("zoom");
+            if (cell.role == ToolbarRailRole::Pin) role = StrL("pin");
+            Rect rect = cell.bounds;
+            rect.x += line->lastBounds.x;
+            rect.y += line->lastBounds.y - line->verticalScrollY;
+            out.Append(fmt("railCell role=%s cmd=%d pinIndex=%d group=%d rect=%d,%d,%d,%d visible=%d\n", role, cell.cmd,
+                           cell.pinIndex, cell.group, rect.x, rect.y, rect.dx, rect.dy,
+                           cell.layout->GetVisibility() == Visibility::Visible ? 1 : 0));
+        }
+    }
+#if IS_DEBUG
+    out.Append(ScrollMenuStateTemp());
+#endif
+    out.Append(fmt("toolbarHwnd=%p\n", (const void*)win->hwndToolbar));
+    Rect toolbarClient = HwndClientRect(win->hwndToolbar);
+    out.Append(fmt("toolbarHeight client=%d intrinsic=%d base=%d\n", toolbarClient.dy,
+                   tb->host->layout->MinIntrinsicHeight(toolbarClient.dx), tb->rowDy));
+    for (auto* button : {tb->mainRow->nextButton, tb->overflowButton}) {
+        if (!button || !button->IsVisible()) continue;
+        Rect rect = button->BoundsInWindow();
+        out.Append(fmt("footer=%s rect=%d,%d,%d,%d\n", button == tb->overflowButton ? StrL("commands") : StrL("scroll"),
+                       rect.x, rect.y, rect.dx, rect.dy));
+    }
+    for (auto* edit : {win->pageEdit, tb->zoomEdit}) {
+        if (!edit) continue;
+        Rect rect = edit->lastBounds;
+        Str name = edit == win->pageEdit ? StrL("pageField") : StrL("zoomField");
+        out.Append(fmt("%s hwnd=%lld hidden=%d rect=%d,%d,%d,%d text=%s\n", name, (i64)(LONG_PTR)edit->hwnd,
+                       edit->IsVisible() ? 0 : 1, rect.x, rect.y, rect.dx, rect.dy, edit->GetTextTemp()));
+    }
+    if (win->pageEdit) {
+        auto* field = (ToolbarLocationEdit*)win->pageEdit;
+        out.Append(fmt("pageDetails=%s\n", field->DetailsText()));
+        out.Append(fmt("pageDetailsTip=%lld visible=%d\n",
+                       (i64)(LONG_PTR)(field->detailsTip ? field->detailsTip->hwnd : nullptr),
+                       field->detailsTip && HwndIsVisible(field->detailsTip->hwnd) ? 1 : 0));
+    }
+    if (tb->pageBox) {
+        Rect rect = tb->pageBox->lastBounds;
+        out.Append(fmt("pageStack style=%d rect=%d,%d,%d,%d total=%s active=%d\n", tb->pageBox->Style(), rect.x, rect.y,
+                       rect.dx, rect.dy, tb->pageBox->total->s,
+                       tb->pageBox->Active() && tb->pageBox->GetVisibility() == Visibility::Visible ? 1 : 0));
+    }
+    if (tb->annotationModeButton) {
+        Rect r = tb->annotationModeButton->BoundsInWindow();
+        out.Append(fmt("modeButton cmd=%d hidden=%d rect=%d,%d,%d,%d\n", CmdAnnotationMode,
+                       tb->annotationModeButton->IsVisible() ? 0 : 1, r.x, r.y, r.Right(), r.Bottom()));
+    }
     int toolIdx = 0;
     for (int i = 0; i < n; i++) {
         VirtCtrl* w = tb->items[i];
         Rect r = w ? w->BoundsInWindow() : Rect{};
         bool hidden = !w || w->GetVisibility() != Visibility::Visible;
+        if (!hidden && AsVirtIconButton(w))
+            out.Append(fmt("toolCell cmd=%d rect=%d,%d,%d,%d\n", w->id, r.x, r.y, r.dx, r.dy));
         // Match the old Win32 dump: TBIF_TEXT. Built-in buttons store the
         // tooltip (with accelerator); custom ones stored the raw name.
         Str text{};
@@ -2137,7 +3387,22 @@ static void OnToolbarButtonClicked(MainWindow* win, VirtMouseEvent* ev) {
         ev->didHandle = true;
         return;
     }
+    if (w->IsEnabled() && ev->button == 0 && cmdId == CmdAnnotationShapes) {
+        if (win->toolbarVirt && win->toolbarVirt->hoverCmdId == cmdId) {
+            HideToolbarHoverDropdown(win);
+            win->toolbarVirt->hoverPendingCmdId = cmdId;
+        } else {
+            ShowShapesToolbarPopup(win);
+        }
+        ev->didHandle = true;
+        return;
+    }
     if (w->IsEnabled() && ev->button == 0 && cmdId == CmdSinglePageView) {
+        ShowToolbarButtonDropdown(win, cmdId);
+        ev->didHandle = true;
+        return;
+    }
+    if (w->IsEnabled() && ev->button == 0 && cmdId == CmdAnnotationLasso) {
         ShowToolbarButtonDropdown(win, cmdId);
         ev->didHandle = true;
         return;
@@ -2785,9 +4050,10 @@ static void OpenHoverDropdown(MainWindow* win, int cmdId) {
     VirtHost::CreateArgs args;
     args.parent = win->hwndFrame;
     args.className = WStrL(L"SumatraToolbarHoverMenu");
-    if (IsAnnotColorCmd(cmdId) || cmdId == CmdToggleLaserPointer) {
+    if (IsAnnotColorCmd(cmdId) || cmdId == CmdToggleLaserPointer || cmdId == CmdAnnotationShapes) {
         auto* button = ToolbarItemForCmd(win, cmdId);
-        args.title = cmdId == CmdCreateAnnotInk       ? Tr("Pen types")
+        args.title = cmdId == CmdAnnotationShapes     ? ShapeToolTitle()
+                     : cmdId == CmdCreateAnnotInk     ? Tr("Pen types")
                      : cmdId == CmdToggleLaserPointer ? Tr("Laser pointer")
                      : button                         ? button->tooltip
                                                       : Tr("Annotation");
@@ -2865,7 +4131,7 @@ static bool ShowToolbarButtonDropdown(MainWindow* win, int cmdId) {
     }
 
     if (auto* ib = AsVirtIconButton(ToolbarItemForCmd(win, cmdId))) {
-        if (ib->hasDropdown) {
+        if (ib->hasDropdown && cmdId != CmdAnnotationShapes) {
             ShowTtsVoiceMenu(win, GetToolbarButtonScreenRect(win, cmdId));
             return true;
         }
@@ -3146,49 +4412,18 @@ static void BuildLayoutHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     ev->centerOnButton = true;
 }
 
-static void LassoColorPicked(MainWindow* win, Color color) {
-    RecolorAnnotationLasso(win, color);
-}
-
-static void ShowLassoColorPicker(MainWindow* win) {
-    if (!IsMainWindowValidAndNotClosing(win) || len(win->annotationLasso.selected) == 0) return;
-    Rect anchor = GetToolbarButtonScreenRect(win, CmdAnnotationLasso);
-    HideToolbarHoverDropdown(win);
-    ShowAnnotColorPopup(win, anchor, InkPenColor(win), false, Tr("Selection color"), MkFunc1(LassoColorPicked, win));
-}
-
-static void OnLassoColorClicked(MainWindow* win, VirtMouseEvent* ev) {
-    if (ev->button != 0) return;
-    uitask::Post(MkFunc0(ShowLassoColorPicker, win), "Lasso selection color");
-    ev->didHandle = true;
-}
-
 static void BuildLassoHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
-    bool selected = len(win->annotationLasso.selected) > 0;
     bool rectangular = win->annotationLasso.rectangular;
-    bool canRotate = selected && AnnotationLassoCanRotate(win);
     Vec<ToolbarHoverMenuItem> items;
     VecAppend(items, {Str(kLassoToolIcon), Tr("Freehand selection"), CmdLassoFreehand, true, !rectangular});
     VecAppend(items, {Str(gIconAnnotSquare), Tr("Rectangle selection"), CmdLassoRectangle, true, rectangular});
-    VecAppend(items, {Str(gIconTrash), Tr("Delete selected annotations"), CmdLassoDelete, selected});
-    VecAppend(items, {Str(gIconRotateLeft), Tr("Rotate selection left"), CmdLassoRotateLeft, canRotate});
-    VecAppend(items, {Str(gIconRotateRight), Tr("Rotate selection right"), CmdLassoRotateRight, canRotate});
-    VecAppend(items, {Str(gIconCopy), Tr("Duplicate selection"), CmdLassoDuplicate, selected});
-    VecAppend(items, {Str(GetColorPickerIconSvg()), Tr("Selection color"), CmdLassoRecolor, selected});
-    VecAppend(items, {Str(kEnhancedIconInk), Tr("Thinner strokes"), CmdLassoThinner, selected});
-    VecAppend(items, {Str(kEnhancedIconInk), Tr("Thicker strokes"), CmdLassoThicker, selected});
     ev->layout = NewToolbarHoverMenu(win, items);
-    Vec<VirtCtrl*> controls;
-    CollectPaletteControls(ev->layout, controls);
-    for (VirtCtrl* control : controls)
-        if (control->id == CmdLassoRecolor) control->onClick = MkFunc1(OnLassoColorClicked, win);
 }
 
 void ShowLassoToolbarActions(MainWindow* win) {
-    if (!win || !win->toolbarVirt || len(win->annotationLasso.selected) == 0) return;
-    RevealToolbarTool(win, CmdAnnotationLasso);
+    if (!win || len(win->annotationLasso.selected) == 0) return;
     HideToolbarHoverDropdown(win);
-    ShowToolbarButtonDropdown(win, CmdAnnotationLasso);
+    ShowLassoSelectionToolbar(win);
 }
 
 static void BuildSaveHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
@@ -3223,13 +4458,15 @@ constexpr int kAnnotColorsPad = 10;
 // the buttons that offer the preset colors
 // Redact is left out: its color is the box that covers the text, not a choice
 static const int kAnnotColorCmds[] = {
-    CmdAnnotationHighlightBrush, CmdCreateAnnotHighlight, CmdCreateAnnotUnderline, CmdCreateAnnotSquiggly,
-    CmdCreateAnnotStrikeOut,     CmdCreateAnnotText,      CmdCreateAnnotFreeText,  CmdCreateAnnotLine,
-    CmdCreateAnnotPolyLine,      CmdCreateAnnotSquare,    CmdCreateAnnotCircle,    CmdCreateAnnotPolygon,
-    CmdCreateAnnotInk,           CmdCreateAnnotStamp,     CmdCreateAnnotCaret,     CmdCreateAnnotFileAttachment,
+    CmdAnnotationHighlightBrush, CmdCreateAnnotHighlight,  CmdCreateAnnotUnderline, CmdCreateAnnotSquiggly,
+    CmdCreateAnnotStrikeOut,     CmdCreateAnnotText,       CmdCreateAnnotFreeText,  CmdCreateAnnotLine,
+    CmdCreateAnnotPolyLine,      CmdCreateAnnotSquare,     CmdCreateAnnotCircle,    CmdCreateAnnotPolygon,
+    CmdCreateAnnotInk,           CmdCreateAnnotStamp,      CmdCreateAnnotCaret,     CmdCreateAnnotFileAttachment,
+    CmdCreateAnnotArrow,         CmdCreateAnnotDashedLine,
 };
 
 static bool IsAnnotColorCmd(int cmdId) {
+    if (MathShapeForCommand(cmdId) >= 0) return true;
     for (int id : kAnnotColorCmds) {
         if (id == cmdId) {
             return true;
@@ -3243,6 +4480,7 @@ static ParsedColor* AnnotPresetColorSetting(int cmdId) {
         return nullptr;
     }
     Annotations& a = gSettings->annotations;
+    if (MathShapeForCommand(cmdId) >= 0) return &a.lineColor;
     switch (cmdId) {
         // the highlighter makes highlight annotations
         case CmdAnnotationHighlightBrush:
@@ -3260,6 +4498,8 @@ static ParsedColor* AnnotPresetColorSetting(int cmdId) {
             // the text's color; the box behind it is FreeTextBackgroundColor
             return &a.freeTextColor;
         case CmdCreateAnnotLine:
+        case CmdCreateAnnotArrow:
+        case CmdCreateAnnotDashedLine:
             return &a.lineColor;
         case CmdCreateAnnotPolyLine:
             return &a.polyLineColor;
@@ -3281,8 +4521,30 @@ static ParsedColor* AnnotPresetColorSetting(int cmdId) {
     return nullptr;
 }
 
-static const int kShapeFillCommands[] = {CmdCreateAnnotLine, CmdCreateAnnotPolyLine, CmdCreateAnnotSquare,
-                                         CmdCreateAnnotCircle, CmdCreateAnnotPolygon};
+static float* ShapeBorderWidth(int cmd) {
+    auto& a = gSettings->annotations;
+    if (MathShapeForCommand(cmd) >= 0) return &a.lineBorderWidth;
+    switch (cmd) {
+        case CmdCreateAnnotLine:
+        case CmdCreateAnnotArrow:
+        case CmdCreateAnnotDashedLine:
+            return &a.lineBorderWidth;
+        case CmdCreateAnnotPolyLine:
+            return &a.polyLineBorderWidth;
+        case CmdCreateAnnotSquare:
+            return &a.squareBorderWidth;
+        case CmdCreateAnnotCircle:
+            return &a.circleBorderWidth;
+        case CmdCreateAnnotPolygon:
+            return &a.polygonBorderWidth;
+    }
+    return nullptr;
+}
+
+static void ShapeWidthPicked(const int* cmd, float width) {
+    if (float* setting = ShapeBorderWidth(*cmd)) *setting = limitValue(width, 0.f, 64.f);
+    ScheduleSaveSettings();
+}
 
 struct ShapeFillSettings {
     ParsedColor* color = nullptr;
@@ -3294,6 +4556,8 @@ static ShapeFillSettings ShapeFillForCmd(int cmd) {
     auto& a = gSettings->annotations;
     switch (cmd) {
         case CmdCreateAnnotLine:
+        case CmdCreateAnnotArrow:
+        case CmdCreateAnnotDashedLine:
             return {&a.lineInteriorColor, &a.lineInteriorOpacity};
         case CmdCreateAnnotPolyLine:
             return {&a.polyLineInteriorColor, &a.polyLineInteriorOpacity};
@@ -3342,6 +4606,7 @@ static TempStr AnnotColorText(Color color) {
 // What an annotation is made in when its setting is empty: MuPDF's defaults,
 // which are also what Acrobat, PDF-XChange and Foxit use
 static Color AnnotDefaultColor(int cmdId) {
+    if (MathShapeForCommand(cmdId) >= 0) return MkRgba(0xff, 0, 0, 255);
     switch (cmdId) {
         case CmdCreateAnnotText:
         case CmdCreateAnnotFileAttachment:
@@ -3351,6 +4616,8 @@ static Color AnnotDefaultColor(int cmdId) {
         case CmdCreateAnnotCaret:
             return MkRgba(0, 0, 0xff, 255);
         case CmdCreateAnnotLine:
+        case CmdCreateAnnotArrow:
+        case CmdCreateAnnotDashedLine:
         case CmdCreateAnnotPolyLine:
         case CmdCreateAnnotSquare:
         case CmdCreateAnnotCircle:
@@ -3474,7 +4741,8 @@ static bool CanCreateAnnotFromSelection(MainWindow* win, int cmdId) {
         return false;
     }
     DisplayModel* dm = win->AsFixed();
-    return dm && dm->textSelection && dm->textSelection->result.len > 0;
+    return dm && ((cmdId == CmdCreateAnnotHighlight && len(*tab->selectionOnPage) > 0) ||
+                  (dm->textSelection && dm->textSelection->result.len > 0));
 }
 
 static void OnAnnotColorClicked(MainWindow* win, VirtMouseEvent* ev) {
@@ -3561,6 +4829,8 @@ static void ShowShapeFillDialog(MainWindow* win, int cmd) {
     if (!setting.color || !setting.opacity) return;
     auto* target = new AnnotColorsTarget();
     target->shapeFillCmd = cmd;
+    target->win = win;
+    HideToolbarHoverDropdown(win);
     auto* args = new ChangeColorsArgs();
     args->win = win;
     args->title = Tr("Default background color");
@@ -3687,7 +4957,7 @@ static void OnPresetColorMenu(MainWindow* win, VirtMouseEvent* ev) {
     bool pinned = pinnable && PinnedToolIndex(win, cmd, color) >= 0;
     if (pinnable)
         AppendMenuW(menu, MF_STRING | (pinned ? MF_CHECKED : 0), PinColor,
-                    CWStrTemp(pinned ? Tr("Unpin this color") : Tr("Pin this color")));
+                    CWStrTemp(pinned ? Tr("Unpin tool with this color") : Tr("Pin tool with this color")));
     AppendMenuW(menu, MF_STRING, RemoveColor, CWStrTemp(Tr("Remove color from palette")));
     if (ShapeFillForCmd(cmd).color) {
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -3810,17 +5080,20 @@ static ILayout* MakeAnnotColorsPanel(MainWindow* win, Str label, Color current, 
     edit->id = cmdId;
     edit->padding = {pad, pad, pad, pad};
     edit->pixmap = GetCachedPixmapForSvg(Str(GetColorPickerIconSvg()), iconSize, iconSize, TbTextColor(), TbBgColor());
-    edit->SetTooltip(Tr("Edit colors"));
+    edit->SetTooltip(fmt("%s: %s", label, Tr("Edit colors")));
+    RecordHoverItem(tb, edit, edit->tooltip, {{}, edit->tooltip, cmdId, true, false});
     edit->onClick = onEdit;
     if (editOut) *editOut = edit;
     auto* labelRow = (HBox*)NewPaletteHeader(win, label, cmdId, advanced);
     auto* add = new VirtIconButton();
     add->id = cmdId;
+    add->name = StrL("palette-add");
     add->padding = {pad, pad, pad, pad};
     static const char* plus =
         R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>)";
     add->pixmap = GetCachedPixmapForSvg(Str(plus), iconSize, iconSize, TbTextColor(), TbBgColor());
-    add->SetTooltip(Tr("Add a preset color"));
+    add->SetTooltip(fmt("%s: %s", label, Tr("Add a preset color")));
+    RecordHoverItem(tb, add, add->tooltip, {{}, add->tooltip, cmdId, true, false});
     add->onClick = MkFunc1(OnAddPresetColor, win);
     labelRow->AddChild(add);
     labelRow->AddChild(edit);
@@ -3902,6 +5175,184 @@ struct InkStrokePreview : VirtCtrl {
     }
 };
 
+// Virtual fields share the palette's clipping and cannot leave child HWND trails while scrolling.
+struct PaletteNumberEdit : VirtCtrl {
+    PlatformFont* font = nullptr;
+    Str text;
+    float minimum = 0, maximum = 100;
+    int decimals = 0;
+    int caret = 0, anchor = 0;
+    bool invalid = false;
+    Func1<float> onValue;
+
+    PaletteNumberEdit(PlatformFont* f, float min, float max, int places)
+        : font(f), minimum(min), maximum(max), decimals(places) {
+        name = StrL("palette-number");
+        cursor = CursorId::IBeam;
+        flags |= vwfFocusable;
+        onMouseDown = MkMethod1<PaletteNumberEdit, VirtMouseEvent*, &PaletteNumberEdit::MouseDown>(this);
+        onKeyDown = MkMethod1<PaletteNumberEdit, VirtKeyEvent*, &PaletteNumberEdit::KeyDown>(this);
+        onChar = MkMethod1<PaletteNumberEdit, VirtCharEvent*, &PaletteNumberEdit::Char>(this);
+        onFocusChanged = MkMethod1<PaletteNumberEdit, VirtFocusEvent*, &PaletteNumberEdit::Focus>(this);
+    }
+    ~PaletteNumberEdit() override { str::Free(text); }
+    Size GetIdealSize() override {
+        return {std::max(PlatformFontMeasureText(font, StrL("000")).dx, PlatformFontMeasureText(font, text).dx) +
+                    UiScalePx(16),
+                PlatformFontLineHeight(font) + UiScalePx(12)};
+    }
+    void SetValue(float value) {
+        int previousWidth = GetIdealSize().dx;
+        str::ReplaceWithCopy(&text, decimals ? fmt("%g", value) : fmt("%.0f", value));
+        caret = anchor = len(text);
+        invalid = false;
+        if (GetIdealSize().dx != previousWidth) RequestLayout();
+        Invalidate();
+    }
+    bool Parse(float& value) {
+        TempStr input = str::DupTemp(text);
+        str::TrimWSInPlace(input, str::TrimOpt::Both);
+        if (!len(input)) return false;
+        char* end = nullptr;
+        double parsed = strtod(CStrTemp(input), &end);
+        if (!end || *end || !isfinite(parsed) || parsed < minimum || parsed > maximum ||
+            (!decimals && floor(parsed) != parsed))
+            return false;
+        value = (float)parsed;
+        return true;
+    }
+    bool Commit() {
+        float value = 0;
+        if (!Parse(value)) {
+            invalid = true;
+            Invalidate();
+            return false;
+        }
+        SetValue(value);
+        onValue.Call(value);
+        return true;
+    }
+    void ReplaceSelection(Str insert) {
+        int previousWidth = GetIdealSize().dx;
+        int start = std::min(caret, anchor), end = std::max(caret, anchor);
+        if (len(text) - (end - start) + len(insert) > 12) return;
+        str::Builder next;
+        next.Append(Str(text.s, start));
+        next.Append(insert);
+        next.Append(Str(text.s + end, len(text) - end));
+        str::ReplaceWithCopy(&text, ToStr(next));
+        caret = anchor = start + len(insert);
+        invalid = false;
+        if (GetIdealSize().dx != previousWidth) RequestLayout();
+        Invalidate();
+    }
+    void MoveCaret(int to, bool select) {
+        caret = std::clamp(to, 0, len(text));
+        if (!select) anchor = caret;
+        Invalidate();
+    }
+    void MouseDown(VirtMouseEvent* ev) {
+        if (ev->button != 0) return;
+        if (GetHwnd()) ::SetFocus(GetHwnd());
+        anchor = 0;
+        caret = len(text);
+        Invalidate();
+        ev->didHandle = true;
+    }
+    void Focus(VirtFocusEvent* ev) {
+        if (ev->gotFocus) {
+            anchor = 0;
+            caret = len(text);
+        } else {
+            Commit();
+        }
+        Invalidate();
+    }
+    void KeyDown(VirtKeyEvent* ev) {
+        if (ev->isCtrl && ev->vkey == 'A') {
+            anchor = 0;
+            caret = len(text);
+        } else if (ev->isCtrl && ev->vkey == 'C') {
+            int start = std::min(caret, anchor), count = abs(caret - anchor);
+            if (count) CopyTextToClipboard(Str(text.s + start, count));
+        } else if (ev->isCtrl && ev->vkey == 'V') {
+            if (OpenClipboard(GetHwnd())) {
+                HANDLE data = GetClipboardData(CF_UNICODETEXT);
+                auto* wide = data ? (wchar_t*)GlobalLock(data) : nullptr;
+                if (wide) {
+                    TempStr paste = ToUtf8Temp(WStr(wide));
+                    str::TrimWSInPlace(paste, str::TrimOpt::Both);
+                    bool allowed = len(paste) != 0;
+                    for (int i = 0; i < len(paste); i++) {
+                        char c = paste.s[i];
+                        allowed &= (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+';
+                    }
+                    if (allowed) ReplaceSelection(paste);
+                    GlobalUnlock(data);
+                }
+                CloseClipboard();
+            }
+        } else if (ev->vkey == VK_LEFT || ev->vkey == VK_RIGHT) {
+            int next = caret + (ev->vkey == VK_LEFT ? -1 : 1);
+            if (!ev->isShift && caret != anchor)
+                next = ev->vkey == VK_LEFT ? std::min(caret, anchor) : std::max(caret, anchor);
+            MoveCaret(next, ev->isShift);
+        } else if (ev->vkey == VK_HOME || ev->vkey == VK_END) {
+            MoveCaret(ev->vkey == VK_HOME ? 0 : len(text), ev->isShift);
+        } else if (ev->vkey == VK_DELETE) {
+            if (caret == anchor && caret < len(text)) anchor++;
+            ReplaceSelection({});
+        } else if (ev->vkey == VK_RETURN) {
+            Commit();
+        } else if (ev->vkey == VK_ESCAPE) {
+            // Escape belongs to the popup; valid edits were already committed on blur.
+            return;
+        } else if (ev->vkey == VK_UP || ev->vkey == VK_DOWN) {
+            float value = 0;
+            if (Parse(value)) {
+                SetValue(std::clamp(value + (ev->vkey == VK_UP ? 1.f : -1.f), minimum, maximum));
+                Commit();
+            }
+        } else
+            return;
+        ev->didHandle = true;
+        Invalidate();
+    }
+    void Char(VirtCharEvent* ev) {
+        int c = ev->c;
+        if (c == VK_BACK) {
+            if (caret == anchor && caret > 0) anchor = caret - 1;
+            ReplaceSelection({});
+        } else if ((c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+') {
+            char byte = (char)c;
+            ReplaceSelection(Str(&byte, 1));
+        }
+        ev->didHandle = true;
+    }
+    void Paint(VirtPaintCtx& ctx) override {
+        ctx.gfx->FillRoundedRect(ctx.bounds, UiScalePx(4), ThemeWindowControlBackgroundColor(),
+                                 invalid               ? kColRed
+                                 : HasFlag(vwfFocused) ? ThemeBrandColor()
+                                                       : ThemeEdgeColor());
+        Rect area = ctx.bounds;
+        area.SubLR(UiScalePx(7), UiScalePx(7));
+        ctx.gfx->PushClip(area.Intersect(ctx.clip));
+        int start = std::min(caret, anchor), count = abs(caret - anchor);
+        int textY = area.y + (area.dy - PlatformFontLineHeight(font)) / 2;
+        if (HasFlag(vwfFocused) && count) {
+            int left = PlatformFontMeasureText(font, Str(text.s, start)).dx;
+            int width = PlatformFontMeasureText(font, Str(text.s + start, count)).dx;
+            ctx.gfx->FillRect({area.x + left, textY, width, PlatformFontLineHeight(font)}, TbHoverColor());
+        }
+        ctx.gfx->DrawText(text, area, gfxTextVCenter, font, TbTextColor());
+        if (HasFlag(vwfFocused) && !count) {
+            int x = area.x + PlatformFontMeasureText(font, Str(text.s, caret)).dx;
+            ctx.gfx->DrawLine({x, textY, 0, PlatformFontLineHeight(font)}, TbTextColor());
+        }
+        ctx.gfx->PopClip();
+    }
+};
+
 // Dragging it is the width of the next ink annotation, and of the stroke the
 // preview shows. The preview is a sibling in the same drop-down, so it lives
 // exactly as long as the slider does.
@@ -3910,6 +5361,8 @@ struct InkThicknessSlider : VirtSlider {
     InkStrokePreview* preview = nullptr;
     // the width as a number, under the slider; a sibling like the preview
     VirtText* valueText = nullptr;
+    PaletteNumberEdit* valueEdit = nullptr;
+    float exactWidth = -1;
     Str text; // owned; what the -dbg-control dump shows for the slider
     // where the width goes when let go. Without one it's the setting the ink
     // button makes its strokes with
@@ -3918,14 +5371,14 @@ struct InkThicknessSlider : VirtSlider {
     bool fractional = false;
     float minimum = 0.1f;
     float step = 0.1f;
-    float Width() { return fractional ? minimum + (float)value * step : (float)value; }
+    float Width() { return exactWidth >= 0 ? exactWidth : fractional ? minimum + (float)value * step : (float)value; }
     // committed by letting go of a drag, so the mouse capture is about to be
     // released; the color popup that holds the mouse takes it back
     bool releasingMouse = false;
 
     ~InkThicknessSlider() override { str::Free(text); }
 
-    void OnChanged() {
+    void UpdateDisplay() {
         if (preview) {
             preview->thickness = Width();
             preview->Invalidate();
@@ -3934,9 +5387,24 @@ struct InkThicknessSlider : VirtSlider {
             valueText->SetText(fractional ? fmt("%.2f", Width()) : fmt("%d", value));
             valueText->Invalidate();
         }
+        if (valueEdit) valueEdit->SetValue(Width());
         if (!onThickness.IsValid() && !onInteger.IsValid() && win) {
             SetInkPenWidth(win, Width());
         }
+    }
+    void OnChanged() {
+        exactWidth = -1;
+        UpdateDisplay();
+    }
+    void SetTypedWidth(float width) {
+        value = limitValue((int)roundf((width - minimum) / step), minVal, maxVal);
+        exactWidth = width;
+        UpdateDisplay();
+        Invalidate();
+        if (onThickness.IsValid())
+            onThickness.Call(width);
+        else
+            ScheduleSaveSettings();
     }
     // rewriting an annotation is too slow to do on every step of a drag, so
     // the width lands when the slider is let go
@@ -3958,13 +5426,14 @@ struct InkThicknessSlider : VirtSlider {
 // thickness < 0 starts the slider at Annotations.InkBorderWidth and leaves the
 // width there; otherwise it starts there and onThickness gets it
 static ILayout* MakeInkThicknessPanel(MainWindow* win, Color current, float thickness, const Func1<float>& onThickness,
-                                      Str label, float minThickness, InkThicknessSlider** sliderOut) {
+                                      Str label, float minThickness, InkThicknessSlider** sliderOut,
+                                      float maxThickness = -1, bool editable = false) {
     ToolbarVirt* tb = win->toolbarVirt;
     if (thickness < 0) {
         thickness = InkThickness(win);
     }
     float minWidth = minThickness > 0 ? std::max(gSettings->penMinWidth, minThickness) : 0.f;
-    float maxWidth = std::max(minWidth, gSettings->penMaxWidth);
+    float maxWidth = std::max(minWidth, maxThickness > 0 ? maxThickness : gSettings->penMaxWidth);
     float step = limitValue(gSettings->penWidthStep, 0.1f, 16.f);
     thickness = limitValue(thickness, minWidth, maxWidth);
 
@@ -3982,6 +5451,7 @@ static ILayout* MakeInkThicknessPanel(MainWindow* win, Color current, float thic
     slider->value = limitValue((int)roundf((thickness - minWidth) / step), 0, slider->maxVal);
     slider->idealDx = UiScalePx(kInkSliderDx);
     slider->preview = preview;
+    slider->exactWidth = editable ? thickness : -1;
     slider->onThickness = onThickness;
     slider->onValueChanged = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnChanged>(slider);
     slider->onValueCommitted = MkMethod0<InkThicknessSlider, &InkThicknessSlider::OnCommitted>(slider);
@@ -4012,10 +5482,13 @@ static ILayout* MakeInkThicknessPanel(MainWindow* win, Color current, float thic
         .isRtl = IsUIRtl(),
         .padding = {.right = extraDx - (extraDx / 2), .left = extraDx / 2},
     });
-    slider->valueText = valueText;
+    slider->valueText = editable ? nullptr : valueText;
 
     ends->AddChild(mkLabel(Tr("Thin")));
-    ends->AddChild(valueText);
+    if (!editable)
+        ends->AddChild(valueText);
+    else
+        delete valueText;
     auto* thick = mkLabel(Tr("Thick"));
     thick->align = VirtTextAlign::Right;
     ends->AddChild(thick);
@@ -4030,7 +5503,22 @@ static ILayout* MakeInkThicknessPanel(MainWindow* win, Color current, float thic
         .textColor = TbTextColor(),
         .isRtl = IsUIRtl(),
     }));
-    vbox->AddChild(slider);
+    if (editable) {
+        auto* row = new HBox();
+        row->alignCross = CrossAxisAlign::CrossCenter;
+        row->gap = UiScalePx(10);
+        auto* field = new PaletteNumberEdit(tb->platformFont, minWidth, maxWidth, 2);
+        field->name = StrL("shape-border-width-value");
+        field->SetTooltip(fmt(Tr("Border thickness: %g to %g pt").s, minWidth, maxWidth));
+        field->SetValue(thickness);
+        field->onValue = MkMethod1<InkThicknessSlider, float, &InkThicknessSlider::SetTypedWidth>(slider);
+        slider->valueEdit = field;
+        row->AddChild(slider, 1);
+        row->AddChild(field);
+        vbox->AddChild(row);
+    } else {
+        vbox->AddChild(slider);
+    }
     vbox->AddChild(ends);
     *sliderOut = slider;
     return vbox;
@@ -4134,9 +5622,7 @@ static ILayout* NewPaletteHeader(MainWindow* win, Str title, int cmd, ILayout* a
         row->AddChild(pin);
     }
     if (advanced) {
-        static const char* sliders =
-            R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M3 6h4m4 0h10M7 3v6M3 12h10m4 0h4M17 9v6M3 18h5m4 0h9M8 15v6"/></svg>)";
-        auto* settings = NewPaletteButton(win, Str(sliders), Tr("Additional tool settings"));
+        auto* settings = NewPaletteButton(win, Str(kToolSettingsIcon), Tr("Additional tool settings"));
         settings->userData = (intptr_t)advanced;
         settings->onClick = MkFunc1(OnPaletteSettings, win);
         row->AddChild(settings);
@@ -4395,13 +5881,20 @@ static void OnShapeFillEdit(MainWindow* win, VirtMouseEvent* ev) {
 struct ShapeFillSlider : VirtSlider {
     int cmd = 0;
     VirtText* label = nullptr;
+    PaletteNumberEdit* valueEdit = nullptr;
 
     void OnChanged() {
-        if (label) label->SetText(fmt(Tr("Background opacity: %d%%").s, value));
+        if (label) label->SetText(fmt(Tr("Fill opacity: %d%%").s, value));
+        if (valueEdit) valueEdit->SetValue((float)value);
     }
     void OnCommitted() {
         if (const int* tool = ShapeFillCommandPtr(cmd)) ShapeFillOpacityPicked(tool, value);
         OnChanged();
+    }
+    void SetTypedOpacity(float opacity) {
+        value = (int)opacity;
+        Invalidate();
+        OnCommitted();
     }
 };
 
@@ -4413,9 +5906,8 @@ static ILayout* MakeShapeFillPanel(MainWindow* win, int cmd) {
     Color current = GetParsedColor(*setting.color, kColorUnset);
     auto* panel = new VBox();
     panel->alignCross = CrossAxisAlign::Stretch;
-    auto* colors =
-        MakeAnnotColorsPanel(win, Tr("Background color"), current, 0, true, &swatches, MkFunc1(OnShapeFillSwatch, win),
-                             MkFunc1(OnShapeFillEdit, win), nullptr, {}, &edit);
+    auto* colors = MakeAnnotColorsPanel(win, Tr("Fill"), current, 0, true, &swatches, MkFunc1(OnShapeFillSwatch, win),
+                                        MkFunc1(OnShapeFillEdit, win), nullptr, {}, &edit);
     for (auto* swatch : swatches) {
         swatch->name = StrL("shape-background-color");
         swatch->userData = cmd;
@@ -4423,6 +5915,14 @@ static ILayout* MakeShapeFillPanel(MainWindow* win, int cmd) {
                                            : current != kColorUnset && (swatch->col & 0xffffff) == (current & 0xffffff);
     }
     edit->userData = cmd;
+    Vec<VirtCtrl*> fillControls;
+    CollectPaletteControls(colors, fillControls);
+    for (auto* control : fillControls) {
+        if (str::Eq(control->name, StrL("palette-add"))) {
+            control->name = StrL("shape-fill-add");
+            control->userData = cmd;
+        }
+    }
     panel->AddChild(colors);
     bool offered = current == kColorUnset;
     for (auto* swatch : swatches) offered |= !swatch->isNone && (swatch->col & 0xffffff) == (current & 0xffffff);
@@ -4439,7 +5939,7 @@ static ILayout* MakeShapeFillPanel(MainWindow* win, int cmd) {
         saved->onKeyDown = MkFunc1(OnPaletteKey, win);
         panel->AddChild(saved);
     }
-    auto* label = NewVirtText({.s = fmt(Tr("Background opacity: %d%%").s, std::clamp(*setting.opacity, 0, 100)),
+    auto* label = NewVirtText({.s = fmt(Tr("Fill opacity: %d%%").s, std::clamp(*setting.opacity, 0, 100)),
                                .font = win->toolbarVirt->platformFont,
                                .textColor = TbTextColor(),
                                .isRtl = IsUIRtl()});
@@ -4457,7 +5957,18 @@ static ILayout* MakeShapeFillPanel(MainWindow* win, int cmd) {
     slider->onValueCommitted = MkMethod0<ShapeFillSlider, &ShapeFillSlider::OnCommitted>(slider);
     slider->SetFlag(vwfFocusable, true);
     slider->onKeyDown = MkFunc1(OnPaletteKey, win);
-    panel->AddChild(slider);
+    auto* opacityRow = new HBox();
+    opacityRow->alignCross = CrossAxisAlign::CrossCenter;
+    opacityRow->gap = UiScalePx(10);
+    auto* opacityEdit = new PaletteNumberEdit(win->toolbarVirt->platformFont, 0, 100, 0);
+    opacityEdit->name = StrL("shape-background-opacity-value");
+    opacityEdit->SetTooltip(Tr("Fill opacity: 0 to 100%"));
+    opacityEdit->SetValue((float)slider->value);
+    opacityEdit->onValue = MkMethod1<ShapeFillSlider, float, &ShapeFillSlider::SetTypedOpacity>(slider);
+    slider->valueEdit = opacityEdit;
+    opacityRow->AddChild(slider, 1);
+    opacityRow->AddChild(opacityEdit);
+    panel->AddChild(opacityRow);
     Vec<VirtCtrl*> controls;
     CollectPaletteControls(colors, controls);
     for (auto* control : controls)
@@ -4511,6 +6022,175 @@ static void BuildAnnotColorsHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* e
         ev->layout = panel;
     }
     ev->centerOnButton = true;
+}
+
+static void BuildShapesHoverMenu(MainWindow*, ToolbarHoverBuildEvent*);
+
+static void RefreshShapesPopup(MainWindow* win) {
+    if (!IsMainWindowValidAndNotClosing(win)) return;
+    auto* tb = win->toolbarVirt;
+    if (!tb || !tb->hoverHost || tb->hoverCmdId != CmdAnnotationShapes) return;
+    ToolbarHoverBuildEvent ev;
+    ev.win = win;
+    ev.cmdId = CmdAnnotationShapes;
+    VecReset(tb->hoverItems);
+    BuildShapesHoverMenu(win, &ev);
+    if (!ev.layout) return;
+    auto* host = tb->hoverHost;
+    SetWindowTextW(host->native, CWStrTemp(ShapeToolTitle()));
+    auto* scroll = new ToolbarPaletteScroll(
+        ev.layout, ToolbarPaletteViewport(host, PlatformWindowWorkArea(win->hwndFrame).Size()), tb->platformFont);
+    scroll->lineDy = PlatformFontLineHeight(tb->platformFont) + UiScalePx(8);
+    host->onNativeMsg = MkFunc1(PaletteNativeMsg, (ScrollBox*)scroll);
+    host->SetLayout(scroll);
+    Vec<VirtCtrl*> controls;
+    CollectPaletteControls(scroll, controls);
+    for (auto* ctrl : controls) {
+        if (!ctrl->onClick.IsValid() && !AsVirtSlider(ctrl)) continue;
+        ctrl->SetFlag(vwfFocusable, true);
+        ctrl->onKeyDown = MkFunc1(OnPaletteKey, win);
+    }
+    for (auto* ctrl : controls)
+        if (str::Eq(ctrl->name, StrL("shape-type")) && ctrl->id == SelectedShapeCmd() && host->vroot)
+            host->vroot->SetFocus(ctrl);
+    host->Invalidate(true);
+}
+
+static void OnShapeTypeClicked(MainWindow* win, VirtMouseEvent* ev) {
+    if (ev->button != 0) return;
+    int cmd = ev->target->id;
+    for (int i = 0; i < dimofi(kShapeFillCommands); i++)
+        if (cmd == kShapeFillCommands[i]) gSettings->annotations.shapeTool = i;
+    ScheduleSaveSettings();
+    if (auto* button = AsVirtIconButton(ToolbarItemForCmd(win, CmdAnnotationShapes))) {
+        auto* tb = win->toolbarVirt;
+        button->pixmap = ShapeToolPixmap(tb->iconSize, TbTextColor());
+        button->pixmapDisabled = ShapeToolPixmap(tb->iconSize, TbDisabledColor());
+        button->Invalidate();
+    }
+    HwndSendCommand(win->hwndFrame, cmd);
+    HoldColorPalette(win);
+    uitask::Post(MkFunc0(RefreshShapesPopup, win), "Update shape palette");
+    ev->didHandle = true;
+}
+
+static void OnShapeBorderColor(MainWindow* win, VirtMouseEvent* ev) {
+    if (ev->button != 0) return;
+    auto* swatch = (ToolbarColorSwatch*)ev->target;
+    SetAnnotPresetColor(win, swatch->id, swatch->col);
+    auto* tb = win->toolbarVirt;
+    if (tb && tb->hoverHost) {
+        Vec<VirtCtrl*> controls;
+        CollectPaletteControls(tb->hoverHost->layout, controls);
+        for (auto* ctrl : controls) {
+            if (str::Eq(ctrl->name, StrL("shape-border-color"))) {
+                auto* color = (ToolbarColorSwatch*)ctrl;
+                color->isCurrent = SameColorAndAlpha(color->col, swatch->col);
+                for (auto& item : tb->hoverItems)
+                    if (item.ctrl == color) item.isCurrent = color->isCurrent;
+                color->Invalidate();
+            }
+            if (str::Eq(ctrl->name, StrL("shape-border-width"))) {
+                auto* slider = (InkThicknessSlider*)ctrl;
+                slider->preview->col = swatch->col;
+                slider->preview->Invalidate();
+            }
+        }
+    }
+    ev->didHandle = true;
+}
+
+static void ShapeRadiusPicked(MainWindow*, float radius) {
+    gSettings->annotations.shapeCornerRadius = isfinite(radius) ? limitValue(radius, 0.f, 1000.f) : 0;
+    ScheduleSaveSettings();
+}
+
+static void BuildShapesHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
+    auto* tb = win ? win->toolbarVirt : nullptr;
+    if (!tb || !gSettings) return;
+    int cmd = SelectedShapeCmd();
+    const char* icons[] = {gIconAnnotLine,    gIconAnnotPolyLine, gIconAnnotSquare, gIconAnnotCircle,
+                           gIconAnnotPolygon, gIconArrowUp,       gIconAnnotLine};
+    Str names[] = {Tr("Line"),
+                   Tr("Polyline"),
+                   Tr("Rectangle"),
+                   Tr("Ellipse"),
+                   Tr("Polygon"),
+                   Tr("Arrow"),
+                   Tr("Dashed line"),
+                   Tr("Parabola: y = x²"),
+                   Tr("Negative parabola: y = −x²"),
+                   Tr("Cubic: y = x³"),
+                   Tr("Negative cubic: y = −x³"),
+                   Tr("Reciprocal: y = 1/x"),
+                   Tr("Negative reciprocal: y = −1/x"),
+                   Tr("2D axes"),
+                   Tr("3D axes")};
+    auto* panel = new VBox();
+    panel->alignCross = CrossAxisAlign::Stretch;
+
+    auto* tools = new Wrap();
+    tools->colGap = UiScalePx(6);
+    tools->rowGap = UiScalePx(6);
+    for (int i : {0, 5, 6, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14}) {
+        const char* icon = i < dimofi(icons) ? icons[i] : gIconAnnotPolyLine;
+        auto* button = NewPaletteButton(win, Str(icon), names[i]);
+        button->id = kShapeFillCommands[i];
+        button->name = StrL("shape-type");
+        button->padding = {UiScalePx(8), UiScalePx(8), UiScalePx(8), UiScalePx(8)};
+        button->pixmap = IsLineVariant(button->id) ? LineVariantIcon(button->id, tb->iconSize, TbTextColor())
+                                                   : GetCachedPixmapForSvg(Str(icons[i]), tb->iconSize, tb->iconSize,
+                                                                           TbTextColor(), TbBgColor());
+        button->SetTooltip(names[i]);
+        button->onClick = MkFunc1(OnShapeTypeClicked, win);
+        ApplyToolbarItemColors(button);
+        button->isCurrent = cmd == button->id;
+        tools->AddChild(button);
+        RecordHoverItem(tb, button, names[i], {Str(icon), names[i], button->id, true, cmd == button->id});
+    }
+    panel->AddChild(new Padding(tools, Insets{UiScalePx(8), 0, UiScalePx(8), 0}));
+    Vec<ToolbarColorSwatch*> swatches;
+    panel->AddChild(MakeAnnotColorsPanel(win, Tr("Border"), AnnotCurrentColor(win, cmd), cmd, false, &swatches,
+                                         MkFunc1(OnShapeBorderColor, win), MkFunc1(OnAnnotColorsEditClicked, win)));
+    for (auto* swatch : swatches) swatch->name = StrL("shape-border-color");
+    panel->AddChild(MakeShapeFillPanel(win, cmd));
+    InkThicknessSlider* slider = nullptr;
+    auto* width = ShapeBorderWidth(cmd);
+    if (width) {
+        auto* thickness = MakeInkThicknessPanel(win, AnnotCurrentColor(win, cmd), *width,
+                                                MkFunc1(ShapeWidthPicked, ShapeFillCommandPtr(cmd)),
+                                                Tr("Border thickness (pt)"), 0, &slider, 64, true);
+        slider->name = StrL("shape-border-width");
+        slider->id = cmd;
+        panel->AddChild(new Padding(thickness, Insets{UiScalePx(8), UiScalePx(12), UiScalePx(12), UiScalePx(12)}));
+        RecordHoverItem(tb, slider, Tr("Border thickness"), {{}, Tr("Border thickness"), cmd, true, false});
+    }
+    if (cmd == CmdCreateAnnotSquare) {
+        auto* row = new HBox();
+        row->alignCross = CrossAxisAlign::CrossCenter;
+        row->gap = UiScalePx(10);
+        row->AddChild(
+            NewVirtText({.s = Tr("Corner radius (pt)"), .font = tb->platformFont, .textColor = TbTextColor()}), 1);
+        auto* radius = new PaletteNumberEdit(tb->platformFont, 0, 1000, 2);
+        radius->name = StrL("shape-corner-radius");
+        radius->SetTooltip(Tr("Corner radius: 0 to 1000 pt. Clamped to half the shorter edge."));
+        radius->SetValue(gSettings->annotations.shapeCornerRadius);
+        radius->onValue = MkFunc1(ShapeRadiusPicked, win);
+        row->AddChild(radius);
+        panel->AddChild(new Padding(row, Insets{UiScalePx(8), UiScalePx(12), UiScalePx(8), UiScalePx(12)}));
+    }
+    ev->layout = new Padding(panel, Insets{UiScalePx(8), UiScalePx(8), UiScalePx(8), UiScalePx(8)});
+}
+
+bool IsShapesToolbarPopupOpen(MainWindow* win) {
+    auto* tb = win ? win->toolbarVirt : nullptr;
+    return tb && tb->hoverHost && tb->hoverCmdId == CmdAnnotationShapes;
+}
+
+void ShowShapesToolbarPopup(MainWindow* win) {
+    if (!win || !win->toolbarVirt) return;
+    RevealToolbarTool(win, CmdAnnotationShapes);
+    ShowToolbarButtonDropdown(win, CmdAnnotationShapes);
 }
 
 //--- the same drop-down, opened from a chip of the annotation edit toolbar
@@ -4971,7 +6651,7 @@ static void ZoomEntryChar(MainWindow* win, Edit::CharEvent* ev) {
     auto* edit = win->toolbarVirt ? win->toolbarVirt->zoomEdit : nullptr;
     if (ev->c == VK_RETURN && edit && win->IsDocLoaded()) {
         TempStr text = edit->GetTextTemp();
-        str::RemoveCharsInPlace(text, StrL("% "));
+        text.len -= str::RemoveCharsInPlace(text, StrL("% "));
         char* end = nullptr;
         float zoom = (float)strtod(text.s, &end);
         if (text.len > 0 && end == text.s + text.len && zoom >= kZoomMin && zoom <= kZoomMax) {
@@ -4983,7 +6663,9 @@ static void ZoomEntryChar(MainWindow* win, Edit::CharEvent* ev) {
 
 static Edit* CreateZoomEntry(MainWindow* win) {
     auto* tb = win->toolbarVirt;
-    auto* edit = new Edit();
+    auto* edit = new ToolbarLocationEdit();
+    edit->win = win;
+    edit->fieldKind = ToolbarFieldKind::Zoom;
     Edit::CreateArgs args;
     args.parent = win->hwndToolbar;
     args.font = tb->platformFont;
@@ -4999,6 +6681,8 @@ static Edit* CreateZoomEntry(MainWindow* win) {
     edit->SetMaxWidthChars(7);
     edit->idealDy = std::max(tb->iconSize, PlatformFontLineHeight(tb->platformFont) + UiScalePx(4));
     edit->mapRtlX = true;
+    edit->MeasureWidth();
+    edit->onTextChanged = MkMethod0<ToolbarLocationEdit, &ToolbarLocationEdit::OnTextChanged>(edit);
     edit->onChar = MkFunc1(ZoomEntryChar, win);
     return edit;
 }
@@ -5039,7 +6723,15 @@ static bool IsPenPresetCommand(int cmd) {
            cmd == CmdInkHighlighter;
 }
 
+static TempStr PinnedMenuLabel(PinnedAnnotationTool* preset, int cmd) {
+    Str name = GetCommandDescription(cmd);
+    if (len(name) == 0) name = preset->tool;
+    if (preset->width > 0) return fmt("%s, %.2f pt", name, preset->width);
+    return name;
+}
+
 static bool IsPinnableTool(int cmd) {
+    if (MathShapeForCommand(cmd) >= 0) return true;
     for (const auto& button : gAnnotationButtons)
         if (button.cmdId == cmd && cmd != 0) return true;
     return cmd == CmdInkEraser || cmd == CmdToggleLaserPointer;
@@ -5059,6 +6751,7 @@ static void RemovePinnedTool(int index) {
     auto* preset = (*presets)[index];
     str::Free(preset->tool);
     str::Free(preset->color);
+    str::Free(preset->fillColor);
     free(preset);
     VecRemoveAt(*presets, index);
     ScheduleSaveSettings();
@@ -5071,13 +6764,26 @@ static int PinnedToolIndex(MainWindow* win, int cmd, Color selected) {
     Str tool = PinnedToolName(win, cmd);
     bool presetColor = IsAnnotColorCmd(cmd) || cmd == CmdToggleLaserPointer;
     Color color = presetColor ? (selected != kColorUnset ? selected : AnnotCurrentColor(win, cmd)) : kColorUnset;
+    float* shapeWidth = ShapeBorderWidth(cmd);
     float width = cmd == CmdCreateAnnotInk       ? InkPenWidth(win)
                   : cmd == CmdToggleLaserPointer ? gSettings->laserWidth
+                  : shapeWidth                   ? *shapeWidth
                                                  : 0;
     for (int i = 0; i < len(*presets); i++) {
         auto* preset = (*presets)[i];
         Color saved = ParseAnnotColor(preset->color);
-        if (str::Eq(preset->tool, tool) && (!presetColor || SameColorAndAlpha(saved, color)) &&
+        bool shapeMatches = true;
+        if (preset->shapeStyle && shapeWidth) {
+            auto fill = ShapeFillForCmd(cmd);
+            shapeMatches = fabsf(preset->width - width) < .001f &&
+                           (MathShapeForCommand(cmd) >= 0 ||
+                            (fill.color && fill.opacity &&
+                             GetParsedColor(*fill.color, kColorUnset) == ParseAnnotColor(preset->fillColor) &&
+                             *fill.opacity == preset->fillOpacity));
+            if (cmd == CmdCreateAnnotSquare)
+                shapeMatches &= fabsf(preset->cornerRadius - gSettings->annotations.shapeCornerRadius) < .001f;
+        }
+        if (str::Eq(preset->tool, tool) && (!presetColor || SameColorAndAlpha(saved, color)) && shapeMatches &&
             ((cmd != CmdCreateAnnotInk && cmd != CmdToggleLaserPointer) || fabsf(preset->width - width) < 0.001f)) {
             return i;
         }
@@ -5098,13 +6804,25 @@ static void TogglePinnedTool(MainWindow* win, int cmd, Color selected) {
     bool presetColor = IsAnnotColorCmd(cmd) || cmd == CmdToggleLaserPointer;
     Color color = presetColor ? (selected != kColorUnset ? selected : AnnotCurrentColor(win, cmd)) : kColorUnset;
     Str colorName = presetColor ? AnnotColorText(color) : StrL("");
+    float* shapeWidth = ShapeBorderWidth(cmd);
     float width = cmd == CmdCreateAnnotInk       ? InkPenWidth(win)
                   : cmd == CmdToggleLaserPointer ? gSettings->laserWidth
+                  : shapeWidth                   ? *shapeWidth
                                                  : 0;
     auto* preset = AllocStruct<PinnedAnnotationTool>();
     str::ReplaceWithCopy(&preset->tool, tool);
     str::ReplaceWithCopy(&preset->color, colorName);
     preset->width = width;
+    auto fill = ShapeFillForCmd(cmd);
+    if (shapeWidth) {
+        preset->shapeStyle = true;
+        if (fill.color && fill.opacity) {
+            Color fillColor = GetParsedColor(*fill.color, kColorUnset);
+            str::ReplaceWithCopy(&preset->fillColor, fillColor == kColorUnset ? Str{} : AnnotColorText(fillColor));
+            preset->fillOpacity = std::clamp(*fill.opacity, 0, 100);
+        }
+        if (cmd == CmdCreateAnnotSquare) preset->cornerRadius = gSettings->annotations.shapeCornerRadius;
+    }
     VecAppend(*presets, preset);
     ScheduleSaveSettings();
     uitask::Post(MkFunc0Void(RefreshPinnedBars), "Refresh pinned tools");
@@ -5131,6 +6849,42 @@ struct PinnedToolButton : VirtIconButton {
     }
 };
 
+static void RestorePinnedShape(PinnedAnnotationTool* preset, int cmd) {
+    if (!preset->shapeStyle) return;
+    float* width = ShapeBorderWidth(cmd);
+    auto fill = ShapeFillForCmd(cmd);
+    if (!width) return;
+    *width = isfinite(preset->width) ? std::clamp(preset->width, 0.f, 64.f) : 1.f;
+    if (fill.color && fill.opacity) {
+        SetColorText(*fill.color, preset->fillColor);
+        *fill.opacity = std::clamp(preset->fillOpacity, 0, 100);
+    }
+    if (cmd == CmdCreateAnnotSquare) ShapeRadiusPicked(nullptr, preset->cornerRadius);
+    for (int i = 0; i < dimofi(kShapeFillCommands); i++)
+        if (kShapeFillCommands[i] == cmd) gSettings->annotations.shapeTool = i;
+    ScheduleSaveSettings();
+}
+
+static TempStr PinnedShapeSvg(PinnedAnnotationTool* preset, int cmd) {
+    if (IsLineVariant(cmd)) return {};
+    const char* icons[] = {gIconAnnotLine, gIconAnnotPolyLine, gIconAnnotSquare, gIconAnnotCircle, gIconAnnotPolygon};
+    const char* icon = nullptr;
+    for (int i = 0; i < dimofi(kShapeFillCommands); i++)
+        if (kShapeFillCommands[i] == cmd) icon = icons[i];
+    if (!icon) return {};
+    Color border = ParseAnnotColor(preset->color), fill = ParseAnnotColor(preset->fillColor);
+    TempStr result = str::ReplaceTemp(Str(icon), StrL("<path stroke=\"none\" d=\"M0 0h24v24H0z\"/>"), StrL(""));
+    result = str::ReplaceTemp(result, StrL("stroke=\"currentColor\""),
+                              fmt("stroke=\"#%02x%02x%02x\" stroke-opacity=\"%.3f\"", GetRed(border), GetGreen(border),
+                                  GetBlue(border), GetAlpha(border) / 255.));
+    TempStr fillText = fill == kColorUnset
+                           ? StrL("fill=\"none\"")
+                           : fmt("fill=\"#%02x%02x%02x\" fill-opacity=\"%.3f\"", GetRed(fill), GetGreen(fill),
+                                 GetBlue(fill), std::clamp(preset->fillOpacity, 0, 100) / 100.);
+    result = str::ReplaceTemp(result, StrL("fill=\"none\""), fillText);
+    return result;
+}
+
 static void PinnedToolClick(MainWindow* win, VirtMouseEvent* ev) {
     int index = ((PinnedToolButton*)ev->target)->index;
     auto* presets = gSettings->pinnedAnnotationTools;
@@ -5145,6 +6899,7 @@ static void PinnedToolClick(MainWindow* win, VirtMouseEvent* ev) {
     Color color = ParseAnnotColor(preset->color);
     if (IsAnnotColorCmd(cmd) && cmd != CmdCreateAnnotInk) {
         SetAnnotPresetColor(win, cmd, color);
+        RestorePinnedShape(preset, cmd);
         HwndSendCommand(win->hwndFrame, cmd);
     } else if (IsPenPresetCommand(cmd)) {
         HandlePenToolCommand(win, cmd);
@@ -5189,18 +6944,28 @@ static ILayout* BuildPinnedTools(MainWindow* win) {
             if (info.cmdId == cmd && info.icon) svg = info.icon;
         if (cmd == CmdInkEraser) svg = kEnhancedIconEraser;
         if (cmd == CmdToggleLaserPointer) svg = gIconLaserPointer;
-        Str penSvg = Str(svg);
+        Str penSvg = preset->shapeStyle ? PinnedShapeSvg(preset, cmd) : Str(svg);
         int penCommands[] = {CmdInkPen, CmdInkFountain, CmdInkBrush, CmdInkPencil, CmdInkHighlighter};
         for (int pen = 0; pen < dimof(penCommands); pen++) {
             if (cmd == penCommands[pen]) penSvg = InkPenSvg(pen, button->inkColor);
         }
-        button->pixmap = GetCachedPixmapForSvg(penSvg, tb->iconSize, tb->iconSize, TbTextColor(), TbBgColor());
-        button->pixmapDisabled =
-            GetCachedPixmapForSvg(penSvg, tb->iconSize, tb->iconSize, TbDisabledColor(), TbBgColor());
+        Color shapeFill = preset->shapeStyle ? ParseAnnotColor(preset->fillColor) : kColorUnset;
+        if (shapeFill != kColorUnset)
+            shapeFill = (shapeFill & 0xffffff) | (Color)(limitValue(preset->fillOpacity, 0, 100) * 255 / 100) << 24;
+        button->pixmap = IsLineVariant(cmd) ? LineVariantIcon(cmd, tb->iconSize, button->inkColor, shapeFill)
+                         : cmd == CmdAnnotationMode
+                             ? AnnotationModeIconPixmap(tb->iconSize, TbTextColor())
+                             : GetCachedPixmapForSvg(penSvg, tb->iconSize, tb->iconSize, TbTextColor(), TbBgColor());
+        button->pixmapDisabled = IsLineVariant(cmd)         ? LineVariantIcon(cmd, tb->iconSize, TbDisabledColor())
+                                 : cmd == CmdAnnotationMode ? AnnotationModeIconPixmap(tb->iconSize, TbDisabledColor())
+                                                            : GetCachedPixmapForSvg(penSvg, tb->iconSize, tb->iconSize,
+                                                                                    TbDisabledColor(), TbBgColor());
         Str name = GetCommandDescription(cmd);
-        button->SetTooltip(button->hasColor
-                               ? fmt("%s - %s - %.2f pt. Right-click to unpin.", name, preset->color, preset->width)
-                               : fmt("%s. Right-click to unpin.", name));
+        button->SetTooltip(preset->shapeStyle ? fmt("%s - Border %s, fill %s, %d%%, %.2f pt.", name, preset->color,
+                                                    len(preset->fillColor) ? preset->fillColor : Tr("none"),
+                                                    preset->fillOpacity, preset->width)
+                           : button->hasColor ? fmt("%s - %s - %.2f pt.", name, preset->color, preset->width)
+                                              : name);
         button->onClick = MkFunc1(PinnedToolClick, win);
         button->onContextMenu = MkFunc1(PinnedToolClick, win);
         button->onKeyDown = MkFunc1(OnToolbarKey, win);
@@ -5277,7 +7042,43 @@ void RevealToolbarTool(MainWindow* win, int cmd) {
     };
     for (ToolbarLine* line : {tb->mainRow, tb->annotationLine}) {
         if (!line || (line == tb->annotationLine && IsCollapsed(tb->annotationRow))) continue;
-        for (int i = 0; i < len(line->children) - 3; i++) {
+        if (tb->vertical) {
+            line->Restore();
+            if (AnnotationToolbarRail(tb) && len(line->railCells)) {
+                for (auto& cell : line->railCells) {
+                    if (!contains(contains, cell.layout)) continue;
+                    int top = cell.bounds.y;
+                    int bottom = cell.bounds.Bottom();
+                    if (top < line->verticalScrollY || bottom > line->verticalScrollY + line->verticalViewportDy)
+                        line->verticalScrollY = limitValue(cell.rowTop, 0, line->verticalMaxScroll);
+                    tb->host->Relayout();
+                    tb->host->Invalidate(true);
+                    return;
+                }
+                continue;
+            }
+            int y = 0;
+            for (int i = 0; i < len(line->children) - line->FixedCount(); i++) {
+                auto& item = line->children[i];
+                if (item.size.dy <= 0) continue;
+                if (auto* group = AsToolbarGroup(item.layout)) {
+                    for (int j = 0; j < len(group->children) && j < len(group->cells); j++) {
+                        if (group->cells[j].IsEmpty() || !contains(contains, group->children[j].layout)) continue;
+                        int top = y + group->cells[j].y;
+                        int bottom = y + group->cells[j].Bottom();
+                        if (top < line->verticalScrollY || bottom > line->verticalScrollY + line->verticalViewportDy)
+                            line->verticalScrollY = limitValue(top, 0, line->verticalMaxScroll);
+                        tb->host->Relayout();
+                        tb->host->Invalidate(true);
+                        return;
+                    }
+                }
+                y += item.size.dy + line->gap;
+            }
+            tb->host->Relayout();
+            continue;
+        }
+        for (int i = 0; i < len(line->children) - line->FixedCount(); i++) {
             auto* group = line->children[i].layout;
             if (!contains(contains, group)) continue;
             if (IsCollapsed(group)) {
@@ -5308,6 +7109,7 @@ bool FocusToolbar(MainWindow* win, bool backwards) {
 static void OnToolbarKey(MainWindow* win, VirtKeyEvent* ev) {
     if (ev->vkey == VK_ESCAPE) {
         HideToolbarHoverDropdown(win);
+        if (win->annotationMode) ToggleAnnotationMode(win);
         HwndSetFocus(win->hwndFrame);
         ev->didHandle = true;
         return;
@@ -5315,6 +7117,11 @@ static void OnToolbarKey(MainWindow* win, VirtKeyEvent* ev) {
     if (ev->vkey == VK_LEFT || ev->vkey == VK_RIGHT) {
         auto* root = win->toolbarVirt->host->vroot;
         if (root) root->TabNavigate((ev->vkey == VK_LEFT) != IsUIRtl());
+        ev->didHandle = true;
+        return;
+    }
+    if (win->toolbarVirt->vertical && (ev->vkey == VK_PRIOR || ev->vkey == VK_NEXT)) {
+        win->toolbarVirt->mainRow->Scroll(ev->vkey == VK_PRIOR ? -1 : 1);
         ev->didHandle = true;
         return;
     }
@@ -5338,6 +7145,7 @@ static void OnToolbarKey(MainWindow* win, VirtKeyEvent* ev) {
 enum class ToolbarMenuActionKind {
     Palette,
     Pinned,
+    Unpin,
     Visibility,
     Restore
 };
@@ -5364,6 +7172,7 @@ static void ShowToolbarOverflow(MainWindow* win, int anchorId) {
     HideToolbarHoverDropdown(win);
     HMENU menu = CreatePopupMenu();
     Vec<ToolbarMenuAction> actions;
+    Vec<ScrollMenuDecoration> decorations;
     constexpr int kActionFirst = 60000;
     auto addPalette = [&](HMENU sub, int cmdId, bool enabled) {
         int localId = kActionFirst + len(actions);
@@ -5377,9 +7186,35 @@ static void ShowToolbarOverflow(MainWindow* win, int anchorId) {
         if (!ctrl || !ctrl->id || ctrl->id == WarningMsgId) return;
         int pinned = VecFind(tb->pinnedItems, ctrl);
         if (pinned >= 0) {
+            auto* presets = gSettings->pinnedAnnotationTools;
+            if (!presets || pinned >= len(*presets)) return;
+            auto* preset = (*presets)[pinned];
             int localId = kActionFirst + len(actions);
             VecAppend(actions, ToolbarMenuAction{ToolbarMenuActionKind::Pinned, pinned});
-            AppendToolbarMenu(menu, localId, ctrl->tooltip, ctrl->IsEnabled());
+            AppendToolbarMenu(menu, localId, PinnedMenuLabel(preset, PinnedToolCommand(preset->tool)),
+                              ctrl->IsEnabled());
+            ScrollMenuDecoration detail;
+            detail.command = localId;
+            if (len(preset->color) > 0 || preset->shapeStyle) {
+                detail.swatchCount = preset->shapeStyle ? 2 : 1;
+                detail.swatches[0] = ParseAnnotColor(preset->color);
+                if (preset->shapeStyle) {
+                    Color fill = ParseAnnotColor(preset->fillColor);
+                    detail.swatches[1] =
+                        fill == kColorUnset
+                            ? kColorUnset
+                            : (fill & 0xffffff) | (Color)(limitValue(preset->fillOpacity, 0, 100) * 255 / 100) << 24;
+                }
+            }
+            detail.actionCommand = kActionFirst + len(actions);
+            VecAppend(actions, ToolbarMenuAction{ToolbarMenuActionKind::Unpin, pinned});
+            detail.actionIconSize = std::min(tb->iconSize, UiScalePx(18));
+            detail.actionIcon = GetCachedPixmapForSvg(Str(GetPinIconSvg()), detail.actionIconSize,
+                                                      detail.actionIconSize, TbTextColor(), TbBgColor());
+            detail.actionSlash = true;
+            detail.actionLabel = Tr("Unpin this tool");
+            detail.tooltip = ctrl->tooltip;
+            VecAppend(decorations, detail);
             return;
         }
         int cmdId = ctrl->id == PageInfoId ? CmdGoToPage : ctrl->id;
@@ -5458,9 +7293,10 @@ static void ShowToolbarOverflow(MainWindow* win, int anchorId) {
     int restoreId = kActionFirst + len(actions);
     VecAppend(actions, ToolbarMenuAction{ToolbarMenuActionKind::Restore, 0});
     AppendToolbarMenu(visibility, restoreId, Tr("Reset hidden toolbar items"), true);
-    int picked = TrackScrollMenu(win->hwndFrame, menu, {IsUIRtl() ? anchor.Right() : anchor.x, anchor.Bottom()},
-                                 tb->platformFont, gSettings->tabListVisibleItems, UiScalePx(480), TbBgColor(),
-                                 ThemeWindowTextColor(), AccentColor(TbBgColor(), 25), IsUIRtl(), IsUIRtl());
+    int picked =
+        TrackScrollMenu(win->hwndFrame, menu, {IsUIRtl() ? anchor.Right() : anchor.x, anchor.Bottom()},
+                        tb->platformFont, gSettings->tabListVisibleItems, UiScalePx(480), TbBgColor(),
+                        ThemeWindowTextColor(), AccentColor(TbBgColor(), 25), IsUIRtl(), IsUIRtl(), &decorations);
     DestroyMenu(menu);
     ToolbarNoteDropdownClosed();
     if (!picked || !IsMainWindowValidAndNotClosing(win)) return;
@@ -5478,6 +7314,8 @@ static void ShowToolbarOverflow(MainWindow* win, int anchorId) {
                 SetToolbarItemHidden(action.id, !ToolbarItemHidden(action.id));
             ScheduleSaveSettings();
             uitask::Post(MkFunc0Void(RefreshPinnedBars), "Refresh toolbar visibility");
+        } else if (action.kind == ToolbarMenuActionKind::Unpin) {
+            RemovePinnedTool(action.id);
         } else if (action.id < len(win->toolbarVirt->pinnedItems)) {
             VirtMouseEvent ev;
             ev.target = win->toolbarVirt->pinnedItems[action.id];
@@ -5495,9 +7333,11 @@ static void BuildToolbarLayout(MainWindow* win) {
 
     ToolbarVirt* tb = win->toolbarVirt;
     VecReset(tb->items);
+    tb->win = win;
     VecReset(tb->annotationItems);
     VecReset(tb->annotationGroups);
     tb->annotationExpanded = false;
+    tb->annotationModeButton = nullptr;
     tb->annotationLine = nullptr;
     tb->annotationOverflowButton = nullptr;
     VecReset(tb->pinnedItems);
@@ -5508,6 +7348,7 @@ static void BuildToolbarLayout(MainWindow* win) {
     tb->pageLabel = nullptr;
     tb->pageLabel2 = nullptr;
     tb->pageTotal = nullptr;
+    tb->pageBox = nullptr;
     tb->chapterTotal = nullptr;
     win->pageEdit = nullptr;
     win->chapterEdit = nullptr;
@@ -5536,14 +7377,14 @@ static void BuildToolbarLayout(MainWindow* win) {
     }
 
     auto newGroup = [&]() {
-        auto* group = new HBox();
+        auto* group = new ToolbarGroup(tb);
         group->alignCross = CrossAxisAlign::CrossCenter;
         group->rtl = mainRow->rtl;
         return group;
     };
-    HBox* group = newGroup();
-    HBox* pinnedGroup = nullptr;
-    HBox* appearance = newGroup();
+    ToolbarGroup* group = newGroup();
+    ToolbarGroup* pinnedGroup = nullptr;
+    ToolbarGroup* appearance = newGroup();
     int n = TotalButtonsCount();
     for (int i = 0; i < n; i++) {
         const ToolbarButtonInfo& bi = GetToolbarButtonInfoByIdx(i);
@@ -5589,7 +7430,8 @@ static void BuildToolbarLayout(MainWindow* win) {
 
             Edit* pageEdit = ToolbarCreatePageEdit(win, tb->platformFont, tb->iconSize);
             win->pageEdit = pageEdit;
-            group->AddChild(pageEdit);
+            tb->pageBox = new ToolbarPageBox(tb, (ToolbarLocationEdit*)pageEdit);
+            group->AddChild(tb->pageBox);
             VecAppend(mainRow->locationFields, ToolbarLocationField{(ToolbarLocationEdit*)pageEdit, group});
 
             auto* total = new VirtText(StrL(" "), tb->platformFont);
@@ -5612,15 +7454,23 @@ static void BuildToolbarLayout(MainWindow* win) {
         } else {
             auto* ib = new VirtIconButton();
             ib->padding = {cyPad, iconPad, cyPad, iconPad};
-            ib->hasDropdown = (bi.cmdId == CmdToggleReadAloud);
+            ib->hasDropdown = (bi.cmdId == CmdToggleReadAloud || bi.cmdId == CmdAnnotationShapes);
             if (bi.cmdId == CmdOpenFile) {
                 ib->label = Tr("Open");
                 ib->labelFont = tb->platformFont;
             }
-            Str svg = bi.svgIcon ? bi.svgIcon : Str(bi.icon);
-            ib->pixmap = GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize,
-                                               bi.cmdId == CmdOpenFile ? ThemeBrandTextColor() : fg, TbBgColor());
-            ib->pixmapDisabled = GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize, dis, TbBgColor());
+            Str svg = bi.svgIcon ? bi.svgIcon : Str(bi.cmdId == CmdAnnotationShapes ? ShapeToolIcon() : bi.icon);
+            ib->pixmap = len(bi.svgIcon) == 0 && bi.cmdId == CmdAnnotationMode
+                             ? AnnotationModeIconPixmap(tb->iconSize, fg)
+                         : bi.cmdId == CmdAnnotationShapes
+                             ? ShapeToolPixmap(tb->iconSize, fg)
+                             : GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize,
+                                                     bi.cmdId == CmdOpenFile ? ThemeBrandTextColor() : fg, TbBgColor());
+            ib->pixmapDisabled = len(bi.svgIcon) == 0 && bi.cmdId == CmdAnnotationMode
+                                     ? AnnotationModeIconPixmap(tb->iconSize, dis)
+                                 : bi.cmdId == CmdAnnotationShapes
+                                     ? ShapeToolPixmap(tb->iconSize, dis)
+                                     : GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize, dis, TbBgColor());
             w = ib;
         }
         w->id = bi.cmdId;
@@ -5709,8 +7559,14 @@ static void BuildToolbarLayout(MainWindow* win) {
         } else {
             auto* ib = new VirtIconButton();
             ib->padding = {cyPad, iconPad, cyPad, iconPad};
-            ib->pixmap = GetCachedPixmapForSvg(Str(bi.icon), tb->iconSize, tb->iconSize, fg, TbBgColor());
-            ib->pixmapDisabled = GetCachedPixmapForSvg(Str(bi.icon), tb->iconSize, tb->iconSize, dis, TbBgColor());
+            ib->hasDropdown = bi.cmdId == CmdAnnotationShapes;
+            Str svg(bi.cmdId == CmdAnnotationShapes ? ShapeToolIcon() : bi.icon);
+            ib->pixmap = bi.cmdId == CmdAnnotationShapes
+                             ? ShapeToolPixmap(tb->iconSize, fg)
+                             : GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize, fg, TbBgColor());
+            ib->pixmapDisabled = bi.cmdId == CmdAnnotationShapes
+                                     ? ShapeToolPixmap(tb->iconSize, dis)
+                                     : GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize, dis, TbBgColor());
             w = ib;
         }
         w->id = bi.cmdId;
@@ -5737,6 +7593,21 @@ static void BuildToolbarLayout(MainWindow* win) {
         delete annotationGroup;
 
     mainRow->AddChild(appearance);
+    {
+        auto* mode = new VirtIconButton();
+        mode->id = CmdAnnotationMode;
+        mode->padding = {cyPad, iconPad, cyPad, iconPad};
+        mode->pixmap = AnnotationModeIconPixmap(tb->iconSize, fg);
+        mode->pixmapDisabled = AnnotationModeIconPixmap(tb->iconSize, dis);
+        mode->onClick = MkFunc1(OnToolbarButtonClicked, win);
+        mode->onKeyDown = MkFunc1(OnToolbarKey, win);
+        mode->SetTooltip(Tr("Exit Annotation Mode (Esc)"));
+        mode->SetFlag(vwfFocusable, true);
+        ApplyToolbarItemColors(mode);
+        mode->SetVisibility(win->annotationMode ? Visibility::Visible : Visibility::Collapse);
+        tb->annotationModeButton = mode;
+    }
+    mainRow->AddChild(tb->annotationModeButton);
     auto addScrollButtons = [&](ToolbarLine* line, bool annotations) {
         for (int direction : {-1, 1}) {
             auto* button = new VirtIconButton();
@@ -5762,7 +7633,7 @@ static void BuildToolbarLayout(MainWindow* win) {
     auto* overflow = new VirtIconButton();
     overflow->id = ToolbarOverflowId;
     overflow->padding = {cyPad, iconPad, cyPad, iconPad};
-    overflow->pixmap = GetCachedPixmapForSvg(Str(gIconChevronDownBold), tb->iconSize, tb->iconSize, fg, TbBgColor());
+    overflow->pixmap = GetCachedPixmapForSvg(Str(kToolSettingsIcon), tb->iconSize, tb->iconSize, fg, TbBgColor());
     overflow->SetTooltip(Tr("Toolbar commands and visibility"));
     overflow->SetFlag(vwfFocusable, true);
     overflow->onClick = MkFunc1(OnOverflowClicked, win);
@@ -5784,17 +7655,34 @@ static void BuildToolbarLayout(MainWindow* win) {
         SetToolbarHoverDropdown(win, cmdId, MkFunc1(BuildAnnotColorsHoverMenu, win));
     }
 
+    SetToolbarHoverDropdown(win, CmdAnnotationShapes, MkFunc1(BuildShapesHoverMenu, win));
+
     auto* root = new VBox();
     root->alignCross = CrossAxisAlign::Stretch;
-    root->AddChild(new Padding(mainRow, Insets{UiScalePx(6), UiScalePx(8), UiScalePx(6), UiScalePx(8)}));
+    tb->contentPadding =
+        new Padding(mainRow, Insets{ToolbarOuterPad(), ToolbarSidePad(), ToolbarOuterPad(), ToolbarSidePad()});
+    root->AddChild(tb->contentPadding, 1);
     tb->host->SetLayout(root);
 }
 
 static void PaintToolbarBackground(MainWindow* win, VirtHostPaintEvent* ev) {
     ev->gfx->FillRect(ev->clientRect, TbBgColor());
     ToolbarVirt* tb = win->toolbarVirt;
+    if (win->annotationMode) {
+        int dot = UiScalePx(2);
+        int step = UiScalePx(5);
+        for (int i = 0; i < 6; i++) {
+            int x = tb->vertical ? ev->clientRect.dx / 2 - step + (i % 3) * step : UiScalePx(6) + (i % 2) * step;
+            int y = tb->vertical ? UiScalePx(6) + (i / 3) * step : ev->clientRect.dy / 2 - step + (i / 2) * step;
+            ev->gfx->FillEllipse({x, y, dot, dot}, TbTextColor());
+        }
+    }
     auto groupBounds = [&](auto&& self, ILayout* layout, Rect& bounds) -> void {
         if (layout->GetVisibility() != Visibility::Visible) return;
+        if (layout == tb->pageBox && tb->pageBox->Active()) {
+            bounds = bounds.IsEmpty() ? layout->lastBounds : bounds.Union(layout->lastBounds);
+            return;
+        }
         if (auto* control = layout->AsVirtCtrl()) {
             if (control->id == 0) return;
             Rect rect = control->BoundsInWindow();
@@ -5803,13 +7691,47 @@ static void PaintToolbarBackground(MainWindow* win, VirtHostPaintEvent* ev) {
         }
         for (int i = 0; i < layout->LayoutChildCount(); i++) self(self, layout->LayoutChildAt(i), bounds);
     };
-    if (tb->mainRow) {
+    if (AnnotationToolbarRail(tb) && tb->mainRow) {
+        ToolbarLine* line = tb->mainRow;
+        Rect viewport = line->lastBounds;
+        viewport.dy = line->verticalViewportDy;
+        ev->gfx->PushClip(viewport);
+        bool continuous = MultiToolbarColumns(tb) && gSettings->annotationToolbarStyle == 2;
+        if (continuous && line->railContentDy > 0) {
+            Rect surface = viewport;
+            surface.dy = std::min(surface.dy, line->railContentDy);
+            ev->gfx->FillRoundedRect(surface, UiScalePx(9), ThemeHotBackgroundColor(), ThemeEdgeColor());
+        }
+        for (int i = 0; i < len(line->railGroups); i++) {
+            Rect bounds = line->railGroups[i];
+            bounds.x += viewport.x;
+            bounds.y += viewport.y - line->verticalScrollY;
+            if (continuous) {
+                if (i < len(line->railGroups) - 1)
+                    ev->gfx->FillRect({bounds.x + UiScalePx(4), bounds.Bottom() + line->gap / 2,
+                                       std::max(1, bounds.dx - UiScalePx(8)), 1},
+                                      ThemeEdgeColor());
+            } else {
+                ev->gfx->FillRoundedRect(bounds, UiScalePx(9), ThemeHotBackgroundColor(), ThemeEdgeColor());
+            }
+        }
+        ev->gfx->PopClip();
+    } else if (tb->mainRow) {
         for (auto& item : tb->mainRow->children) {
             if (item.layout->LayoutChildCount() == 0) continue;
             Rect bounds;
             groupBounds(groupBounds, item.layout, bounds);
             if (!bounds.IsEmpty())
                 ev->gfx->FillRoundedRect(bounds, UiScalePx(9), ThemeHotBackgroundColor(), ThemeEdgeColor());
+        }
+    }
+    if (tb->pageBox) tb->pageBox->Paint(ev->gfx);
+    if (AnnotationToolbarRail(tb)) {
+        for (Edit* edit : {tb->zoomEdit, win->chapterEdit}) {
+            if (!edit || edit->GetVisibility() != Visibility::Visible) continue;
+            auto* field = (ToolbarLocationEdit*)edit;
+            ev->gfx->FillRoundedRect(field->railBounds, UiScalePx(6), ThemeWindowControlBackgroundColor(),
+                                     edit->IsFocused() ? ThemeBrandColor() : ThemeEdgeColor());
         }
     }
     VirtCtrl* focused = tb->host->vroot ? tb->host->vroot->focused : nullptr;
@@ -5830,7 +7752,13 @@ static void PaintToolbarEdge(MainWindow* win, VirtHostPaintEvent* ev) {
     Color canvasBg;
     ThemeDocumentColors(canvasBg);
     Rect rc = ev->clientRect;
-    int y = ToolbarAtBottom() ? rc.y : (rc.Bottom() - 1);
+    int position = ToolbarPositionForWindow(win);
+    if (position == kToolbarLeft || position == kToolbarRight) {
+        int x = position == kToolbarLeft ? rc.Right() - 1 : rc.x;
+        ev->gfx->FillRect({x, rc.y, 1, rc.dy}, canvasBg);
+        return;
+    }
+    int y = position == kToolbarBottom ? rc.y : (rc.Bottom() - 1);
     ev->gfx->FillRect({rc.x, y, rc.dx, 1}, canvasBg);
 }
 
@@ -5839,7 +7767,10 @@ static void OnToolbarSize(MainWindow* win, Size size) {
     if (!host || !host->layout || size.dx <= 0) {
         return;
     }
-    int height = host->layout->MinIntrinsicHeight(size.dx);
+    if (win->toolbarVirt->vertical) return;
+    // Fit the groups at the new width before measuring; compact rows can
+    // otherwise clamp the two-line brand and disagree with the frame's slot.
+    int height = host->layout->Layout(ExpandHeight(size.dx)).dy;
     if (height > 0 && height != size.dy) {
         ToolbarSetHeight(win, height);
         ScheduleUiUpdate(win, kUiForceRelayout);
@@ -5883,6 +7814,7 @@ void CreateToolbar(MainWindow* win) {
 
     auto* tb = new ToolbarVirt();
     tb->host = host;
+    tb->win = win;
     tb->iconSize = iconSize;
     tb->platformFont = GetAppFontForDpi(win->frameDpi > 0 ? win->frameDpi : DpiGet());
     win->toolbarVirt = tb;
@@ -5976,6 +7908,85 @@ void ToolbarPostCommand(MainWindow* win, int cmdId) {
     HwndPostCommand(win->hwndFrame, cmdId, commandPoint);
 }
 
+int ToolbarDockSize(MainWindow* win) {
+    auto* tb = win->toolbarVirt;
+    if (!tb) return 0;
+    if (!tb->vertical) {
+        if (!tb->host || !tb->host->layout) return tb->rowDy;
+        return tb->host->layout->MinIntrinsicHeight(HwndClientRect(win->hwndToolbar).dx);
+    }
+    if (AnnotationToolbarRail(tb)) return ToolbarColumnWidth(tb) * tb->annotationColumns + 2 * ToolbarSidePad();
+    int cellDx = tb->annotationModeButton ? tb->annotationModeButton->MinIntrinsicWidth(0) : tb->rowDy;
+    for (auto* control : tb->items) {
+        if (auto* button = AsVirtIconButton(control)) cellDx = std::max(cellDx, button->MinIntrinsicWidth(0));
+    }
+    for (auto* control : tb->annotationItems) {
+        if (auto* button = AsVirtIconButton(control)) cellDx = std::max(cellDx, button->MinIntrinsicWidth(0));
+    }
+    if (win->annotationMode) {
+        int cap =
+            std::max(cellDx, std::min(UiScalePx(160), (HwndClientRect(win->hwndFrame).dx / 3 - 2 * ToolbarSidePad()) /
+                                                          tb->annotationColumns));
+        if (tb->zoomEdit) {
+            auto* zoom = (ToolbarLocationEdit*)tb->zoomEdit;
+            zoom->MeasureWidth();
+            cellDx = std::max(cellDx, LocationEditWidth(zoom->preferredDx, zoom->minimumDx, cap));
+        }
+        for (auto& field : tb->mainRow->locationFields) {
+            if (IsCollapsed(field.edit)) continue;
+            field.edit->MeasureWidth();
+            cellDx = std::max(cellDx, LocationEditWidth(field.edit->preferredDx, field.edit->minimumDx, cap));
+        }
+        return cellDx * tb->annotationColumns + 2 * ToolbarSidePad();
+    }
+    int width = std::max(UiScalePx(68), cellDx);
+    if (tb->zoomEdit) width = std::max(width, tb->zoomEdit->GetIdealSize().dx);
+    for (auto& field : tb->mainRow->locationFields) width = std::max(width, field.edit->preferredDx);
+    for (auto* label : {tb->pageTotal, tb->chapterTotal}) {
+        if (label && label->IsVisible()) width = std::max(width, label->MinIntrinsicWidth(0));
+    }
+    return width + 2 * ToolbarSidePad();
+}
+
+void ToolbarSetDock(MainWindow* win) {
+    auto* tb = win->toolbarVirt;
+    if (!tb || !tb->mainRow || !tb->contentPadding) return;
+    int position = ToolbarPositionForWindow(win);
+    bool vertical = position == kToolbarLeft || position == kToolbarRight;
+    int columns = win->annotationMode ? limitValue(gSettings->annotationToolbarColumns, 1, 3) : 1;
+    for (auto* control : tb->items) {
+        auto* button = AsVirtIconButton(control);
+        if (button && button->id == CmdOpenFile) button->label = win->annotationMode ? Str{} : Tr("Open");
+    }
+    if (vertical != tb->vertical || columns != tb->annotationColumns) {
+        tb->mainRow->Restore();
+        tb->mainRow->firstGroup = 0;
+        tb->mainRow->verticalScrollY = 0;
+        tb->vertical = vertical;
+        tb->annotationColumns = columns;
+        UpdateZoomFieldText(win);
+        for (VirtIconButton* button : {tb->mainRow->previousButton, tb->mainRow->nextButton}) {
+            bool previous = button == tb->mainRow->previousButton;
+            const char* svg = vertical ? (previous ? gIconArrowUp : gIconChevronDownBold)
+                                       : (previous ? kEnhancedIconPrevious : kEnhancedIconNext);
+            button->pixmap = GetCachedPixmapForSvg(Str(svg), tb->iconSize, tb->iconSize, TbTextColor(), TbBgColor());
+            button->pixmapDisabled =
+                GetCachedPixmapForSvg(Str(svg), tb->iconSize, tb->iconSize, TbDisabledColor(), TbBgColor());
+            button->SetTooltip(vertical ? (previous ? Tr("Scroll toolbar up") : Tr("Scroll toolbar down"))
+                                        : (previous ? Tr("Scroll toolbar left") : Tr("Scroll toolbar right")));
+        }
+    }
+    tb->contentPadding->insets = vertical ? Insets{UiScalePx(20), ToolbarSidePad(), ToolbarSidePad(), ToolbarSidePad()}
+                                          : Insets{ToolbarOuterPad(), ToolbarSidePad(), ToolbarOuterPad(),
+                                                   win->annotationMode ? UiScalePx(20) : ToolbarSidePad()};
+    if (!vertical) {
+        for (auto& field : tb->mainRow->locationFields) field.edit->HideDetails();
+    }
+    for (auto& field : tb->mainRow->locationFields) field.edit->SetRailPaint(AnnotationToolbarRail(tb));
+    if (tb->zoomEdit) ((ToolbarLocationEdit*)tb->zoomEdit)->SetRailPaint(AnnotationToolbarRail(tb));
+    if (tb->pageBox) tb->pageBox->UpdateTotal();
+}
+
 void ToolbarSetHeight(MainWindow* win, int dy) {
     HWND hwnd = win ? win->hwndToolbar : nullptr;
     if (!hwnd || dy <= 0) {
@@ -6021,6 +8032,7 @@ static void OnLocationEditChar(MainWindow* win, Edit::CharEvent* ev) {
             return;
         }
         case Key::Escape:
+            if (win->annotationMode) ToggleAnnotationMode(win);
             HwndSetFocus(win->hwndFrame);
             UpdateOverlayToolbarForMouse(win);
             ev->didHandle = true;
@@ -6068,6 +8080,8 @@ static Edit* ToolbarCreateLocationEdit(MainWindow* win, PlatformFont* font, int 
     e->idealDy = std::max(iconDy, PlatformFontLineHeight(font) + UiScalePx(4));
     e->MeasureWidth();
     e->onTextChanged = MkMethod0<ToolbarLocationEdit, &ToolbarLocationEdit::OnTextChanged>(e);
+    e->onFocus = MkMethod0<ToolbarLocationEdit, &ToolbarLocationEdit::ShowDetails>(e);
+    e->onKillFocus = MkMethod0<ToolbarLocationEdit, &ToolbarLocationEdit::HideDetails>(e);
     e->onChar = MkFunc1(OnLocationEditChar, win);
     return e;
 }
@@ -6077,7 +8091,9 @@ Edit* ToolbarCreatePageEdit(MainWindow* win, PlatformFont* font, int iconDy) {
 }
 
 Edit* ToolbarCreateChapterEdit(MainWindow* win, PlatformFont* font, int iconDy) {
-    return ToolbarCreateLocationEdit(win, font, iconDy);
+    auto* edit = (ToolbarLocationEdit*)ToolbarCreateLocationEdit(win, font, iconDy);
+    edit->fieldKind = ToolbarFieldKind::Chapter;
+    return edit;
 }
 
 // no document: the find edit does nothing, so don't offer a text cursor
@@ -6145,7 +8161,7 @@ enum class ToolbarDragKind {
 };
 
 static ToolbarDragKind ToolbarDragFamily(ToolbarVirt* tb, VirtCtrl* item) {
-    if (!item || !AsVirtIconButton(item)) return ToolbarDragKind::None;
+    if (!item || item == tb->annotationModeButton || !AsVirtIconButton(item)) return ToolbarDragKind::None;
     int index = VecFind(tb->items, item);
     if (index >= 0 && index < gLayoutButtonsCount) return ToolbarDragKind::Main;
     if (VecFind(tb->annotationItems, item) >= 0) return ToolbarDragKind::Annotation;
@@ -6185,15 +8201,17 @@ static void UpdateToolbarDrag(MainWindow* win) {
     for (VirtCtrl* item : ToolbarDragItems(tb)) {
         if (item == tb->dragItem || !item || !item->IsVisible() || ToolbarDragFamily(tb, item) != kind) continue;
         Rect rect = item->BoundsInWindow();
-        if (pt.y < rect.y || pt.y >= rect.Bottom()) continue;
-        bool after = (pt.x >= rect.x + rect.dx / 2) != rtl;
+        if (tb->vertical ? (pt.x < rect.x || pt.x >= rect.Right()) : (pt.y < rect.y || pt.y >= rect.Bottom())) continue;
+        bool after = tb->vertical ? pt.y >= rect.y + rect.dy / 2 : (pt.x >= rect.x + rect.dx / 2) != rtl;
         int x = after != rtl ? rect.Right() : rect.x;
-        int delta = std::abs(pt.x - x);
+        int y = after ? rect.Bottom() : rect.y;
+        int delta = tb->vertical ? std::abs(pt.y - y) : std::abs(pt.x - x);
         if (delta >= distance) continue;
         distance = delta;
         tb->dragTarget = item;
         tb->dragAfter = after;
-        tb->dragMarker = {x - UiScalePx(1), rect.y, UiScalePx(2), rect.dy};
+        tb->dragMarker = tb->vertical ? Rect{rect.x, y - UiScalePx(1), rect.dx, UiScalePx(2)}
+                                      : Rect{x - UiScalePx(1), rect.y, UiScalePx(2), rect.dy};
     }
     tb->host->Invalidate();
 }
@@ -6209,7 +8227,8 @@ static void OnToolbarDragTimer(MainWindow* win) {
 static void CancelToolbarDrag(MainWindow* win) {
     auto* tb = win->toolbarVirt;
     if (!tb) return;
-    bool active = tb->dragActive;
+    bool active = tb->dragActive || tb->dockPending;
+    tb->dockPending = tb->dockDragging = false;
     tb->dragItem = tb->dragTarget = nullptr;
     tb->dragActive = false;
     tb->dragMarker = {};
@@ -6257,6 +8276,80 @@ static bool SaveToolbarOrder(MainWindow* win) {
     ScheduleSaveSettings();
     uitask::Post(MkFunc0Void(RefreshPinnedBars), "Refresh toolbar order");
     return true;
+}
+
+static int ToolbarDockFromPoint(Rect frame, Point pt) {
+    int distances[] = {std::abs(pt.y - frame.y), std::abs(pt.y - frame.Bottom()), std::abs(pt.x - frame.x),
+                       std::abs(pt.x - frame.Right())};
+    int position = kToolbarTop;
+    for (int i = 1; i < dimof(distances); i++)
+        if (distances[i] < distances[position]) position = i;
+    return position;
+}
+
+static bool OnToolbarDockDrag(MainWindow* win, VirtHostNativeMsg* ev) {
+    auto* tb = win->toolbarVirt;
+    if (!tb || !win->annotationMode) return false;
+    Point pt{GET_X_LPARAM(ev->lp), GET_Y_LPARAM(ev->lp)};
+    UnmirrorRtl(ev->host->native, pt);
+    auto cancel = [&]() {
+        tb->dockPending = tb->dockDragging = false;
+        if (GetCapture() == tb->host->native) ReleaseCapture();
+    };
+    switch (ev->msg) {
+        case WM_LBUTTONDOWN: {
+            VirtCtrl* item = ToolbarItemFromPoint(win, pt);
+            if (item && item->id != 0 && item->id != PageInfoId) return false;
+            HWND child = ChildWindowFromPointEx(tb->host->native, ToPOINT(pt), CWP_SKIPINVISIBLE);
+            if (child && child != tb->host->native) return false;
+            HideToolbarHoverDropdown(win);
+            tb->dockPending = true;
+            tb->dockDragging = false;
+            tb->dragStart = pt;
+            tb->dockTarget = ToolbarPositionForWindow(win);
+            SetCapture(tb->host->native);
+            return true;
+        }
+        case WM_MOUSEMOVE: {
+            if (!tb->dockPending) return false;
+            if (!(ev->wp & MK_LBUTTON)) {
+                cancel();
+                return true;
+            }
+            if (!tb->dockDragging && std::abs(pt.x - tb->dragStart.x) < GetSystemMetrics(SM_CXDRAG) &&
+                std::abs(pt.y - tb->dragStart.y) < GetSystemMetrics(SM_CYDRAG))
+                return true;
+            tb->dockDragging = true;
+            Point screen = HwndMapWindowPoint(tb->host->native, HWND_DESKTOP, pt);
+            Point frame = ToolbarScreenToFrame(win, screen);
+            tb->dockTarget = ToolbarDockFromPoint(HwndClientRect(win->hwndFrame), frame);
+            SetCursorCached(IDC_SIZEALL);
+            return true;
+        }
+        case WM_LBUTTONUP: {
+            if (!tb->dockPending) return false;
+            bool moved = tb->dockDragging;
+            int position = tb->dockTarget;
+            cancel();
+            if (moved && position != ToolbarPositionForWindow(win)) {
+                win->annotationToolbarPosition = position;
+                ToolbarSetDock(win);
+                ScheduleUiUpdate(win, kUiForceRelayout | kUiToolbarDirty);
+            }
+            return true;
+        }
+        case WM_KEYDOWN:
+            if (ev->wp != VK_ESCAPE || !tb->dockPending) return false;
+            cancel();
+            ToggleAnnotationMode(win);
+            return true;
+        case WM_CAPTURECHANGED:
+        case WM_CANCELMODE:
+            if (!tb->dockPending) return false;
+            cancel();
+            return true;
+    }
+    return false;
 }
 
 static bool OnToolbarDrag(MainWindow* win, VirtHostNativeMsg* ev) {
@@ -6317,7 +8410,7 @@ static bool OnToolbarDrag(MainWindow* win, VirtHostNativeMsg* ev) {
 }
 
 static void OnToolbarNativeMsg(MainWindow* win, VirtHostNativeMsg* ev) {
-    if (OnToolbarDrag(win, ev)) {
+    if (OnToolbarDockDrag(win, ev) || OnToolbarDrag(win, ev)) {
         ev->didHandle = true;
         ev->res = 0;
         return;
@@ -6333,17 +8426,17 @@ static void OnToolbarNativeMsg(MainWindow* win, VirtHostNativeMsg* ev) {
             auto* line =
                 tb->annotationLine && tb->annotationLine->lastBounds.Contains(pt) ? tb->annotationLine : tb->mainRow;
             int delta = GET_WHEEL_DELTA_WPARAM(ev->wp);
-            line->wheelRemainder += ev->msg == WM_MOUSEHWHEEL ? delta : -delta;
-            while (std::abs(line->wheelRemainder) >= WHEEL_DELTA) {
-                int direction = line->wheelRemainder > 0 ? 1 : -1;
-                line->wheelRemainder -= direction * WHEEL_DELTA;
-                if (line->Scroll(direction)) HideToolbarHoverDropdown(win);
-            }
+            if (line->Wheel(ev->msg == WM_MOUSEHWHEEL ? delta : -delta)) HideToolbarHoverDropdown(win);
             ev->didHandle = true;
             ev->res = 0;
             return;
         }
         case WM_KEYDOWN:
+            if (ev->wp == VK_ESCAPE && win->annotationMode) {
+                ToggleAnnotationMode(win);
+                ev->didHandle = true;
+                return;
+            }
             if (ev->wp == VK_TAB && !IsCtrlPressed() && !IsAltPressed()) {
                 auto* tb = win->toolbarVirt;
                 Vec<TabStop> stops;
@@ -6367,7 +8460,7 @@ static void OnToolbarNativeMsg(MainWindow* win, VirtHostNativeMsg* ev) {
             return;
         case WM_LBUTTONDOWN:
         case WM_LBUTTONDBLCLK:
-            if (win->tabsInTitlebar) {
+            if (win->tabsInTitlebar && !win->annotationMode) {
                 ev->didHandle = OnCaptionDrag(win, ev);
             }
             return;
@@ -6448,6 +8541,21 @@ static void ToolbarInteractionTests() {
     utassert(line->firstGroup == 1);
     SendMessageW(host->native, WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA), wheelPoint);
     utassert(line->firstGroup == 0);
+
+    SendMessageW(host->native, WM_MOUSEHWHEEL, MAKEWPARAM(0, 1 - WHEEL_DELTA), wheelPoint);
+    utassert(line->firstGroup == 0 && line->wheelRemainder == 0);
+    SendMessageW(host->native, WM_MOUSEHWHEEL, MAKEWPARAM(0, WHEEL_DELTA), wheelPoint);
+    utassert(line->firstGroup == 1);
+    while (line->Scroll(1)) {
+    }
+    int lastGroup = line->firstGroup;
+    SendMessageW(host->native, WM_MOUSEHWHEEL, MAKEWPARAM(0, WHEEL_DELTA - 1), wheelPoint);
+    utassert(line->firstGroup == lastGroup && line->wheelRemainder == 0);
+    SendMessageW(host->native, WM_MOUSEHWHEEL, MAKEWPARAM(0, -WHEEL_DELTA), wheelPoint);
+    utassert(line->firstGroup < lastGroup);
+    line->wheelRemainder = 0;
+    while (line->Scroll(-1)) {
+    }
 
     // Caption dragging must leave these controls' clicks in the virtual input path.
     win.tabsInTitlebar = true;
@@ -6665,6 +8773,171 @@ static void ShapeMenuTestNative(ShapeMenuTestState* state, VirtHostNativeMsg* ev
     state->backgroundColor = GetMenuState(menu, 3, MF_BYCOMMAND) != (UINT)-1;
     state->backgroundOpacity = GetMenuState(menu, 4, MF_BYCOMMAND) != (UINT)-1;
     EndMenu();
+}
+
+void Toolbar_UnitTestsShapes() {
+    RenderCache* previousCache = gRenderCache;
+    if (!previousCache) gRenderCache = new RenderCache();
+    defer {
+        if (!previousCache) {
+            delete gRenderCache;
+            gRenderCache = nullptr;
+        }
+    };
+    Settings* saved = gSettings;
+    gSettings = NewSettings({});
+    if (!ThemeGetCount()) CreateThemeCommands();
+    defer {
+        DeleteSettings(gSettings);
+        gSettings = saved;
+        if (saved) SetCurrentThemeFromSettings();
+        RefreshUiFonts();
+    };
+    int grouped = 0;
+    for (auto& button : gPdfAnnotationButtons) {
+        grouped += button.cmdId == CmdAnnotationShapes ? 1 : 0;
+        utassert(ShapeFillCommandPtr(button.cmdId) == nullptr);
+    }
+    utassert(grouped == 1);
+    str::ReplaceWithCopy(&gSettings->toolbarAnnotationOrder,
+                         StrL("CmdHandTool CmdCreateAnnotLine CmdCreateAnnotCircle CmdCreateAnnotText"));
+    PopulateAnnotationOrder();
+    int shapeIndex = -1, textIndex = -1;
+    for (int i = 0; i < kPdfAnnotationButtonsCount; i++) {
+        if (gAnnotationButtons[i].cmdId == CmdAnnotationShapes) shapeIndex = i;
+        if (gAnnotationButtons[i].cmdId == CmdCreateAnnotText) textIndex = i;
+    }
+    utassert(shapeIndex >= 0 && textIndex > shapeIndex);
+    str::Free(gSettings->toolbarAnnotationOrder);
+    gSettings->toolbarAnnotationOrder = {};
+    for (int variant = 0; variant < 2; variant++) {
+        str::ReplaceWithCopy(&gSettings->theme, variant ? StrL("Sumatra Dark") : StrL("Sumatra Light"));
+        SetCurrentThemeFromSettings();
+        RefreshUiFonts();
+        MainWindow win(nullptr);
+        win.tabsCtrl = new TabsCtrl();
+        ToolbarVirt tb;
+        win.toolbarVirt = &tb;
+        tb.platformFont = GetAppFont();
+        tb.iconSize = ToolbarIconSize();
+        VirtHost::CreateArgs args;
+        args.className = WStrL(L"SumatraGroupedShapesTest");
+        args.isPopup = true;
+        args.visible = false;
+        args.title = Tr("Shapes");
+        args.initialSize = {500, 600};
+        auto* host = VirtHost::Create(args);
+        utassert(host);
+        if (!host) {
+            win.toolbarVirt = nullptr;
+            continue;
+        }
+        win.hwndFrame = host->native;
+        tb.host = tb.hoverHost = host;
+        for (int i = 0; i < dimofi(kShapeFillCommands); i++) {
+            gSettings->annotations.shapeTool = i;
+            int cmd = SelectedShapeCmd();
+            utassert(cmd == kShapeFillCommands[i]);
+            ShapeWidthPicked(ShapeFillCommandPtr(cmd), 1.f + i * .5f);
+            utassert(*ShapeBorderWidth(cmd) == 1.f + i * .5f);
+            ToolbarHoverBuildEvent ev;
+            ev.cmdId = CmdAnnotationShapes;
+            VecReset(tb.hoverItems);
+            BuildShapesHoverMenu(&win, &ev);
+            utassert(ev.layout);
+            Size natural = host->SetLayoutSizedToContent(ev.layout);
+            host->SetPos({0, 0, natural.dx, natural.dy}, false);
+            Vec<VirtCtrl*> controls;
+            CollectPaletteControls(host->layout, controls);
+            int types = 0, border = 0, fill = 0, widths = 0, opacity = 0;
+            PaletteNumberEdit* widthInput = nullptr;
+            PaletteNumberEdit* opacityInput = nullptr;
+            InkThicknessSlider* widthSlider = nullptr;
+            ShapeFillSlider* opacitySlider = nullptr;
+            for (auto* ctrl : controls) {
+                if (str::Eq(ctrl->name, StrL("shape-border-width-value"))) widthInput = (PaletteNumberEdit*)ctrl;
+                if (str::Eq(ctrl->name, StrL("shape-background-opacity-value")))
+                    opacityInput = (PaletteNumberEdit*)ctrl;
+                if (str::Eq(ctrl->name, StrL("shape-background-opacity"))) opacitySlider = (ShapeFillSlider*)ctrl;
+                types += str::Eq(ctrl->name, StrL("shape-type")) ? 1 : 0;
+                border += str::Eq(ctrl->name, StrL("shape-border-color")) ? 1 : 0;
+                fill += str::Eq(ctrl->name, StrL("shape-background-color")) ? 1 : 0;
+                opacity += str::Eq(ctrl->name, StrL("shape-background-opacity")) ? 1 : 0;
+                if (str::Eq(ctrl->name, StrL("shape-border-width"))) {
+                    widths++;
+                    auto* slider = (InkThicknessSlider*)ctrl;
+                    widthSlider = slider;
+                    utassert(fabsf(slider->Width() - *ShapeBorderWidth(cmd)) < .01f);
+                    slider->onThickness.Call(2.7f);
+                    utassert(fabsf(*ShapeBorderWidth(cmd) - 2.7f) < .001f);
+                }
+            }
+            bool math = MathShapeForCommand(cmd) >= 0;
+            utassert(types == dimofi(kShapeFillCommands) && border > 0 && widths == 1);
+            utassert(math ? fill == 0 && opacity == 0 : fill > 0 && opacity == 1);
+            utassert(widthInput && widthSlider && (math || (opacityInput && opacitySlider)));
+            if (widthInput && opacityInput && widthSlider && opacitySlider) {
+                utassert(widthInput->BoundsInWindow().x >= widthSlider->BoundsInWindow().Right());
+                utassert(opacityInput->BoundsInWindow().x >= opacitySlider->BoundsInWindow().Right());
+                auto enter = [&](PaletteNumberEdit* input, Str value) {
+                    host->vroot->SetFocus(input);
+                    input->anchor = 0;
+                    input->caret = len(input->text);
+                    for (int c = 0; c < len(value); c++) SendMessageW(host->native, WM_CHAR, value.s[c], 0);
+                    SendMessageW(host->native, WM_KEYDOWN, VK_RETURN, 0);
+                    utassert(IsWindow(host->native));
+                };
+                widthInput->SetValue(1);
+                int compactWidth = widthInput->GetIdealSize().dx;
+                utassert(compactWidth == PlatformFontMeasureText(widthInput->font, StrL("000")).dx + UiScalePx(16));
+                enter(widthInput, StrL("12.35"));
+                utassert(widthInput->GetIdealSize().dx > compactWidth);
+                utassert(fabsf(*ShapeBorderWidth(cmd) - 12.35f) < .001f);
+                utassert(fabsf(widthSlider->Width() - 12.35f) < .001f);
+                utassert(fabsf(widthSlider->preview->thickness - 12.35f) < .001f);
+                enter(widthInput, StrL("64.01"));
+                utassert(widthInput->invalid && fabsf(*ShapeBorderWidth(cmd) - 12.35f) < .001f);
+                enter(widthInput, StrL("64"));
+                utassert(!widthInput->invalid && *ShapeBorderWidth(cmd) == 64.f);
+                enter(widthInput, StrL("0"));
+                utassert(*ShapeBorderWidth(cmd) == 0);
+                enter(widthInput, StrL("2.7"));
+                utassert(str::Eq(widthInput->text, StrL("2.7")));
+                enter(opacityInput, StrL("33"));
+                utassert(*ShapeFillForCmd(cmd).opacity == 33 && opacitySlider->value == 33);
+                enter(opacityInput, StrL("101"));
+                utassert(opacityInput->invalid && *ShapeFillForCmd(cmd).opacity == 33);
+                enter(opacityInput, StrL("33.5"));
+                utassert(*ShapeFillForCmd(cmd).opacity == 33);
+                enter(opacityInput, StrL("0"));
+                utassert(*ShapeFillForCmd(cmd).opacity == 0);
+                enter(opacityInput, StrL("100"));
+                utassert(*ShapeFillForCmd(cmd).opacity == 100);
+                opacitySlider->value = 42;
+                opacitySlider->OnCommitted();
+                utassert(str::Eq(opacityInput->text, StrL("42")));
+                widthSlider->value = 15;
+                widthSlider->OnCommitted();
+                utassert(fabsf(widthSlider->Width() - 1.5f) < .001f);
+                utassert(str::Eq(widthInput->text, StrL("1.5")));
+                enter(widthInput, StrL("2.7"));
+                host->vroot->SetFocus(nullptr);
+            }
+            AnnotCreateArgs create{CmdIdToAnnotationType(cmd)};
+            SetAnnotCreateArgs(create, nullptr);
+            ConfigureShapeCreateArgs(cmd, create);
+            utassert(fabsf(create.borderWidth - 2.7f) < .001f);
+            if (i == 2) {
+                SetWindowTextW(host->native, CWStrTemp(ShapeToolTitle()));
+                WindowApplyScaledCaption(host->native);
+                CaptureToolbarPalette(host, fmt("grouped-shapes-%d.bmp", variant));
+            }
+        }
+        tb.host = tb.hoverHost = nullptr;
+        win.toolbarVirt = nullptr;
+        win.hwndFrame = nullptr;
+        delete host;
+    }
 }
 
 static void ShapePaletteTests() {
@@ -7011,6 +9284,33 @@ static void ToolbarAlphaTests() {
     AnnotColorsPicked(fillTarget, &fillArgs);
     utassert(fill == kColorUnset);
 
+    const int paletteCommands[] = {0, CmdCreateAnnotInk, CmdCreateAnnotHighlight, CmdCreateAnnotSquare};
+    for (int cmd : paletteCommands) {
+        Str* list = AnnotPresetColorList(cmd);
+        Str original = str::Dup(*list);
+        str::ReplaceWithCopy(list, StrL("#ff000000"));
+        for (int mode = 0; mode < 2; mode++) {
+            auto* target = new AnnotColorsTarget();
+            target->cmdId = cmd;
+            target->onPick = MkFunc1(RecordPaletteAlpha, &fill);
+            ChangeColorsArgs selected;
+            selected.didSelect = mode != 0;
+            selected.color = MkRgba(23, 151, (u8)(211 + mode), 173);
+            AnnotColorsPicked(target, &selected);
+            VecReset(colors);
+            AnnotPresetColors(cmd, colors);
+            bool present = false;
+            for (Color color : colors) present |= color == selected.color;
+            utassert(!present);
+            utassert(str::Eq(*list, StrL("#ff000000")));
+        }
+        str::ReplaceWithCopy(list, original);
+        str::Free(original);
+    }
+
+    gSettings->annotations.squareBorderWidth = 3.7f;
+    SetColorText(gSettings->annotations.squareInteriorColor, StrL("#0000ff"));
+    gSettings->annotations.squareInteriorOpacity = 33;
     TogglePinnedTool(&win, CmdCreateAnnotSquare, transparent);
     int first = PinnedToolIndex(&win, CmdCreateAnnotSquare, transparent);
     TogglePinnedTool(&win, CmdCreateAnnotSquare, opaque);
@@ -7021,6 +9321,25 @@ static void ToolbarAlphaTests() {
         VecReset(colors);
         ParseColorList((*pins)[first]->color, colors, 1);
         utassert(len(colors) == 1 && colors[0] == transparent);
+        auto* shape = (*pins)[first];
+        utassert(fabsf(shape->width - 3.7f) < .001f);
+        utassert(shape->shapeStyle && shape->fillOpacity == 33 && len(shape->fillColor));
+        gSettings->annotations.squareBorderWidth = 1;
+        SetColorText(gSettings->annotations.squareInteriorColor, StrL("#00ff00"));
+        gSettings->annotations.squareInteriorOpacity = 99;
+        RestorePinnedShape(shape, CmdCreateAnnotSquare);
+        utassert(gSettings->annotations.squareInteriorOpacity == 33 &&
+                 fabsf(gSettings->annotations.squareBorderWidth - 3.7f) < .001f);
+        utassert(GetBlue(GetParsedColor(gSettings->annotations.squareInteriorColor, kColorUnset)) == 255);
+        Str serialized = SerializeSettings(gSettings, {});
+        Settings* restored = NewSettings(serialized);
+        auto* savedShape = (*restored->pinnedAnnotationTools)[first];
+        utassert(savedShape->shapeStyle && savedShape->fillOpacity == 33 &&
+                 str::Eq(savedShape->fillColor, shape->fillColor));
+        DeleteSettings(restored);
+        str::Free(serialized);
+        TempStr shapeSvg = PinnedShapeSvg(shape, CmdCreateAnnotSquare);
+        utassert(str::Contains(shapeSvg, StrL("#0000ff")) && str::Contains(shapeSvg, StrL("0.330")));
     }
     while (pins && len(*pins)) RemovePinnedTool(len(*pins) - 1);
 

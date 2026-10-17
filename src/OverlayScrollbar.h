@@ -53,6 +53,7 @@ struct OverlayScrollbar {
     int dragStartPos = 0;    // nPos when drag started
     bool mouseOverThumb = false;
     bool mouseOverBar = false;
+    bool paintPending = false;
     bool nativeAdapter = false;
     bool syncingNative = false;
     bool sendingNative = false;
@@ -71,7 +72,7 @@ struct OverlayScrollbar {
     Size paintSize{};
 
     // repeat-scroll state (for held arrow/track clicks)
-    UINT repeatScrollCode = 0;    // SB_LINEUP, SB_PAGEDOWN, etc.; 0 = not repeating
+    UINT repeatScrollCode = SB_ENDSCROLL;
     bool repeatIsInitial = false; // true = waiting for initial delay, false = repeating
 
     // timer IDs
@@ -101,3 +102,5 @@ void InstallAppScrollbar(HWND hwnd);
 void RemoveAppScrollbar(HWND hwnd);
 int AppScrollbarTrackPos(HWND hwnd, int fallback, int bar = SB_VERT);
 int AppScrollbarInset(HWND hwnd);
+Str AppScrollbarCss();
+TempStr AppScrollbarStyleTemp();

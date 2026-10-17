@@ -1,0 +1,46 @@
+Original Enhanced pinned-note appearance for standard Text/Note annotations.
+Base: mupdf 1.28.5 (8ad45e92f).
+Existing supplied appearances are not proactively replaced.
+
+diff --git a/source/pdf/pdf-appearance.c b/source/pdf/pdf-appearance.c
+--- a/source/pdf/pdf-appearance.c
++++ b/source/pdf/pdf-appearance.c
+@@ -1399,6 +1399,23 @@
+ 	*bbox = fz_make_rect(0, 0, 20, 14);
+ }
+ 
++/* Original Enhanced pinned-paper artwork; retain standard Text/Note semantics. */
++static void
++pdf_write_pinned_note(fz_context *ctx, pdf_annot *annot, fz_buffer *buf)
++{
++	fz_append_string(ctx, buf, "% EnhancedPinnedNote\nq\n0.42105263 0 0 -0.42105263 1.2631579 16 cm\n1 j\n1.4 w\n");
++	if (!pdf_write_fill_color_appearance(ctx, annot, buf))
++		fz_append_string(ctx, buf, "1 0.941176 0.666667 rg\n");
++	fz_append_string(ctx, buf,
++		"0.447059 0.380392 0.211765 RG\n5 8 m 27 8 l 27 33 l 21 31 l 14 34 l 5 33 l h B\n"
++		"0.862745 0.780392 0.486275 rg\n21 31 m 27 33 l 24 27 l h f\n"
++		"0.780392 0.313725 0.25098 rg\n0.45098 0.207843 0.168627 RG\n1.2 w\n"
++		"10 15 m 13 6 l 18 7 l 17 17 l 14 20 l h B\n"
++		"0.901961 0.396078 0.313725 rg\n13 6 m 12 0 21 0 21 5 c 21 8 18 11 16 10 c h B\n"
++		"0.360784 0.329412 0.313725 RG\n1.4 w\n14 19 m 12 24 l S\n"
++		"0.705882 0.611765 0.32549 RG\n1.2 w\n9 27 m 21 27 l S\n9 30 m 17 30 l S\nQ\n");
++}
++
+ static void
+ pdf_write_icon_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, fz_rect *rect, fz_rect *bbox, pdf_obj **res)
+ {
+@@ -1408,6 +1425,14 @@
+ 	float y = rect->y1 - w;
+ 
+ 	pdf_write_opacity(ctx, annot, buf, res);
++	name = pdf_annot_icon_name(ctx, annot);
++	if (pdf_annot_type(ctx, annot) == PDF_ANNOT_TEXT && !strcmp(name, "Note"))
++	{
++		pdf_write_pinned_note(ctx, annot, buf);
++		*rect = fz_make_rect(x, y, x + w, y + w);
++		*bbox = fz_make_rect(0, 0, 16, 16);
++		return;
++	}
+ 
+ 	if (!pdf_write_fill_color_appearance(ctx, annot, buf))
+ 		fz_append_string(ctx, buf, "1 g\n");

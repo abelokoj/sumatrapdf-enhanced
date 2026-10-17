@@ -481,6 +481,78 @@ static void PlainTextCitationNoYear() {
     utassert(len(surname) == 0);
 }
 
+static void PlainTextCitationRejectsDates() {
+    WCHAR text[256];
+    Rect coords[256];
+    int n = 0;
+    AddText(text, coords, n, 256, L"Revision: 15 October 2026, 03:30:04PM (America/New_York)", 72, 200);
+    Str surname{};
+    int year = 0;
+    bool ok = DetectCitationInPageText(WStr(text, n), coords, n, Point{152, 206}, &surname, &year);
+    utassert(!ok);
+    str::Free(surname);
+}
+
+static void PlainTextCitationRequiresHit() {
+    WCHAR text[256];
+    Rect coords[256];
+    int n = 0;
+    AddText(text, coords, n, 256, L"ordinary words (Smith, 2020) following text", 72, 200);
+    const Point outside[] = {{80, 206}, {300, 206}, {180, 180}};
+    for (Point pt : outside) {
+        Str surname{};
+        int year = 0;
+        bool ok = DetectCitationInPageText(WStr(text, n), coords, n, pt, &surname, &year);
+        utassert(!ok);
+        str::Free(surname);
+    }
+}
+
+static void NarrativeCitationDetected() {
+    WCHAR text[256];
+    Rect coords[256];
+    int n = 0;
+    AddText(text, coords, n, 256, L"as Smith (2020) explains", 72, 200);
+    Str surname{};
+    int year = 0;
+    utassert(DetectCitationInPageText(WStr(text, n), coords, n, Point{92, 206}, &surname, &year));
+    utassert(str::Eq(surname, StrL("Smith")));
+    utassert(year == 2020);
+    str::Free(surname);
+}
+
+static void CitationLookupSkipsSource() {
+    WCHAR text[256];
+    Rect coords[256];
+    int n = 0;
+    AddText(text, coords, n, 256, L"(Smith, 2020)", 72, 100);
+    float x = 0, y = 0;
+    Rect source{72, 100, 90, 12};
+    utassert(!FindSurnameInPageText(WStr(text, n), coords, n, WStrL(L"Smith"), 2020, &x, &y, source));
+    AddText(text, coords, n, 256, L"See (Smith, 2020).", 72, 200);
+    AddText(text, coords, n, 256, L"Smith, J. (2020). A genuine reference.", 72, 300);
+    utassert(FindSurnameInPageText(WStr(text, n), coords, n, WStrL(L"Smith"), 2020, &x, &y, source));
+    utassert(y == 300.f);
+
+    n = 0;
+    AddText(text, coords, n, 256, L"[7]", 72, 100);
+    utassert(!FindNumericReferenceInPageText(WStr(text, n), coords, n, 7, &x, &y, source));
+    AddText(text, coords, n, 256, L"[7] A genuine reference.", 72, 300);
+    utassert(FindNumericReferenceInPageText(WStr(text, n), coords, n, 7, &x, &y, source));
+    utassert(y == 300.f);
+}
+
+static void NumericCitationRequiresHit() {
+    WCHAR text[64];
+    Rect coords[64];
+    int n = 0;
+    AddText(text, coords, n, 64, L"[7]", 72, 200);
+    int num = 0;
+    utassert(!DetectNumericCitationInPageText(WStr(text, n), coords, n, Point{75, 180}, &num));
+    utassert(DetectNumericCitationInPageText(WStr(text, n), coords, n, Point{75, 206}, &num));
+    utassert(num == 7);
+}
+
 // (12) Bibliography page lookup: a line starting with the surname and
 // containing the year anchors at the line's first glyph; a surname that is
 // not on the page returns false.
@@ -1132,6 +1204,11 @@ void RefHoverTest() {
     PlainTextCitationDetected();
     PlainTextCitationSrcRectDistinctOnLine();
     PlainTextCitationNoYear();
+    PlainTextCitationRejectsDates();
+    PlainTextCitationRequiresHit();
+    NarrativeCitationDetected();
+    CitationLookupSkipsSource();
+    NumericCitationRequiresHit();
     SurnameFoundOnBibPage();
     NumericCitationDetected();
     NumericCitationSrcRectDistinctOnLine();

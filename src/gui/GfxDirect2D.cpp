@@ -51,7 +51,7 @@ void GfxDirect2D::FillRects(const Rect*, int, Color, u8, int) {}
 void GfxDirect2D::FillQuads(const Point*, int, Color, u8, int) {}
 void GfxDirect2D::DrawRect(const Rect&, Color, int) {}
 void GfxDirect2D::DrawDashedRect(const Rect&, Color) {}
-void GfxDirect2D::FillRoundedRect(const Rect&, int, Color, Color) {}
+void GfxDirect2D::FillRoundedRect(const Rect&, int, Color, Color, float) {}
 void GfxDirect2D::FillEllipse(const Rect&, Color, u8) {}
 void GfxDirect2D::DrawLine(const Rect&, Color, int) {}
 void GfxDirect2D::DrawLineAA(Point, Point, Color, float, u8) {}
@@ -61,7 +61,7 @@ void GfxDirect2D::DrawTextAt(Str, Point, u32, PlatformFont*, Color) {}
 Size GfxDirect2D::MeasureText(Str, PlatformFont*) {
     return {};
 }
-Size D2DMeasureText(PlatformFont*, Str) {
+Size D2DMeasureText(PlatformFont*, Str, int) {
     return {};
 }
 void GfxDirect2D::DrawPixmap(Pixmap*, const Rect&) {}
@@ -635,7 +635,7 @@ void GfxDirect2D::DrawDashedRect(const Rect& r, Color col) {
     }
 }
 
-void GfxDirect2D::FillRoundedRect(const Rect& r, int radius, Color fill, Color border) {
+void GfxDirect2D::FillRoundedRect(const Rect& r, int radius, Color fill, Color border, float borderWidth) {
     if (!target || r.IsEmpty()) {
         return;
     }
@@ -660,7 +660,7 @@ void GfxDirect2D::FillRoundedRect(const Rect& r, int radius, Color fill, Color b
         if (br) {
             D2D1_RECT_F rf =
                 D2D1::RectF((float)r.x + 0.5f, (float)r.y + 0.5f, (float)r.Right() - 0.5f, (float)r.Bottom() - 0.5f);
-            target->DrawRoundedRectangle(D2D1::RoundedRect(rf, rad, rad), br, 1.0f);
+            target->DrawRoundedRectangle(D2D1::RoundedRect(rf, rad, rad), br, borderWidth);
         }
     }
 }
@@ -802,7 +802,8 @@ void GfxDirect2D::DrawTextAt(Str s, Point pos, u32 flags, PlatformFont* font, Co
 }
 
 // no render target needed, so callers that only lay text out can use it
-Size D2DMeasureText(PlatformFont* font, Str s) {
+Size D2DMeasureText(PlatformFont* font, Str s, int width) {
+    InitDirect2D();
     if (len(s) == 0 || !gDWriteFactory) {
         return {};
     }
@@ -811,10 +812,11 @@ Size D2DMeasureText(PlatformFont* font, Str s) {
     if (!format) {
         return {};
     }
-    SetTextFormatFlags(format, ellipsis, gfxTextSingleLine);
+    SetTextFormatFlags(format, ellipsis, width < INT_MAX ? gfxTextWrap : gfxTextSingleLine);
     TempWStr ws = ToWStrTemp(s);
     IDWriteTextLayout* layout = nullptr;
-    HRESULT hr = gDWriteFactory->CreateTextLayout(ws.s, (UINT32)ws.len, format, 1e6f, 1e6f, &layout);
+    HRESULT hr = gDWriteFactory->CreateTextLayout(ws.s, (UINT32)ws.len, format,
+                                                  width < INT_MAX ? (float)std::max(1, width) : 1e6f, 1e6f, &layout);
     if (FAILED(hr) || !layout) {
         return {};
     }

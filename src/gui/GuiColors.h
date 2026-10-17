@@ -129,6 +129,7 @@ enum {
     kColTabBg,
     // the inactive tab; its hovered shade is derived from it
     kColTabInactiveBg,
+    kColTabAccent,
     kColTabCount,
 };
 extern Color gColsTab[kColTabCount];

@@ -20,7 +20,10 @@ struct VirtIconButton;
 struct Edit;
 struct ILayout;
 struct ToolbarLine;
+struct ToolbarPageBox;
 struct Spacer;
+struct Padding;
+struct Pixmap;
 
 void CreateToolbar(MainWindow*);
 void ReCreateToolbar(MainWindow* win);
@@ -35,6 +38,9 @@ void SetToolbarButtonCheckedState(MainWindow*, int cmdId, bool isChecked);
 bool ShouldShowToolbar(MainWindow*);
 bool ShouldOverlayToolbar(MainWindow*);
 void ShowOrHideToolbar(MainWindow*);
+int ToolbarPositionForWindow(MainWindow*);
+int ToolbarDockSize(MainWindow*);
+void ToolbarSetDock(MainWindow*);
 void PositionOverlayToolbar(MainWindow*);
 void UpdateOverlayToolbarForMouse(MainWindow*);
 void RevealOverlayToolbar(MainWindow*);
@@ -50,10 +56,14 @@ Rect ToolbarFindScreenRect(MainWindow*);
 bool FocusToolbar(MainWindow*, bool backwards = false);
 void TogglePdfAnnotationsToolbar(MainWindow*);
 void ShowLassoToolbarActions(MainWindow*);
+void ShowShapesToolbarPopup(MainWindow*);
+bool IsShapesToolbarPopupOpen(MainWindow*);
 void EnablePdfAnnotationsToolbar(MainWindow*);
 int ToolbarIconSize(int dpi = 0);
+void FreeShapeToolIcons();
+Pixmap* AnnotationModeIconPixmap(int size, Color color, int style = 0);
 
-TempStr ToolbarButtonsResultTemp(int* exitCodeOut);
+TempStr ToolbarButtonsResultTemp(int* exitCodeOut, Str action = {});
 
 //--- hover drop-down
 
@@ -146,6 +156,14 @@ struct ToolbarHoverReg {
 };
 
 struct ToolbarVirt {
+    MainWindow* win = nullptr;
+    Padding* contentPadding = nullptr;
+    VirtIconButton* annotationModeButton = nullptr;
+    bool vertical = false;
+    int annotationColumns = 1;
+    bool dockPending = false;
+    bool dockDragging = false;
+    int dockTarget = 0;
     // the toolbar's window; owns the layout tree and the virtual controls
     VirtHost* host = nullptr;
     Vec<VirtCtrl*> items; // not owned; the layout owns them
@@ -169,6 +187,7 @@ struct ToolbarVirt {
     VirtText* pageLabel = nullptr;
     VirtText* pageLabel2 = nullptr; // "Page:" before pageEdit, only for HasChapters() docs
     VirtText* pageTotal = nullptr;
+    ToolbarPageBox* pageBox = nullptr;
     VirtText* chapterTotal = nullptr; // only for HasChapters() docs
     PlatformFont* platformFont = nullptr;
     int iconSize = 0;

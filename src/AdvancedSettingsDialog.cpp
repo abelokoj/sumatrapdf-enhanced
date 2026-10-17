@@ -31,11 +31,20 @@
 #include "MainWindow.h"
 #include "PdfDarkMode.h"
 #include "Theme.h"
+#include "SvgIcons.h"
+#include "Commands.h"
+#include "Toolbar.h"
+#include "Tabs.h"
+#include "FileThumbnails.h"
 #include "DarkMode.h"
 #include "SumatraConfig.h"
 #include "SumatraPDF.h"
 #include "Translations.h"
 #include "FilterHighlightDraw.h"
+#if IS_DEBUG
+#include "RenderCache.h"
+#include "base/tests/UtAssert.h"
+#endif
 #include "SumatraDialogs.h"
 
 constexpr const char* kSettingsDocsUrl = "https://www.sumatrapdfreader.org/settings/settings3-7.html";
@@ -68,12 +77,23 @@ struct SettingItem {
     Str defStr;
 
     bool changed = false; // pending value differs from what was loaded (this session)
+    bool previewed = false;
+    int previewOriginalInt = 0;
+    int previewValueInt = 0;
+    Str previewOriginal;
+    Str previewValue;
+    Str previewLabel;
+    PlatformFont* previewFont = nullptr;
+    int previewLabelWidth = 0;
 
     ~SettingItem() {
         str::Free(name);
         str::Free(comment);
         str::Free(strVal);
         str::Free(defStr);
+        str::Free(previewOriginal);
+        str::Free(previewValue);
+        str::Free(previewLabel);
     }
 };
 } // namespace
@@ -169,18 +189,6 @@ static TempStr FormatSettingDefaultTemp(SettingItem* item) {
     }
 }
 
-// Show what a setting does before it's saved: some settings change how pages
-// are rendered, and picking a value from a list is guesswork without seeing it.
-// The value is previewed without touching gSettings, so Cancel (or closing
-// the dialog) puts the saved value back - see EndPreviewSettingChange().
-static void PreviewSettingChange(SettingItem* item) {
-    if (!str::EqI(item->name, StrL("DocumentColorsFollowTheme"))) {
-        return;
-    }
-    SetDocumentColorsFollowThemePreview(DocumentColorsFollowThemeFromString(item->strVal));
-    UpdateDocumentColors();
-}
-
 // drop every preview and render with the saved settings again
 static void EndPreviewSettingChange() {
     ClearDocumentColorsFollowThemePreview();
@@ -194,7 +202,7 @@ static void SetItemChanged(SettingItem* item) {
             item->changed = item->boolVal != *(bool*)p;
             break;
         case SettingType::Int:
-            item->changed = item->intVal != *(int*)p;
+            item->changed = item->intVal != (item->previewed ? item->previewOriginalInt : *(int*)p);
             break;
         case SettingType::Float:
             item->changed = item->floatVal != *(float*)p;
@@ -203,7 +211,7 @@ static void SetItemChanged(SettingItem* item) {
             item->changed = !StrValsEq(item->strVal, FormatCompactIntsTemp(item->compactInfo, p, false));
             break;
         default: {
-            Str curr = *(Str*)p;
+            Str curr = item->previewed ? item->previewOriginal : *(Str*)p;
             bool bothEmpty = len(item->strVal) == 0 && len(curr) == 0;
             item->changed = !bothEmpty && !str::Eq(item->strVal, curr);
             break;
@@ -254,6 +262,19 @@ static void CollectSettings(Vec<SettingItem*>& items) {
             case SettingType::Int:
                 item->intVal = *(int*)fieldPtr;
                 item->defInt = (int)field.value;
+                if (str::EqI(item->name, StrL("AnnotationModeIconStyle"))) {
+                    static const char* choices[] = {"1", "2", nullptr};
+                    item->enumValues = choices;
+                }
+                if (str::EqI(item->name, StrL("AnnotationToolbarStyle"))) {
+                    static const char* choices[] = {"1", "2", nullptr};
+                    item->enumValues = choices;
+                }
+                if (str::EqI(item->name, StrL("AnnotationPageNumberStyle")) ||
+                    str::EqI(item->name, StrL("AnnotationThreeColumnPageStyle"))) {
+                    static const char* choices[] = {"1", "2", "3", nullptr};
+                    item->enumValues = choices;
+                }
                 break;
             case SettingType::Float:
                 item->floatVal = *(float*)fieldPtr;
@@ -324,6 +345,12 @@ struct AdvancedSettingsWnd : WindowBase {
     Vec<u8> highlighted; // scratch for DrawMaybeHighlightedText
 
     Vec<SettingItem*> items;
+    bool appearancePreviewActive = false;
+    Str previewTheme;
+    Str previewLastLight;
+    Str previewLastDark;
+    Str previewCurrentLight;
+    Str previewCurrentDark;
 
     bool Create(MainWindow* win);
     void OnKeyDown(KeyEvent* ev);
@@ -356,6 +383,14 @@ struct AdvancedSettingsWnd : WindowBase {
     void KeepFocus();
     void RelayoutInPlaceEditor();
     void OnEditValueKillFocus();
+    void OnValueTextChanged();
+    bool LiveAppearanceEnabled() const;
+    void ScheduleAppearancePreview();
+    void ApplyAppearancePreview();
+    void OnAppearanceTimer(WindowBase::TimerEvent*);
+    void SuspendAppearancePreview();
+    void ResumeAppearancePreview();
+    void CancelAppearanceChanges();
     void PostedRefocusEditValue();
 
     void OnOpenSettingsFile(VirtMouseEvent* ev = nullptr);
@@ -377,11 +412,17 @@ AdvancedSettingsWnd::~AdvancedSettingsWnd() {
     // covers every way the dialog goes away (Save, Cancel, Esc, the close box).
     // On Save the value is in gSettings by now, so dropping the preview
     // renders the same thing; on every other path it undoes the preview.
+    CancelAppearanceChanges();
     EndPreviewSettingChange();
     delete editValue;
     delete dropDownValue;
     DeleteVecMembers(items);
     str::Free(dropDownOrigVal);
+    str::Free(previewTheme);
+    str::Free(previewLastLight);
+    str::Free(previewLastDark);
+    str::Free(previewCurrentLight);
+    str::Free(previewCurrentDark);
 }
 
 static void ClearAdvancedSettingsWnd() {
@@ -486,6 +527,697 @@ static void AdvSettingsItemColumns(const Rect& rc, Rect& rcName, Rect& rcVal) {
     rcVal.dx = valW;
 }
 
+enum class SettingPreviewKind {
+    None,
+    Color,
+    Palette,
+    Pin,
+    Picker,
+    Pen,
+    Tab,
+    File,
+    Theme,
+    AnnotationModeIcon,
+    PageNumber,
+    ThreeColumnPage,
+    ToolbarStyle
+};
+static constexpr UINT_PTR kAdvAppearanceTimer = 71;
+static constexpr UINT kAdvAppearanceDelay = 400;
+
+static SettingPreviewKind SettingPreview(SettingItem* item) {
+    if (item->type == SettingType::Color) return SettingPreviewKind::Color;
+    if (str::EqI(item->name, StrL("Annotations.PresetColors")) || str::EqI(item->name, StrL("Annotations.InkColors")) ||
+        str::EqI(item->name, StrL("LaserColors")) || str::EqI(item->name, StrL("CustomColors")))
+        return SettingPreviewKind::Palette;
+    if (str::EqI(item->name, StrL("PinIconStyle"))) return SettingPreviewKind::Pin;
+    if (str::EqI(item->name, StrL("ColorPickerIconStyle"))) return SettingPreviewKind::Picker;
+    if (str::EqI(item->name, StrL("PenCursorStyle"))) return SettingPreviewKind::Pen;
+    if (str::EqI(item->name, StrL("ActiveTabStyle"))) return SettingPreviewKind::Tab;
+    if (str::EqI(item->name, StrL("FileTypeIconStyle"))) return SettingPreviewKind::File;
+    if (str::EqI(item->name, StrL("AnnotationModeIconStyle"))) return SettingPreviewKind::AnnotationModeIcon;
+    if (str::EqI(item->name, StrL("AnnotationPageNumberStyle"))) return SettingPreviewKind::PageNumber;
+    if (str::EqI(item->name, StrL("AnnotationThreeColumnPageStyle"))) return SettingPreviewKind::ThreeColumnPage;
+    if (str::EqI(item->name, StrL("AnnotationToolbarStyle"))) return SettingPreviewKind::ToolbarStyle;
+    if (str::EqI(item->name, StrL("Theme"))) return SettingPreviewKind::Theme;
+    return SettingPreviewKind::None;
+}
+
+static int AdvPreviewWidth(SettingItem* item, Rect row) {
+    auto kind = SettingPreview(item);
+    if (kind == SettingPreviewKind::None) return 0;
+    int side = std::max(8, row.dy - 2 * DpiScale(4));
+    int count = kind == SettingPreviewKind::Palette || kind == SettingPreviewKind::Theme ? 3 : 1;
+    if (kind == SettingPreviewKind::Tab) count = 2;
+    if (kind == SettingPreviewKind::ThreeColumnPage) count = 2;
+    return std::min((side + DpiScale(4)) * count, std::max(0, row.dx / 2));
+}
+
+static void SplitAdvPreview(SettingItem* item, Rect& value, Rect& preview) {
+    int width = AdvPreviewWidth(item, value);
+    preview = {value.Right() - width, value.y, width, value.dy};
+    if (HwndIsRtl(gAdvancedSettingsWnd ? gAdvancedSettingsWnd->hwnd : nullptr)) {
+        preview.x = value.x;
+        value.x += width;
+    }
+    value.dx -= width;
+}
+
+static int SettingStyleValue(SettingItem* item, Str value) {
+    int style = item->intVal;
+    if (str::Parse(value, "%d%$", &style).s) return style;
+    return -1;
+}
+
+static bool AppearanceValueValid(SettingItem* item, Str value) {
+    auto kind = SettingPreview(item);
+    if (kind == SettingPreviewKind::Color) {
+        ParsedColor parsed;
+        ParseColor(parsed, value);
+        return len(value) == 0 || parsed.parsedOk;
+    }
+    if (kind == SettingPreviewKind::Palette) {
+        Vec<Color> colors;
+        ParseColorList(value, colors, 0);
+        return len(value) == 0 || len(colors) > 0;
+    }
+    int style = SettingStyleValue(item, value);
+    if (kind == SettingPreviewKind::Pin) return style == 3 || style == 4 || style == 10;
+    if (kind == SettingPreviewKind::Picker) return style == 1 || style == 2 || style == 5 || style == 6 || style == 8;
+    if (kind == SettingPreviewKind::Pen) return style == 9 || style == 11 || style == 12;
+    if (kind == SettingPreviewKind::Tab) return style == 1 || style == 3 || style == 4;
+    if (kind == SettingPreviewKind::File) return style >= 1 && style <= 3;
+    if (kind == SettingPreviewKind::AnnotationModeIcon) return style == 1 || style == 2;
+    if (kind == SettingPreviewKind::PageNumber) return style >= 1 && style <= 3;
+    if (kind == SettingPreviewKind::ThreeColumnPage) return style >= 1 && style <= 3;
+    if (kind == SettingPreviewKind::ToolbarStyle) return style == 1 || style == 2;
+    if (kind == SettingPreviewKind::Theme) {
+        if (str::EqI(value, StrL("System"))) return true;
+        for (int i = 0; i < ThemeGetCount(); i++) {
+            if (str::EqI(value, ThemeGetNameAt(i))) return true;
+        }
+    }
+    return str::EqI(item->name, StrL("DocumentColorsFollowTheme")) &&
+           (str::EqI(value, StrL("off")) || str::EqI(value, StrL("smart")) || str::EqI(value, StrL("legacy")));
+}
+
+static void SetPreviewField(SettingItem* item, Str value, int integer) {
+    u8* field = SettingFieldPtr(item->fieldOffset);
+    if (item->type == SettingType::Int) {
+        *(int*)field = integer;
+    } else if (item->type == SettingType::Color) {
+        SetColorText(*(ParsedColor*)field, value);
+    } else {
+        str::ReplaceWithCopy((Str*)field, value);
+    }
+}
+
+enum AppearanceRefresh : unsigned {
+    RefreshNone = 0,
+    RefreshCanvas = 1,
+    RefreshTabs = 2,
+    RefreshIcons = 4,
+    RefreshTheme = 8,
+    RefreshToolbarLayout = 16,
+};
+
+static unsigned PreviewRefresh(SettingItem* item) {
+    auto kind = SettingPreview(item);
+    if (kind == SettingPreviewKind::File) return RefreshNone;
+    if (kind == SettingPreviewKind::PageNumber || kind == SettingPreviewKind::ThreeColumnPage ||
+        kind == SettingPreviewKind::ToolbarStyle)
+        return RefreshIcons | RefreshToolbarLayout;
+    if (kind == SettingPreviewKind::Pin || kind == SettingPreviewKind::Picker ||
+        kind == SettingPreviewKind::AnnotationModeIcon)
+        return RefreshIcons;
+    if (kind == SettingPreviewKind::Tab || str::EqI(item->name, StrL("ActiveTabAccent"))) return RefreshTabs;
+    if (kind == SettingPreviewKind::Pen || str::EqI(item->name, StrL("PenCursorAccent")) ||
+        str::EqI(item->name, StrL("FixedPageUI.SelectionColor")))
+        return RefreshCanvas;
+    if (str::StartsWithI(item->name, StrL("Annotations.")) || kind == SettingPreviewKind::Palette) return RefreshIcons;
+    return RefreshTheme;
+}
+
+static void RepaintAdvanced(unsigned refresh) {
+    if (refresh & RefreshTheme) {
+        SetCurrentThemeFromSettings();
+        SumatraUpdateTheme();
+        return;
+    }
+    if (refresh & RefreshTabs) SetCurrentThemeFromSettings();
+    for (MainWindow* window : gWindows) {
+        if (refresh & RefreshTabs) UpdateTabWidth(window);
+        if (refresh & RefreshIcons) UpdateToolbarAfterThemeChange(window);
+        if (refresh & RefreshToolbarLayout) ScheduleUiUpdate(window, kUiForceRelayout | kUiToolbarDirty);
+        if (refresh & RefreshCanvas) InvalidateRect(window->hwndCanvas, nullptr, FALSE);
+    }
+    if (refresh & RefreshIcons) MaybeRedrawHomePage();
+}
+
+bool AdvancedSettingsWnd::LiveAppearanceEnabled() const {
+    for (SettingItem* item : items) {
+        if (str::EqI(item->name, StrL("LiveAppearancePreview"))) return item->boolVal;
+    }
+    return gSettings && gSettings->liveAppearancePreview;
+}
+
+void AdvancedSettingsWnd::SuspendAppearancePreview() {
+    for (SettingItem* item : items) {
+        if (item->previewed) SetPreviewField(item, item->previewOriginal, item->previewOriginalInt);
+    }
+    if (previewTheme) {
+        str::ReplaceWithCopy(&gSettings->theme, previewTheme);
+        str::ReplaceWithCopy(&gSettings->lastLightTheme, previewLastLight);
+        str::ReplaceWithCopy(&gSettings->lastDarkTheme, previewLastDark);
+    }
+}
+
+void AdvancedSettingsWnd::ResumeAppearancePreview() {
+    for (SettingItem* item : items) {
+        if (item->previewed) SetPreviewField(item, item->previewValue, item->previewValueInt);
+    }
+    if (previewTheme) {
+        str::ReplaceWithCopy(&gSettings->lastLightTheme, previewCurrentLight);
+        str::ReplaceWithCopy(&gSettings->lastDarkTheme, previewCurrentDark);
+    }
+}
+
+void AdvancedSettingsWnd::CancelAppearanceChanges() {
+    if (hwnd) KillTimer(hwnd, kAdvAppearanceTimer);
+    if (!appearancePreviewActive) return;
+    SuspendAppearancePreview();
+    appearancePreviewActive = false;
+    EndAppearancePreview(this);
+    bool hadTheme = len(previewTheme) > 0;
+    unsigned refresh = RefreshNone;
+    for (SettingItem* item : items) {
+        if (item->previewed) refresh |= PreviewRefresh(item);
+        item->previewed = false;
+        str::Free(item->previewOriginal);
+        item->previewOriginal = {};
+        str::Free(item->previewValue);
+        item->previewValue = {};
+    }
+    RepaintAdvanced(refresh);
+    if (hadTheme) {
+        str::ReplaceWithCopy(&gSettings->lastLightTheme, previewLastLight);
+        str::ReplaceWithCopy(&gSettings->lastDarkTheme, previewLastDark);
+    }
+    str::Free(previewTheme);
+    previewTheme = {};
+    if (hwnd && !deleteScheduled) {
+        if (refresh & RefreshTheme)
+            UpdateTheme();
+        else if (listBox)
+            listBox->Invalidate();
+        KeepFocus();
+    }
+}
+
+void AdvancedSettingsWnd::ScheduleAppearancePreview() {
+    if (!hwnd) return;
+    KillTimer(hwnd, kAdvAppearanceTimer);
+    if (!LiveAppearanceEnabled()) {
+        CancelAppearanceChanges();
+        return;
+    }
+    SetTimer(hwnd, kAdvAppearanceTimer, kAdvAppearanceDelay, nullptr);
+}
+
+void AdvancedSettingsWnd::OnAppearanceTimer(WindowBase::TimerEvent* ev) {
+    if (ev->timerId != kAdvAppearanceTimer) return;
+    KillTimer(hwnd, kAdvAppearanceTimer);
+    ApplyAppearancePreview();
+}
+
+void AdvancedSettingsWnd::ApplyAppearancePreview() {
+    if (!LiveAppearanceEnabled()) return;
+    bool updated = false;
+    unsigned refresh = RefreshNone;
+    for (int i = 0; i < len(items); i++) {
+        SettingItem* item = items[i];
+        bool editing = editValue && editItemIdx == i;
+        if (!item->changed && !item->previewed && !editing) continue;
+        Str value = editing ? editValue->GetTextTemp() : FormatSettingValueTemp(item);
+        if (!AppearanceValueValid(item, value)) continue;
+        u8* field = SettingFieldPtr(item->fieldOffset);
+        int integer = item->type == SettingType::Int ? SettingStyleValue(item, value) : 0;
+        bool equal = item->type == SettingType::Int ? *(int*)field == integer : StrValsEq(*(Str*)field, value);
+        if (equal) continue;
+        if (!appearancePreviewActive) {
+            BeginAppearancePreview(this,
+                                   MkMethod0<AdvancedSettingsWnd, &AdvancedSettingsWnd::CancelAppearanceChanges>(this),
+                                   MkMethod0<AdvancedSettingsWnd, &AdvancedSettingsWnd::SuspendAppearancePreview>(this),
+                                   MkMethod0<AdvancedSettingsWnd, &AdvancedSettingsWnd::ResumeAppearancePreview>(this));
+            appearancePreviewActive = true;
+            str::ReplaceWithCopy(&previewTheme, gSettings->theme);
+            str::ReplaceWithCopy(&previewLastLight, gSettings->lastLightTheme);
+            str::ReplaceWithCopy(&previewLastDark, gSettings->lastDarkTheme);
+        }
+        if (!item->previewed) {
+            item->previewed = true;
+            if (item->type == SettingType::Int)
+                item->previewOriginalInt = *(int*)field;
+            else
+                str::ReplaceWithCopy(&item->previewOriginal, *(Str*)field);
+        }
+        item->previewValueInt = integer;
+        str::ReplaceWithCopy(&item->previewValue, value);
+        SetPreviewField(item, value, integer);
+        refresh |= PreviewRefresh(item);
+        updated = true;
+    }
+    if (!updated) return;
+    RepaintAdvanced(refresh);
+    str::ReplaceWithCopy(&previewCurrentLight, gSettings->lastLightTheme);
+    str::ReplaceWithCopy(&previewCurrentDark, gSettings->lastDarkTheme);
+    if (refresh & RefreshTheme)
+        UpdateTheme();
+    else if (listBox)
+        listBox->Invalidate();
+    KeepFocus();
+}
+
+static void DrawPageNumberPreview(Gfx* gfx, Rect bounds, int style, Color text, Color background) {
+    int pad = std::max(1, bounds.dy / 12);
+    int width = std::min(bounds.dx, bounds.dy * 4 / 5);
+    Rect page{bounds.x + (bounds.dx - width) / 2, bounds.y, width, bounds.dy};
+    int center = page.y + page.dy / 2;
+    int gap = style == 3 ? pad : 0;
+    Rect top{page.x, page.y, page.dx, (page.dy - gap) / 2};
+    Rect bottom{page.x, top.Bottom() + gap, page.dx, page.Bottom() - top.Bottom() - gap};
+    int radius = std::max(1, pad * 2);
+    Color edge = AccentColor(background, 45);
+    if (style == 3) {
+        gfx->FillRoundedRect(top, radius, background, edge);
+        gfx->FillRoundedRect(bottom, radius, background, edge);
+    } else {
+        gfx->FillRoundedRect(page, radius, background, edge);
+        int inset = style == 1 ? page.dx / 3 : pad;
+        gfx->FillRect({page.x + inset, center, page.dx - 2 * inset, 1}, edge);
+    }
+    int fontSize = std::max(4, page.dy / 3);
+    PlatformFont* font = GetDefaultGuiFontOfSize(fontSize);
+    gfx->DrawText(StrL("iii"), top, gfxTextCenter | gfxTextVCenter, font, text);
+    gfx->DrawText(StrL("96"), bottom, gfxTextCenter | gfxTextVCenter, font, text);
+}
+
+static void DrawThreeColumnPagePreview(Gfx* gfx, Rect bounds, int style, Color text, Color background) {
+    if (style == 1) {
+        DrawPageNumberPreview(gfx, bounds, gSettings ? gSettings->annotationPageNumberStyle : 1, text, background);
+        return;
+    }
+    int width = style == 2 ? bounds.dx : std::min(bounds.dx, std::max(bounds.dy, bounds.dx / 2));
+    int height = std::min(bounds.dy, std::max(1, width / 2));
+    Rect page{bounds.x + (bounds.dx - width) / 2, bounds.y + (bounds.dy - height) / 2, width, height};
+    int center = page.x + page.dx / 2;
+    Color edge = AccentColor(background, 45);
+    gfx->FillRoundedRect(page, std::max(1, height / 6), background, edge);
+    gfx->FillRect({center, page.y + 1, 1, std::max(1, page.dy - 2)}, edge);
+    PlatformFont* font = GetDefaultGuiFontOfSize(std::max(4, height / 2));
+    Rect current{page.x, page.y, page.dx / 2, page.dy};
+    Rect total{center, page.y, page.Right() - center, page.dy};
+    gfx->DrawText(StrL("iii"), current, gfxTextCenter | gfxTextVCenter, font, text);
+    gfx->DrawText(StrL("96"), total, gfxTextCenter | gfxTextVCenter, font, text);
+}
+
+static void DrawToolbarStylePreview(Gfx* gfx, Rect bounds, int style, Color text, Color background) {
+    int width = std::min(bounds.dx, bounds.dy * 3 / 4);
+    int pad = std::max(1, bounds.dy / 12);
+    Rect rail{bounds.x + (bounds.dx - width) / 2, bounds.y, width, bounds.dy};
+    Color edge = AccentColor(background, 45);
+    int panelHeight = std::max(1, (rail.dy - 2 * pad) / 3);
+    if (style == 2) gfx->FillRoundedRect(rail, pad * 2, background, edge);
+    for (int row = 0; row < 3; row++) {
+        Rect panel{rail.x, rail.y + row * (panelHeight + pad), rail.dx, panelHeight};
+        if (style == 1) gfx->FillRoundedRect(panel, pad, background, edge);
+        int dot = std::max(1, panelHeight / 3);
+        for (int column = 0; column < 2; column++) {
+            int x = panel.x + panel.dx * (2 * column + 1) / 4 - dot / 2;
+            gfx->FillEllipse({x, panel.y + (panel.dy - dot) / 2, dot, dot}, text);
+        }
+    }
+}
+
+static void DrawSettingPreview(Gfx* gfx, Rect bounds, SettingItem* item, Str value, Color text, Color background) {
+    auto kind = SettingPreview(item);
+    if (kind == SettingPreviewKind::None || bounds.IsEmpty() || !AppearanceValueValid(item, value)) return;
+    int pad = DpiScale(4);
+    bounds.dy = std::max(1, bounds.dy - 2 * pad);
+    bounds.y += pad;
+    bounds.dx = std::max(1, bounds.dx - pad);
+    gfx->PushClip(bounds);
+    if (kind == SettingPreviewKind::Color) {
+        ParsedColor parsed;
+        ParseColor(parsed, value);
+        Color color = parsed.parsedOk ? parsed.col : kColorUnset;
+        u8 r, g, b, alpha;
+        UnpackPdfColor(parsed.pdfCol, r, g, b, alpha);
+        Rect swatch{bounds.x, bounds.y, std::min(bounds.dx, bounds.dy), bounds.dy};
+        if (parsed.parsedOk) DrawDropDownSwatch(gfx, swatch, color, alpha);
+    } else if (kind == SettingPreviewKind::Palette) {
+        Vec<Color> colors;
+        ParseColorList(value, colors, 3);
+        int side = std::min(bounds.dy, std::max(1, (bounds.dx - 2 * pad) / 3));
+        for (int i = 0; i < len(colors); i++) {
+            DrawDropDownSwatch(gfx, {bounds.x + i * (side + pad), bounds.y, side, bounds.dy}, colors[i]);
+        }
+    } else if (kind == SettingPreviewKind::Theme) {
+        Color foreground, control, accent;
+        int index = -2;
+        if (str::EqI(value, StrL("System"))) index = -1;
+        for (int i = 0; i < ThemeGetCount(); i++) {
+            if (str::EqI(value, ThemeGetNameAt(i))) index = i;
+        }
+        if (ThemeGetPaletteAt(index, foreground, control, accent)) {
+            gfx->FillRoundedRect(bounds, std::max(2, bounds.dy / 5), control, AccentColor(control, 45));
+            int inset = std::max(2, bounds.dy / 5);
+            gfx->FillRect({bounds.x + inset, bounds.y + inset, std::max(1, bounds.dx - 2 * inset), 2}, foreground);
+            gfx->FillRect({bounds.x + inset, bounds.Bottom() - inset - 2, std::max(1, bounds.dx / 2), 2}, accent);
+        }
+    } else if (kind == SettingPreviewKind::PageNumber) {
+        DrawPageNumberPreview(gfx, bounds, SettingStyleValue(item, value), text, background);
+    } else if (kind == SettingPreviewKind::ThreeColumnPage) {
+        DrawThreeColumnPagePreview(gfx, bounds, SettingStyleValue(item, value), text, background);
+    } else if (kind == SettingPreviewKind::ToolbarStyle) {
+        DrawToolbarStylePreview(gfx, bounds, SettingStyleValue(item, value), text, background);
+    } else {
+        int style = SettingStyleValue(item, value);
+        Str svg;
+        switch (kind) {
+            case SettingPreviewKind::Pin:
+                svg = Str(GetPinIconSvg((PinIconStyle)style));
+                break;
+            case SettingPreviewKind::Picker:
+                svg = Str(GetColorPickerIconSvg((ColorPickerIconStyle)style));
+                break;
+            case SettingPreviewKind::Pen: {
+                ParsedColor color = gSettings ? gSettings->penCursorAccent : ParsedColor{};
+                Color accent = GetParsedColor(color, MkRgb(0x26, 0x75, 0xe8));
+                svg = GetPenCursorSvgTemp((PenCursorStyle)style, accent, text);
+                break;
+            }
+            case SettingPreviewKind::Tab: {
+                ParsedColor color = gSettings ? gSettings->activeTabAccent : ParsedColor{};
+                Color accent = GetParsedColor(color, MkRgb(0x26, 0x75, 0xe8));
+                svg = GetActiveTabPreviewSvgTemp(style, accent, background, text);
+                break;
+            }
+            case SettingPreviewKind::File: {
+                Rect page = bounds;
+                page.dx = std::min(page.dx, page.dy);
+                gfx->DrawPixmap(GetFileTypeIconPreview(style), page);
+                break;
+            }
+            case SettingPreviewKind::AnnotationModeIcon: {
+                int size = std::min(bounds.dx, bounds.dy);
+                gfx->DrawPixmap(AnnotationModeIconPixmap(size, text, style), {bounds.x, bounds.y, size, size});
+                break;
+            }
+            default:
+                break;
+        }
+        if (svg) gfx->DrawPixmap(GetCachedPixmapForSvg(svg, bounds.dx, bounds.dy, text), bounds);
+    }
+    gfx->PopClip();
+}
+
+#if IS_DEBUG
+void AdvancedAppearancePreviewTest() {
+    RenderCache* savedCache = gRenderCache;
+    if (!savedCache) gRenderCache = new RenderCache();
+    defer {
+        if (!savedCache) {
+            delete gRenderCache;
+            gRenderCache = nullptr;
+        }
+    };
+    SettingItem item;
+    item.type = SettingType::Color;
+    item.name = str::Dup(StrL("FixedPageUI.BackgroundColor"));
+    utassert(SettingPreview(&item) == SettingPreviewKind::Color);
+    const struct {
+        Str name;
+        SettingPreviewKind kind;
+    } names[] = {
+        {StrL("Annotations.PresetColors"), SettingPreviewKind::Palette},
+        {StrL("Annotations.InkColors"), SettingPreviewKind::Palette},
+        {StrL("LaserColors"), SettingPreviewKind::Palette},
+        {StrL("CustomColors"), SettingPreviewKind::Palette},
+        {StrL("PinIconStyle"), SettingPreviewKind::Pin},
+        {StrL("ColorPickerIconStyle"), SettingPreviewKind::Picker},
+        {StrL("PenCursorStyle"), SettingPreviewKind::Pen},
+        {StrL("ActiveTabStyle"), SettingPreviewKind::Tab},
+        {StrL("FileTypeIconStyle"), SettingPreviewKind::File},
+        {StrL("AnnotationModeIconStyle"), SettingPreviewKind::AnnotationModeIcon},
+        {StrL("AnnotationPageNumberStyle"), SettingPreviewKind::PageNumber},
+        {StrL("AnnotationThreeColumnPageStyle"), SettingPreviewKind::ThreeColumnPage},
+        {StrL("AnnotationToolbarStyle"), SettingPreviewKind::ToolbarStyle},
+        {StrL("Theme"), SettingPreviewKind::Theme},
+        {StrL("InverseSearchCmdLine"), SettingPreviewKind::None},
+    };
+    item.type = SettingType::String;
+    for (auto& entry : names) {
+        str::ReplaceWithCopy(&item.name, entry.name);
+        utassert(SettingPreview(&item) == entry.kind);
+    }
+    item.type = SettingType::Int;
+    item.intVal = 10;
+    utassert(SettingStyleValue(&item, StrL("3")) == 3);
+    utassert(SettingStyleValue(&item, StrL("4")) == 4);
+    utassert(SettingStyleValue(&item, StrL("3junk")) == -1);
+    utassert(SettingStyleValue(&item, StrL("")) == -1);
+    str::ReplaceWithCopy(&item.name, StrL("AnnotationPageNumberStyle"));
+    for (Str value : {StrL("1"), StrL("2"), StrL("3")}) utassert(AppearanceValueValid(&item, value));
+    for (Str value : {StrL("0"), StrL("4"), StrL("1junk"), StrL("1.0"), StrL("")})
+        utassert(!AppearanceValueValid(&item, value));
+    utassert(PreviewRefresh(&item) == (RefreshIcons | RefreshToolbarLayout));
+    Settings* defaults = NewSettings({});
+    utassert(defaults->annotationPageNumberStyle == 1);
+    utassert(defaults->annotationToolbarStyle == 1);
+    utassert(defaults->annotationThreeColumnPageStyle == 1);
+    DeleteSettings(defaults);
+    for (int value : {-1, 0, 1, 2, 3, 4}) {
+        Settings* prefs = NewSettings(fmt("AnnotationPageNumberStyle = %d\n", value));
+        utassert(prefs->annotationPageNumberStyle == limitValue(value, 1, 3));
+        Str serialized = SerializeSettings(prefs, {});
+        Settings* restored = NewSettings(serialized);
+        utassert(restored->annotationPageNumberStyle == prefs->annotationPageNumberStyle);
+        DeleteSettings(restored);
+        str::Free(serialized);
+        DeleteSettings(prefs);
+    }
+    str::ReplaceWithCopy(&item.name, StrL("AnnotationThreeColumnPageStyle"));
+    for (Str value : {StrL("1"), StrL("2"), StrL("3")}) utassert(AppearanceValueValid(&item, value));
+    for (Str value : {StrL("0"), StrL("4"), StrL("-1"), StrL("1junk"), StrL("1.0"), StrL("")})
+        utassert(!AppearanceValueValid(&item, value));
+    utassert(PreviewRefresh(&item) == (RefreshIcons | RefreshToolbarLayout));
+    for (int value : {-1, 0, 1, 2, 3, 4}) {
+        Settings* prefs = NewSettings(fmt("AnnotationThreeColumnPageStyle = %d\n", value));
+        utassert(prefs->annotationThreeColumnPageStyle == limitValue(value, 1, 3));
+        utassert(prefs->annotationPageNumberStyle == 1 && prefs->annotationToolbarColumns == 1);
+        Str serialized = SerializeSettings(prefs, {});
+        Settings* restored = NewSettings(serialized);
+        utassert(restored->annotationThreeColumnPageStyle == prefs->annotationThreeColumnPageStyle);
+        DeleteSettings(restored);
+        str::Free(serialized);
+        DeleteSettings(prefs);
+    }
+    str::ReplaceWithCopy(&item.name, StrL("AnnotationToolbarStyle"));
+    for (Str value : {StrL("1"), StrL("2")}) utassert(AppearanceValueValid(&item, value));
+    for (Str value : {StrL("0"), StrL("3"), StrL("-1"), StrL("1junk"), StrL("1.0"), StrL("")})
+        utassert(!AppearanceValueValid(&item, value));
+    utassert(PreviewRefresh(&item) == (RefreshIcons | RefreshToolbarLayout));
+    for (int value : {-1, 0, 1, 2, 3}) {
+        Settings* prefs = NewSettings(fmt("AnnotationToolbarStyle = %d\n", value));
+        utassert(prefs->annotationToolbarStyle == limitValue(value, 1, 2));
+        Str serialized = SerializeSettings(prefs, {});
+        Settings* restored = NewSettings(serialized);
+        utassert(restored->annotationToolbarStyle == prefs->annotationToolbarStyle);
+        DeleteSettings(restored);
+        str::Free(serialized);
+        DeleteSettings(prefs);
+    }
+
+    int oldDpiX = dpiX, oldDpiY = dpiY;
+    for (int dpi : {96, 144, 192}) {
+        DpiSet(dpi, dpi);
+        for (int width : {100, 220, 400}) {
+            item.type = SettingType::Color;
+            Rect value{12, 3, width, DpiScale(28)};
+            Rect preview;
+            SplitAdvPreview(&item, value, preview);
+            utassert(preview.dx > 0 && value.dx > 0);
+            utassert(value.x == 12);
+            utassert(value.Right() == preview.x && preview.Right() == 12 + width);
+            utassert(value.x >= 12 && value.Right() <= 12 + width);
+        }
+    }
+    DpiSet(96, 96);
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = 120;
+    info.bmiHeader.biHeight = -32;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    void* bits = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    utassert(dc && bitmap && bits);
+    if (dc && bitmap && bits) {
+        HGDIOBJ old = SelectObject(dc, bitmap);
+        GfxHdc gfx(dc);
+        gfx.FillRect({0, 0, 120, 32}, kColWhite);
+        item.type = SettingType::Color;
+        DrawSettingPreview(&gfx, {0, 0, 40, 30}, &item, StrL("#123456"), kColBlack, kColWhite);
+        utassert(GetPixel(dc, 11, 15) == MkRgb(0x12, 0x34, 0x56));
+        DrawSettingPreview(&gfx, {0, 0, 40, 30}, &item, StrL("#00123456"), kColBlack, kColWhite);
+        utassert(GetPixel(dc, 11, 15) != MkRgb(0x12, 0x34, 0x56));
+        item.type = SettingType::String;
+        str::ReplaceWithCopy(&item.name, StrL("Annotations.InkColors"));
+        DrawSettingPreview(&gfx, {0, 0, 90, 30}, &item, StrL("#ff0000 #00ff00 #0000ff"), kColBlack, kColWhite);
+        utassert(GetPixel(dc, 12, 15) == kColRed);
+        utassert(GetPixel(dc, 40, 15) == MkRgb(0, 255, 0));
+        utassert(GetPixel(dc, 68, 15) == kColBlue);
+        SelectObject(dc, old);
+    }
+    if (bitmap) DeleteObject(bitmap);
+    if (dc) DeleteDC(dc);
+    DpiSet(oldDpiX, oldDpiY);
+    if (gSettings) {
+        AdvancedSettingsWnd window;
+        CollectSettings(window.items);
+        SettingItem* style = nullptr;
+        SettingItem* live = nullptr;
+        SettingItem* pageNumber = nullptr;
+        SettingItem* threeColumnPage = nullptr;
+        SettingItem* toolbarStyle = nullptr;
+        for (auto* setting : window.items) {
+            if (str::EqI(setting->name, StrL("ActiveTabStyle"))) style = setting;
+            if (str::EqI(setting->name, StrL("LiveAppearancePreview"))) live = setting;
+            if (str::EqI(setting->name, StrL("AnnotationPageNumberStyle"))) pageNumber = setting;
+            if (str::EqI(setting->name, StrL("AnnotationThreeColumnPageStyle"))) threeColumnPage = setting;
+            if (str::EqI(setting->name, StrL("AnnotationToolbarStyle"))) toolbarStyle = setting;
+        }
+        utassert(style && live);
+        if (style && live) {
+            int original = gSettings->activeTabStyle;
+            style->intVal = original == 4 ? 1 : 4;
+            SetItemChanged(style);
+            live->boolVal = false;
+            window.ApplyAppearancePreview();
+            utassert(gSettings->activeTabStyle == original);
+            live->boolVal = true;
+            window.ApplyAppearancePreview();
+            utassert(gSettings->activeTabStyle == style->intVal);
+            SetItemChanged(style);
+            utassert(style->changed);
+            Str serialized = SerializeSettings(gSettings, {});
+            Settings* saved = NewSettings(serialized);
+            utassert(saved->activeTabStyle == original);
+            utassert(gSettings->activeTabStyle == style->intVal);
+            DeleteSettings(saved);
+            str::Free(serialized);
+            style->intVal = 99;
+            window.ApplyAppearancePreview();
+            utassert(gSettings->activeTabStyle != 99);
+            window.CancelAppearanceChanges();
+            utassert(gSettings->activeTabStyle == original);
+        }
+        utassert(pageNumber && live);
+        if (pageNumber && live) {
+            utassert(pageNumber->enumValues && pageNumber->enumValues[2] && !pageNumber->enumValues[3]);
+            int original = gSettings->annotationPageNumberStyle;
+            pageNumber->intVal = original == 3 ? 1 : 3;
+            SetItemChanged(pageNumber);
+            live->boolVal = false;
+            window.ApplyAppearancePreview();
+            utassert(gSettings->annotationPageNumberStyle == original);
+            live->boolVal = true;
+            window.ApplyAppearancePreview();
+            utassert(gSettings->annotationPageNumberStyle == pageNumber->intVal);
+            Str serialized = SerializeSettings(gSettings, {});
+            Settings* saved = NewSettings(serialized);
+            utassert(saved->annotationPageNumberStyle == original);
+            DeleteSettings(saved);
+            str::Free(serialized);
+            pageNumber->intVal = 2;
+            SetItemChanged(pageNumber);
+            window.ApplyAppearancePreview();
+            utassert(gSettings->annotationPageNumberStyle == 2);
+            window.CancelAppearanceChanges();
+            utassert(gSettings->annotationPageNumberStyle == original);
+            for (Str value : {StrL("0"), StrL("4"), StrL("-1"), StrL("1junk"), StrL("1.0"), StrL("")}) {
+                utassert(!SetSettingsValueFromStr(StrL("AnnotationPageNumberStyle"), value));
+                utassert(gSettings->annotationPageNumberStyle == original);
+            }
+            pageNumber->intVal = original;
+            SetItemChanged(pageNumber);
+        }
+        utassert(threeColumnPage && live);
+        if (threeColumnPage && live) {
+            utassert(threeColumnPage->enumValues && threeColumnPage->enumValues[2] && !threeColumnPage->enumValues[3]);
+            int original = gSettings->annotationThreeColumnPageStyle;
+            int pageStyle = gSettings->annotationPageNumberStyle;
+            int columns = gSettings->annotationToolbarColumns;
+            threeColumnPage->intVal = original == 3 ? 1 : 3;
+            SetItemChanged(threeColumnPage);
+            live->boolVal = false;
+            window.ApplyAppearancePreview();
+            utassert(gSettings->annotationThreeColumnPageStyle == original);
+            live->boolVal = true;
+            window.ApplyAppearancePreview();
+            utassert(gSettings->annotationThreeColumnPageStyle == threeColumnPage->intVal);
+            utassert(gSettings->annotationPageNumberStyle == pageStyle &&
+                     gSettings->annotationToolbarColumns == columns);
+            Str serialized = SerializeSettings(gSettings, {});
+            Settings* saved = NewSettings(serialized);
+            utassert(saved->annotationThreeColumnPageStyle == original);
+            DeleteSettings(saved);
+            str::Free(serialized);
+            threeColumnPage->intVal = 99;
+            window.ApplyAppearancePreview();
+            utassert(gSettings->annotationThreeColumnPageStyle != 99);
+            window.CancelAppearanceChanges();
+            utassert(gSettings->annotationThreeColumnPageStyle == original);
+            for (Str value : {StrL("0"), StrL("4"), StrL("-1"), StrL("1junk"), StrL("1.0"), StrL("")}) {
+                utassert(!SetSettingsValueFromStr(StrL("AnnotationThreeColumnPageStyle"), value));
+                utassert(gSettings->annotationThreeColumnPageStyle == original);
+            }
+            threeColumnPage->intVal = original;
+            SetItemChanged(threeColumnPage);
+        }
+        utassert(toolbarStyle && live);
+        if (toolbarStyle && live) {
+            utassert(toolbarStyle->enumValues && toolbarStyle->enumValues[1] && !toolbarStyle->enumValues[2]);
+            int original = gSettings->annotationToolbarStyle;
+            toolbarStyle->intVal = original == 1 ? 2 : 1;
+            SetItemChanged(toolbarStyle);
+            live->boolVal = false;
+            window.ApplyAppearancePreview();
+            utassert(gSettings->annotationToolbarStyle == original);
+            live->boolVal = true;
+            window.ApplyAppearancePreview();
+            utassert(gSettings->annotationToolbarStyle == toolbarStyle->intVal);
+            Str serialized = SerializeSettings(gSettings, {});
+            Settings* saved = NewSettings(serialized);
+            utassert(saved->annotationToolbarStyle == original);
+            DeleteSettings(saved);
+            str::Free(serialized);
+            toolbarStyle->intVal = 99;
+            window.ApplyAppearancePreview();
+            utassert(gSettings->annotationToolbarStyle != 99);
+            window.CancelAppearanceChanges();
+            utassert(gSettings->annotationToolbarStyle == original);
+            for (Str value : {StrL("0"), StrL("3"), StrL("-1"), StrL("1junk"), StrL("1.0"), StrL("")}) {
+                utassert(!SetSettingsValueFromStr(StrL("AnnotationToolbarStyle"), value));
+                utassert(gSettings->annotationToolbarStyle == original);
+            }
+        }
+    }
+}
+#endif
+
 void AdvancedSettingsWnd::DrawListBoxItem(VirtListBox::DrawItemEvent* ev) {
     VirtListBox* lb = ev->listBox;
     auto* m = (ListBoxModelSettings*)lb->model;
@@ -530,7 +1262,20 @@ void AdvancedSettingsWnd::DrawListBoxItem(VirtListBox::DrawItemEvent* ev) {
                              colText);
 
     TempStr val = FormatSettingValueTemp(item);
-    u32 valFmt = gfxTextEllipsis | gfxTextVCenter | gfxTextRight;
+    if (editValue && editItemIdx >= 0 && items[editItemIdx] == item) val = editValue->GetTextTemp();
+    Rect preview;
+    SplitAdvPreview(item, rcVal, preview);
+    bool editing = editValue && editItemIdx >= 0 && items[editItemIdx] == item;
+    if (!preview.IsEmpty() && !isRtl && !editing) {
+        if (item->previewFont != valFont || !str::Eq(item->previewLabel, val)) {
+            item->previewFont = valFont;
+            str::ReplaceWithCopy(&item->previewLabel, val);
+            item->previewLabelWidth = PlatformFontMeasureText(valFont, val).dx;
+        }
+        preview.x = std::min(preview.x, rcVal.x + item->previewLabelWidth + DpiScale(8));
+    }
+    DrawSettingPreview(gfx, preview, item, val, colText, colBg);
+    u32 valFmt = gfxTextEllipsis | gfxTextVCenter | (isRtl ? gfxTextRight | gfxTextRtl : gfxTextLeft);
     gfx->DrawText(val, rcVal, valFmt, valFont, colText);
 }
 
@@ -555,6 +1300,8 @@ Rect AdvancedSettingsWnd::ValueRectForItem(int idx) {
     Rect rcName{};
     Rect rcVal{};
     AdvSettingsItemColumns(rc, rcName, rcVal);
+    Rect preview;
+    SplitAdvPreview(items[idx], rcVal, preview);
     return rcVal;
 }
 
@@ -570,6 +1317,7 @@ void AdvancedSettingsWnd::BeginEditValue(int idx) {
     args.parent = hwnd;
     args.isMultiLine = false;
     args.withBorder = true;
+    args.isRtl = IsUIRtl();
     args.font = GetFont();
     args.text = FormatSettingValueTemp(item);
     auto* c = new Edit();
@@ -590,6 +1338,7 @@ void AdvancedSettingsWnd::BeginEditValue(int idx) {
     editValue = c;
     editItemIdx = idx;
     c->onKillFocus = MkMethod0<AdvancedSettingsWnd, &AdvancedSettingsWnd::OnEditValueKillFocus>(this);
+    c->onTextChanged = MkMethod0<AdvancedSettingsWnd, &AdvancedSettingsWnd::OnValueTextChanged>(this);
     SetWindowPos(c->hwnd, HWND_TOP, r.x, r.y, r.dx, r.dy, SWP_SHOWWINDOW);
     EditSelectAll(c);
     EditSetFocus(c);
@@ -616,6 +1365,28 @@ void AdvancedSettingsWnd::CancelEditValue() {
     editItemIdx = -1;
     delete tmp;
     SetFocusTo(listBox);
+    ScheduleAppearancePreview();
+}
+
+static void DrawAnnotModeChoice(DropDown::PreviewItemEvent* ev) {
+    int index = ev->itemIndex < 0 ? CbGetCurrentSelection(ev->dropDown) : ev->itemIndex;
+    int size = std::min(ev->bounds.dx, ev->bounds.dy);
+    ev->gfx->DrawPixmap(AnnotationModeIconPixmap(size, ev->foreground, index + 1), ev->bounds);
+}
+
+static void DrawPageNumberChoice(DropDown::PreviewItemEvent* ev) {
+    int index = ev->itemIndex < 0 ? CbGetCurrentSelection(ev->dropDown) : ev->itemIndex;
+    DrawPageNumberPreview(ev->gfx, ev->bounds, index + 1, ev->foreground, ev->background);
+}
+
+static void DrawToolbarStyleChoice(DropDown::PreviewItemEvent* ev) {
+    int index = ev->itemIndex < 0 ? CbGetCurrentSelection(ev->dropDown) : ev->itemIndex;
+    DrawToolbarStylePreview(ev->gfx, ev->bounds, index + 1, ev->foreground, ev->background);
+}
+
+static void DrawThreeColumnPageChoice(DropDown::PreviewItemEvent* ev) {
+    int index = ev->itemIndex < 0 ? CbGetCurrentSelection(ev->dropDown) : ev->itemIndex;
+    DrawThreeColumnPagePreview(ev->gfx, ev->bounds, index + 1, ev->foreground, ev->background);
 }
 
 // show a drop-down with the allowed values over the item's value rect
@@ -629,7 +1400,16 @@ void AdvancedSettingsWnd::BeginEditEnum(int idx) {
     DropDown::CreateArgs args;
     args.parent = hwnd;
     args.font = GetFont();
+    bool annotationIcon = str::EqI(item->name, StrL("AnnotationModeIconStyle"));
+    bool pageNumber = str::EqI(item->name, StrL("AnnotationPageNumberStyle"));
+    bool threeColumnPage = str::EqI(item->name, StrL("AnnotationThreeColumnPageStyle"));
+    bool toolbarStyle = str::EqI(item->name, StrL("AnnotationToolbarStyle"));
+    args.previewItems = annotationIcon || pageNumber || threeColumnPage || toolbarStyle;
     auto* c = new DropDown();
+    if (annotationIcon) c->onPreviewItem = MkFunc1Void(DrawAnnotModeChoice);
+    if (pageNumber) c->onPreviewItem = MkFunc1Void(DrawPageNumberChoice);
+    if (threeColumnPage) c->onPreviewItem = MkFunc1Void(DrawThreeColumnPageChoice);
+    if (toolbarStyle) c->onPreviewItem = MkFunc1Void(DrawToolbarStyleChoice);
     // Suppress re-entrant CancelEditValue / CloseEnumEdit while Create and
     // CB_SHOWDROPDOWN pump messages (filter EN_CHANGE was freeing c mid-flight).
     editCreating = true;
@@ -647,8 +1427,21 @@ void AdvancedSettingsWnd::BeginEditEnum(int idx) {
     StrVec vals;
     int currSel = 0;
     for (int i = 0; item->enumValues[i]; i++) {
-        vals.Append(Str(item->enumValues[i]));
-        if (str::EqI(item->strVal, Str(item->enumValues[i]))) {
+        Str label = Str(item->enumValues[i]);
+        if (annotationIcon) label = i == 0 ? Tr("Solid pencil (default)") : Tr("Fine-tip pen");
+        if (toolbarStyle) label = i == 0 ? Tr("Grouped (default)") : Tr("Continuous rail");
+        if (pageNumber) {
+            if (i == 0) label = Tr("1A - Short separator (default)");
+            if (i == 1) label = Tr("1B - Divided box");
+            if (i == 2) label = Tr("1C - Two boxes");
+        }
+        if (threeColumnPage) {
+            if (i == 0) label = Tr("Current stacked (default)");
+            if (i == 1) label = Tr("Full-width page row");
+            if (i == 2) label = Tr("Compact horizontal page field");
+        }
+        vals.Append(label);
+        if (str::EqI(FormatSettingValueTemp(item), Str(item->enumValues[i]))) {
             currSel = i;
         }
     }
@@ -658,7 +1451,7 @@ void AdvancedSettingsWnd::BeginEditEnum(int idx) {
     c->onCloseUp = MkMethod0<AdvancedSettingsWnd, &AdvancedSettingsWnd::OnEnumDropDownClosed>(this);
     dropDownValue = c;
     editItemIdx = idx;
-    str::ReplaceWithCopy(&dropDownOrigVal, item->strVal);
+    str::ReplaceWithCopy(&dropDownOrigVal, FormatSettingValueTemp(item));
     SetWindowPos(c->hwnd, HWND_TOP, r.x, r.y, r.dx, r.dy, SWP_SHOWWINDOW);
     HwndSetFocus(c->hwnd);
     SendMessageW(c->hwnd, CB_SHOWDROPDOWN, TRUE, 0);
@@ -717,6 +1510,11 @@ void AdvancedSettingsWnd::PostedRefocusEditValue() {
     HwndSetFocus(editValue->hwnd);
 }
 
+void AdvancedSettingsWnd::OnValueTextChanged() {
+    if (listBox) listBox->Invalidate();
+    ScheduleAppearancePreview();
+}
+
 void AdvancedSettingsWnd::OnEditValueKillFocus() {
     if (!editValue) {
         return;
@@ -743,10 +1541,13 @@ void AdvancedSettingsWnd::OnEnumSelectionChanged() {
     SettingItem* item = items[editItemIdx];
     int sel = CbGetCurrentSelection(dropDownValue);
     if (sel >= 0) {
-        str::ReplaceWithCopy(&item->strVal, Str(item->enumValues[sel]));
+        if (item->type == SettingType::Int)
+            item->intVal = ParseInt(Str(item->enumValues[sel]));
+        else
+            str::ReplaceWithCopy(&item->strVal, Str(item->enumValues[sel]));
         NoteItemEdited(item);
         // browsing the list with the arrow keys previews each value in turn
-        PreviewSettingChange(item);
+        ScheduleAppearancePreview();
         listBox->Invalidate();
     }
     KeepFocus();
@@ -788,9 +1589,12 @@ void AdvancedSettingsWnd::CloseEnumEdit(bool keepValue) {
     dropDownValue = nullptr;
     if (!keepValue) {
         SettingItem* item = items[editItemIdx];
-        str::ReplaceWithCopy(&item->strVal, dropDownOrigVal);
+        if (item->type == SettingType::Int)
+            item->intVal = ParseInt(dropDownOrigVal);
+        else
+            str::ReplaceWithCopy(&item->strVal, dropDownOrigVal);
         NoteItemEdited(item);
-        PreviewSettingChange(item);
+        ScheduleAppearancePreview();
     }
     editItemIdx = -1;
     delete tmp;
@@ -808,6 +1612,10 @@ void AdvancedSettingsWnd::CommitEditValue() {
     }
     SettingItem* item = items[editItemIdx];
     Str s = editValue->GetTextTemp();
+    if (SettingPreview(item) != SettingPreviewKind::None && !AppearanceValueValid(item, s)) {
+        EditSetFocus(editValue);
+        return;
+    }
     switch (item->type) {
         case SettingType::Int:
             item->intVal = ParseInt(s);
@@ -823,7 +1631,7 @@ void AdvancedSettingsWnd::CommitEditValue() {
             break;
     }
     NoteItemEdited(item);
-    PreviewSettingChange(item);
+    ScheduleAppearancePreview();
     CancelEditValue();
     listBox->Invalidate();
 }
@@ -855,6 +1663,7 @@ void AdvancedSettingsWnd::OnItemDoubleClicked() {
 }
 
 void AdvancedSettingsWnd::ApplyChangesAndSave() {
+    CancelAppearanceChanges();
     // snapshot settings that need explicit apply (tabs, menu bar ...) before we
     // overwrite them, so we can act on what actually changed after the reload
     SettingsApplyState before = GetSettingsApplyState();
@@ -925,11 +1734,13 @@ void AdvancedSettingsWnd::OnHelp(VirtMouseEvent*) {
 }
 
 void AdvancedSettingsWnd::OnCancel(VirtMouseEvent*) {
+    CancelAppearanceChanges();
     ScheduleDelete();
 }
 
 void AdvancedSettingsWnd::OnSave(VirtMouseEvent*) {
     CommitEditValue();
+    if (editValue) return;
     // queue the dialog teardown first: ApplyChangesAndSave() may post a tabs
     // transition that closes/recreates windows (including this dialog's owner),
     // and uitask runs FIFO, so the delete must be enqueued before it
@@ -1123,6 +1934,7 @@ void AdvancedSettingsWnd::UpdateChangedCountLabel() {
 void AdvancedSettingsWnd::NoteItemEdited(SettingItem* item) {
     SetItemChanged(item);
     UpdateChangedCountLabel();
+    ScheduleAppearancePreview();
 }
 
 // center the dialog over the main window frame
@@ -1142,6 +1954,7 @@ bool AdvancedSettingsWnd::Create(MainWindow* mainWin) {
     win = mainWin;
     // OnSize repositions in-place editors after DoLayout; skip the generic path
     autoLayout = false;
+    CancelAppearancePreview();
     CollectSettings(items);
 
     {
@@ -1156,6 +1969,7 @@ bool AdvancedSettingsWnd::Create(MainWindow* mainWin) {
     if (!hwnd) {
         return false;
     }
+    onTimer = MkMethod1<AdvancedSettingsWnd, WindowBase::TimerEvent*, &AdvancedSettingsWnd::OnAppearanceTimer>(this);
     fontBold = GetBoldPlatformFont(GetFont() ? GetFont() : GetAppFont());
 
     auto colBg = ThemeWindowControlBackgroundColor();
@@ -1286,7 +2100,7 @@ bool AdvancedSettingsWnd::Create(MainWindow* mainWin) {
 
     DarkModeApplyToPopupWindow(hwnd);
 
-    auto* padding = new Padding(vbox, DpiScaledInsets(4, 8));
+    auto* padding = PadWindowScroll(vbox, listBox, DpiScaledInsets(4, 8));
     layout = padding;
 
     auto rc = HwndClientRect(win->hwndFrame);
@@ -1381,6 +2195,14 @@ TempStr AdvSettingsRowsResultTemp(Str action, int arg, int* exitCodeOut) {
     if (!wnd || !wnd->hwnd) {
         out.Append(StrL("NOTREADY no-dialog\n"));
         return finish(2);
+    }
+    if (str::Eq(action, StrL("previews"))) {
+        for (SettingItem* item : wnd->items) {
+            auto kind = SettingPreview(item);
+            if (kind == SettingPreviewKind::None) continue;
+            out.Append(fmt("preview=%s kind=%d value=%s\n", item->name, (int)kind, FormatSettingValueTemp(item)));
+        }
+        return finish(0);
     }
     if (str::Eq(action, StrL("names"))) {
         for (SettingItem* item : wnd->items) {

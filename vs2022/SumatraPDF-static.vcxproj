@@ -1405,6 +1405,8 @@
     <ClInclude Include="..\src\AnnotSearch.h" />
     <ClInclude Include="..\src\AnnotTextPopup.h" />
     <ClInclude Include="..\src\Annotation.h" />
+    <ClInclude Include="..\src\AnnotationTransfer.h" />
+    <ClInclude Include="..\src\AnnotationTransferDialog.h" />
     <ClInclude Include="..\src\AppSettings.h" />
     <ClInclude Include="..\src\AppTools.h" />
     <ClInclude Include="..\src\AvifReader.h" />
@@ -1442,6 +1444,7 @@
     <ClInclude Include="..\src\Favorites.h" />
     <ClInclude Include="..\src\FileHistory.h" />
     <ClInclude Include="..\src\FileThumbnails.h" />
+    <ClInclude Include="..\src\FileTypeIcons.h" />
     <ClInclude Include="..\src\FilterHighlightDraw.h" />
     <ClInclude Include="..\src\FilterUtil.h" />
     <ClInclude Include="..\src\FindBar.h" />
@@ -1617,6 +1620,8 @@
     <ClCompile Include="..\src\AnnotSearch.cpp" />
     <ClCompile Include="..\src\AnnotTextPopup.cpp" />
     <ClCompile Include="..\src\Annotation.cpp" />
+    <ClCompile Include="..\src\AnnotationTransfer.cpp" />
+    <ClCompile Include="..\src\AnnotationTransferDialog.cpp" />
     <ClCompile Include="..\src\AppSettings.cpp" />
     <ClCompile Include="..\src\AppTools.cpp" />
     <ClCompile Include="..\src\AvifReader.cpp" />
@@ -1675,6 +1680,7 @@
     <ClCompile Include="..\src\Favorites.cpp" />
     <ClCompile Include="..\src\FileHistory.cpp" />
     <ClCompile Include="..\src\FileThumbnails.cpp" />
+    <ClCompile Include="..\src\FileTypeIcons.cpp" />
     <ClCompile Include="..\src\FilterHighlightDraw.cpp" />
     <ClCompile Include="..\src\FilterUtil.cpp" />
     <ClCompile Include="..\src\FindBar.cpp" />

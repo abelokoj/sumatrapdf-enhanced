@@ -10,6 +10,7 @@ enum class SelToolbarShow {
     Settled
 };
 void ShowSelectionToolbar(MainWindow* win, SelToolbarShow when);
+void ShowLassoSelectionToolbar(MainWindow*);
 void SelectionToolbarOnShowTimer(MainWindow* win);
 void UpdateSelectionToolbarPosition(MainWindow* win);
 void RepositionSelectionToolbar(MainWindow* win);

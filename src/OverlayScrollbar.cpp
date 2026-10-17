@@ -15,6 +15,7 @@
 #include "Theme.h"
 #include "OverlayScrollbar.h"
 #if IS_DEBUG
+#include "base/GdiPlusUtil.h"
 #include "base/tests/UtAssert.h"
 #include "DarkMode.h"
 #endif
@@ -32,10 +33,12 @@ static Vec<OverlayScrollbar*> gAllScrollbars;
 static UINT_PTR gMouseTrackTimer = 0;
 #if IS_DEBUG
 static int gScrollbarAllocations = 0;
+static int gScrollbarPaints = 0;
 #endif
 static Point gLastMousePos = {-1, -1};
 static constexpr UINT_PTR kMouseTrackTimerID = 100;
 static constexpr int kMouseTrackIntervalMs = 50;
+static constexpr UINT kScrollbarPaintMessage = WM_APP + 1;
 static constexpr UINT_PTR kNativeScrollbarSubclass = 0x736272;
 static constexpr UINT_PTR kNativeScrollbarTimer = 0x736273;
 static constexpr WCHAR kNativeScrollbarProperty[] = L"SumatraAppScrollbar";
@@ -54,6 +57,26 @@ static Rect NativeScrollbarClip(HWND hwnd) {
     return clip;
 }
 
+static const char* kAppScrollbarCss = R"(
+::-webkit-scrollbar { width: var(--scrollbar-size); height: var(--scrollbar-size); }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: var(--scrollbar-track); }
+::-webkit-scrollbar-thumb { background: #8b8b8b; border: clamp(1px, calc(var(--scrollbar-size) / 8), 3px) solid var(--scrollbar-track); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-hover); box-shadow: inset 0 0 0 1px var(--scrollbar-hover-edge); }
+::-webkit-scrollbar-button:single-button:hover, ::-webkit-scrollbar-button:single-button:active {
+  background-color: var(--scrollbar-hover); }
+::-webkit-scrollbar-button:single-button { display: block; width: var(--scrollbar-size); height: var(--scrollbar-size);
+  background-color: var(--scrollbar-track); background-repeat: no-repeat; background-position: center; background-size: 66.667%; }
+::-webkit-scrollbar-button:vertical:decrement { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath fill='%238b8b8b' d='M.85 7.4L4.58 2.36Q5 1.8 5.42 2.36L9.15 7.4Q9.6 8 8.85 8H1.15Q.4 8 .85 7.4Z'/%3E%3C/svg%3E"); }
+::-webkit-scrollbar-button:vertical:increment { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath fill='%238b8b8b' d='M.85 2.6L4.58 7.64Q5 8.2 5.42 7.64L9.15 2.6Q9.6 2 8.85 2H1.15Q.4 2 .85 2.6Z'/%3E%3C/svg%3E"); }
+::-webkit-scrollbar-button:horizontal:decrement { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath fill='%238b8b8b' d='M7.4 .85L2.36 4.58Q1.8 5 2.36 5.42L7.4 9.15Q8 9.6 8 8.85V1.15Q8 .4 7.4 .85Z'/%3E%3C/svg%3E"); }
+::-webkit-scrollbar-button:horizontal:increment { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath fill='%238b8b8b' d='M2.6 .85L7.64 4.58Q8.2 5 7.64 5.42L2.6 9.15Q2 9.6 2 8.85V1.15Q2 .4 2.6 .85Z'/%3E%3C/svg%3E"); }
+)";
+
+Str AppScrollbarCss() {
+    return Str(kAppScrollbarCss);
+}
+
 // Derive scrollbar colors from current theme
 static Color ThemeTrackColor() {
     if (ThemeUsesHighContrastColors()) return GetSysColor(COLOR_SCROLLBAR);
@@ -69,6 +92,16 @@ static Color ThemeThumbColor() {
 static Color ThemeThumbHoverColor() {
     if (ThemeUsesHighContrastColors()) return GetSysColor(COLOR_HIGHLIGHT);
     return UiScrollbarHoverColor(ThemeTrackColor());
+}
+
+TempStr AppScrollbarStyleTemp() {
+    Color track = ThemeTrackColor();
+    auto cssColor = [](Color color) {
+        return fmt("#%02x%02x%02x", GetRValue(color), GetGValue(color), GetBValue(color));
+    };
+    return fmt(":root{--scrollbar-size:%dpx;--scrollbar-track:%s;--scrollbar-hover:%s;--scrollbar-hover-edge:%s;}%s",
+               GetAppScrollbarWidth(96), cssColor(track), cssColor(UiScrollbarHoverColor(track)),
+               cssColor(UiScrollbarHoverEdge(track)), AppScrollbarCss());
 }
 
 static constexpr int kMinThumbSize = 20;
@@ -277,9 +310,17 @@ static HWND ScrollbarZOrderAfter(OverlayScrollbar* sb) {
     return above ? above : HWND_TOP;
 }
 
+static void SetScrollbarPos(HWND hwnd, HWND after, int x, int y, int w, int h, UINT flags) {
+    if (SetWindowPos(hwnd, after, x, y, w, h, flags) || (flags & SWP_NOZORDER)) return;
+    DWORD error = GetLastError();
+    // A protected or closing window above the owner must not prevent showing our bar.
+    if (error == ERROR_ACCESS_DENIED || error == ERROR_INVALID_WINDOW_HANDLE)
+        SetWindowPos(hwnd, nullptr, x, y, w, h, flags | SWP_NOZORDER);
+}
+
 static void ShowScrollbarHwnd(OverlayScrollbar* sb) {
-    SetWindowPos(sb->hwnd, ScrollbarZOrderAfter(sb), 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+    SetScrollbarPos(sb->hwnd, ScrollbarZOrderAfter(sb), 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
 }
 
 // Cursor is over the owner canvas, not over another top-level window covering it
@@ -346,9 +387,59 @@ static bool EnsureScrollbarSurface(OverlayScrollbar* sb, int w, int h) {
     return true;
 }
 
+enum class ArrowDirection {
+    Up,
+    Down,
+    Left,
+    Right
+};
+
+// Trim each triangle corner with a quadratic curve, keeping the glyph inside its button.
+static void PaintRoundedArrow(Gdiplus::Graphics& gfx, Rect bounds, ArrowDirection direction, Gdiplus::Color color) {
+    float size = std::min(bounds.dx, bounds.dy) / 3.f;
+    if (size <= 0) return;
+    Gdiplus::PointF points[] = {{0, -.7f}, {-1, .7f}, {1, .7f}};
+    float cx = bounds.x + bounds.dx / 2.f, cy = bounds.y + bounds.dy / 2.f;
+    for (auto& p : points) {
+        float x = p.X, y = p.Y;
+        if (direction == ArrowDirection::Down) y = -y;
+        if (direction == ArrowDirection::Left) {
+            x = p.Y;
+            y = p.X;
+        }
+        if (direction == ArrowDirection::Right) {
+            x = -p.Y;
+            y = p.X;
+        }
+        p = {cx + x * size, cy + y * size};
+    }
+    Gdiplus::PointF entry[3], exit[3];
+    float cut = size * .28f;
+    for (int i = 0; i < 3; i++) {
+        auto toward = [&](int other) {
+            float dx = points[other].X - points[i].X, dy = points[other].Y - points[i].Y;
+            float fraction = cut / sqrtf(dx * dx + dy * dy);
+            return Gdiplus::PointF{points[i].X + dx * fraction, points[i].Y + dy * fraction};
+        };
+        entry[i] = toward((i + 2) % 3);
+        exit[i] = toward((i + 1) % 3);
+    }
+    Gdiplus::GraphicsPath path;
+    for (int i = 0; i < 3; i++) {
+        auto control = [&](Gdiplus::PointF p) {
+            return Gdiplus::PointF{p.X + (points[i].X - p.X) * 2.f / 3.f, p.Y + (points[i].Y - p.Y) * 2.f / 3.f};
+        };
+        path.AddBezier(entry[i], control(entry[i]), control(exit[i]), exit[i]);
+        path.AddLine(exit[i], entry[(i + 1) % 3]);
+    }
+    path.CloseFigure();
+    Gdiplus::SolidBrush brush(color);
+    gfx.FillPath(&brush, &path);
+}
+
 // Update the layered window with the current appearance
 static void PaintScrollbar(OverlayScrollbar* sb) {
-    if (!sb->hwnd || !HwndIsVisible(sb->hwnd)) {
+    if (!sb->hwnd || !IsVisible(sb) || !HwndIsVisible(sb->hwnd)) {
         return;
     }
 
@@ -360,6 +451,9 @@ static void PaintScrollbar(OverlayScrollbar* sb) {
     }
 
     if (!EnsureScrollbarSurface(sb, w, h)) return;
+#if IS_DEBUG
+    gScrollbarPaints++;
+#endif
     HDC hdcScreen = GetDC(nullptr);
     HDC hdcMem = sb->paintDc;
     void* bits = sb->paintBits;
@@ -429,52 +523,12 @@ static void PaintScrollbar(OverlayScrollbar* sb) {
             Rect arrowBot = GetArrowBottomRect(sb);
 
             if (gThickArrows) {
-                // filled triangles (like Windows Terminal)
-                Gdiplus::SolidBrush br(gdipArrowCol);
-                if (IsVert(sb)) {
-                    float sz = (float)arrowTop.dx / 3.0f;
-                    // up triangle
-                    float cx = (float)(arrowTop.x + (arrowTop.dx / 2));
-                    float cy = (float)(arrowTop.y + (arrowTop.dy / 2));
-                    Gdiplus::PointF upPts[3] = {
-                        {cx, cy - (sz * 0.7f)},
-                        {cx - sz, cy + (sz * 0.7f)},
-                        {cx + sz, cy + (sz * 0.7f)},
-                    };
-                    gfx.FillPolygon(&br, upPts, 3);
-                    // down triangle
-                    cx = (float)(arrowBot.x + (arrowBot.dx / 2));
-                    cy = (float)(arrowBot.y + (arrowBot.dy / 2));
-                    Gdiplus::PointF downPts[3] = {
-                        {cx - sz, cy - (sz * 0.7f)},
-                        {cx + sz, cy - (sz * 0.7f)},
-                        {cx, cy + (sz * 0.7f)},
-                    };
-                    gfx.FillPolygon(&br, downPts, 3);
-                } else {
-                    float sz = (float)arrowTop.dy / 3.0f;
-                    // left triangle
-                    float cx = (float)(arrowTop.x + (arrowTop.dx / 2));
-                    float cy = (float)(arrowTop.y + (arrowTop.dy / 2));
-                    Gdiplus::PointF leftPts[3] = {
-                        {cx - (sz * 0.7f), cy},
-                        {cx + (sz * 0.7f), cy - sz},
-                        {cx + (sz * 0.7f), cy + sz},
-                    };
-                    gfx.FillPolygon(&br, leftPts, 3);
-                    // right triangle
-                    cx = (float)(arrowBot.x + (arrowBot.dx / 2));
-                    cy = (float)(arrowBot.y + (arrowBot.dy / 2));
-                    Gdiplus::PointF rightPts[3] = {
-                        {cx - (sz * 0.7f), cy - sz},
-                        {cx - (sz * 0.7f), cy + sz},
-                        {cx + (sz * 0.7f), cy},
-                    };
-                    gfx.FillPolygon(&br, rightPts, 3);
-                }
+                PaintRoundedArrow(gfx, arrowTop, IsVert(sb) ? ArrowDirection::Up : ArrowDirection::Left, gdipArrowCol);
+                PaintRoundedArrow(gfx, arrowBot, IsVert(sb) ? ArrowDirection::Down : ArrowDirection::Right,
+                                  gdipArrowCol);
             } else {
                 // chevron lines
-                Gdiplus::Pen pen(gdipArrowCol, 1.5f);
+                Gdiplus::Pen pen(gdipArrowCol, std::max(1.f, std::min(arrowTop.dx, arrowTop.dy) / 10.f));
                 pen.SetStartCap(Gdiplus::LineCapRound);
                 pen.SetEndCap(Gdiplus::LineCapRound);
                 pen.SetLineJoin(Gdiplus::LineJoinRound);
@@ -726,6 +780,25 @@ static void StopMouseTracking() {
 
 // ---- WndProc for scrollbar window (handles clicks, drag, wheel) ----
 
+static void RequestScrollbarPaint(OverlayScrollbar* sb) {
+    if (!sb || !sb->hwnd || sb->paintPending) return;
+    sb->paintPending = true;
+    if (!PostMessageW(sb->hwnd, kScrollbarPaintMessage, 0, 0)) {
+        sb->paintPending = false;
+        PaintScrollbar(sb);
+    }
+}
+
+static void FinishScrollbarInput(OverlayScrollbar* sb) {
+    sb->repeatScrollCode = SB_ENDSCROLL;
+    KillTimer(sb->hwnd, OverlayScrollbar::kTimerRepeatScroll);
+    if (!sb->isDragging) return;
+    sb->isDragging = false;
+    sb->nPos = sb->nTrackPos;
+    RequestScrollbarPaint(sb);
+    SendScrollMsg(sb, ScrollMsgForType(sb), MAKEWPARAM(SB_THUMBPOSITION, sb->nPos));
+}
+
 static LRESULT CALLBACK WndProcOverlayScrollbar(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     OverlayScrollbar* sb = (OverlayScrollbar*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     if (!sb) {
@@ -733,6 +806,12 @@ static LRESULT CALLBACK WndProcOverlayScrollbar(HWND hwnd, UINT msg, WPARAM wp, 
     }
 
     switch (msg) {
+        case kScrollbarPaintMessage: {
+            if (!sb->paintPending) return 0;
+            sb->paintPending = false;
+            PaintScrollbar(sb);
+            return 0;
+        }
         case WM_TIMER:
             if (wp == OverlayScrollbar::kTimerAutoHide) {
                 if (!sb->isDragging) {
@@ -741,7 +820,7 @@ static LRESULT CALLBACK WndProcOverlayScrollbar(HWND hwnd, UINT msg, WPARAM wp, 
                 return 0;
             }
             if (wp == OverlayScrollbar::kTimerRepeatScroll) {
-                if (sb->repeatScrollCode == 0) {
+                if (sb->repeatScrollCode == SB_ENDSCROLL) {
                     KillTimer(hwnd, OverlayScrollbar::kTimerRepeatScroll);
                     return 0;
                 }
@@ -786,8 +865,9 @@ static LRESULT CALLBACK WndProcOverlayScrollbar(HWND hwnd, UINT msg, WPARAM wp, 
                     newPos = sb->dragStartPos + MulDiv(dragDelta, scrollableRange, scrollableTrack);
                 }
                 newPos = setMinMax(newPos, sb->nMin, sb->nMax - (int)sb->nPage + 1);
+                if (newPos == sb->nTrackPos) return 0;
                 sb->nTrackPos = newPos;
-                PaintScrollbar(sb);
+                RequestScrollbarPaint(sb);
                 SendScrollMsg(sb, ScrollMsgForType(sb), MAKEWPARAM(SB_THUMBTRACK, newPos));
                 return 0;
             }
@@ -904,18 +984,14 @@ static LRESULT CALLBACK WndProcOverlayScrollbar(HWND hwnd, UINT msg, WPARAM wp, 
             return 0;
         }
 
+        case WM_CAPTURECHANGED:
+            FinishScrollbarInput(sb);
+            return 0;
+
+        case WM_CANCELMODE:
         case WM_LBUTTONUP:
-            if (sb->repeatScrollCode != 0) {
-                sb->repeatScrollCode = 0;
-                KillTimer(hwnd, OverlayScrollbar::kTimerRepeatScroll);
-            }
-            if (sb->isDragging) {
-                sb->isDragging = false;
-                sb->nPos = sb->nTrackPos;
-                PaintScrollbar(sb);
-                SendScrollMsg(sb, ScrollMsgForType(sb), MAKEWPARAM(SB_THUMBPOSITION, sb->nPos));
-            }
-            ReleaseCapture();
+            FinishScrollbarInput(sb);
+            if (GetCapture() == hwnd) ReleaseCapture();
             return 0;
 
         case WM_MOUSEWHEEL:
@@ -1036,7 +1112,8 @@ void OverlayScrollbarSetInfo(OverlayScrollbar* sb, const SCROLLINFO* si, bool re
         // thumb, and keep the auto-hide timer alive while scrolling continues
         // (wheel / keyboard / smooth-scroll ticks — not only mouse motion).
         if (IsVisible(sb)) {
-            PaintScrollbar(sb);
+            // Merge bursts of wheel/drag input into one paint of the latest position.
+            RequestScrollbarPaint(sb);
             if (sb->state == State::SmartThin) {
                 RestartSmartThinAutoHide(sb);
             }
@@ -1154,7 +1231,7 @@ void OverlayScrollbarUpdatePos(OverlayScrollbar* sb) {
     }
     Rect previousBounds = HwndWindowRect(sb->hwnd);
     if (!sb->nativeAdapter || previousBounds != Rect{x, y, w, h} || (swpFlags & SWP_SHOWWINDOW)) {
-        SetWindowPos(sb->hwnd, insertAfter, x, y, w, h, swpFlags);
+        SetScrollbarPos(sb->hwnd, insertAfter, x, y, w, h, swpFlags);
     }
     if (sb->nativeAdapter) {
         Rect visible = ownerRc.Intersect(NativeScrollbarClip(sb->hwndOwner));
@@ -1379,7 +1456,11 @@ static LRESULT CALLBACK NativeScrollbarProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
 }
 
 void InstallAppScrollbar(HWND hwnd) {
-    if (!hwnd || GetPropW(hwnd, kNativeScrollbarProperty)) return;
+    if (!hwnd) return;
+    if (GetPropW(hwnd, kNativeScrollbarProperty)) {
+        SyncNativeScrollbars(hwnd);
+        return;
+    }
     auto* sb = OverlayScrollbarCreate(hwnd, OverlayScrollbar::Type::Vert, OverlayScrollbar::Mode::Thick);
     sb->nativeAdapter = true;
     if (!sb->hwnd || !SetPropW(hwnd, kNativeScrollbarProperty, sb) ||
@@ -1406,6 +1487,66 @@ void RemoveAppScrollbar(HWND hwnd) {
 }
 
 #if IS_DEBUG
+bool OverlayScrollbar_UnitTestsAppearance() {
+    HWND owner = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, -10000, -10000, 600, 600, nullptr, nullptr,
+                                 GetModuleHandleW(nullptr), nullptr);
+    utassert(owner != nullptr);
+    if (!owner) return false;
+    for (auto type : {OverlayScrollbar::Type::Vert, OverlayScrollbar::Type::Horz}) {
+        auto* sb = OverlayScrollbarCreate(owner, type, OverlayScrollbar::Mode::Thick);
+        utassert(sb && sb->hwnd);
+        if (!sb || !sb->hwnd) continue;
+        sb->state = State::AlwaysThick;
+        sb->nMax = 999;
+        sb->nPage = 250;
+        sb->nPos = 375;
+        for (int width : {8, 16, 24, 48, 80}) {
+            int w = IsVert(sb) ? width : 600;
+            int h = IsVert(sb) ? 600 : width;
+            SetWindowPos(sb->hwnd, nullptr, -10000, -10000, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+            ShowWindow(sb->hwnd, SW_SHOWNOACTIVATE);
+            PaintScrollbar(sb);
+            auto* pixels = (DWORD*)sb->paintBits;
+            utassert(pixels != nullptr);
+            if (!pixels) continue;
+            DWORD track = PremultiplyPixel(ThemeTrackColor(), 255);
+            for (Rect arrow : {GetArrowTopRect(sb), GetArrowBottomRect(sb)}) {
+                int count = 0;
+                for (int y = arrow.y; y < arrow.Bottom(); y++) {
+                    for (int x = arrow.x; x < arrow.Right(); x++) count += pixels[y * w + x] != track;
+                }
+                utassert(count > width * width / 20);
+                utassert(count < width * width / 2);
+            }
+            // Rounded apexes must leave the original sharp tip unpainted.
+            if (width >= 48) {
+                int tip = (int)floorf(width / 2.f - width / 3.f * .7f);
+                utassert(pixels[IsVert(sb) ? tip * w + width / 2 : width / 2 * w + tip] == track);
+                utassert(pixels[IsVert(sb) ? (h - 1 - tip) * w + width / 2 : width / 2 * w + w - 1 - tip] == track);
+            }
+            Rect thumb = GetThumbRect(sb);
+            int inset = std::min(UiScalePxForDpi(DpiGetForHwnd(owner), 2), width / 3);
+            if (IsVert(sb))
+                thumb.SubLR(inset, inset);
+            else
+                thumb.SubTB(inset, inset);
+            utassert(pixels[thumb.y * w + thumb.x] == track);
+            utassert(pixels[(thumb.y + thumb.dy / 2) * w + thumb.x + thumb.dx / 2] != track);
+            WCHAR captureDir[MAX_PATH]{};
+            if (GetEnvironmentVariableW(L"SUMATRA_SCROLLBAR_CAPTURE_DIR", captureDir, dimof(captureDir))) {
+                TempStr file = fmt("%s/scrollbar-%s-%d.png", ToUtf8Temp(WStr(captureDir)),
+                                   IsVert(sb) ? StrL("vertical") : StrL("horizontal"), width);
+                Gdiplus::Bitmap bitmap(w, h, w * 4, PixelFormat32bppPARGB, (BYTE*)sb->paintBits);
+                CLSID encoder = GetGdiPlusEncoderClsid(L"image/png");
+                utassert(bitmap.Save(CWStrTemp(ToWStrTemp(file)), &encoder) == Gdiplus::Ok);
+            }
+        }
+        OverlayScrollbarDestroy(sb);
+    }
+    DestroyWindow(owner);
+    return true;
+}
+
 bool OverlayScrollbar_UnitTestsPerf() {
     HWND owner = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, -10000, -10000, 400, 800, nullptr, nullptr,
                                  GetModuleHandleW(nullptr), nullptr);
@@ -1433,6 +1574,18 @@ bool OverlayScrollbar_UnitTestsPerf() {
     int added = gScrollbarAllocations - allocations;
     printf("Scrollbar paint: 200 frames, %d surfaces, %.3f ms\n", added, TimeSinceInMs(started));
     utassert(added == 1);
+    int paints = gScrollbarPaints;
+    SCROLLINFO info{sizeof(info), SIF_POS};
+    for (int i = 0; i < 100; i++) {
+        info.nPos = i;
+        OverlayScrollbarSetInfo(sb, &info, true);
+    }
+    utassert(gScrollbarPaints == paints);
+    utassert(sb->paintPending);
+    SendMessageW(sb->hwnd, kScrollbarPaintMessage, 0, 0);
+    utassert(gScrollbarPaints == paints + 1);
+    utassert(!sb->paintPending);
+    utassert(sb->nPos == 99);
     SetWindowPos(sb->hwnd, nullptr, -10000, -10000, 45, 700, SWP_NOZORDER | SWP_NOACTIVATE);
     PaintScrollbar(sb);
     utassert(gScrollbarAllocations == allocations + 2);
@@ -1441,9 +1594,61 @@ bool OverlayScrollbar_UnitTestsPerf() {
     utassert(!sb->paintDc && !sb->paintBitmap && !sb->paintBits);
     PaintScrollbar(sb);
     utassert(gScrollbarAllocations == allocations + 3);
+    sb->mode = OverlayScrollbar::Mode::Smart;
+    SetState(sb, State::SmartThin);
+    RequestScrollbarPaint(sb);
+    SetState(sb, State::SmartInvisible);
+    paints = gScrollbarPaints;
+    SendMessageW(sb->hwnd, kScrollbarPaintMessage, 0, 0);
+    utassert(gScrollbarPaints == paints);
+    utassert(!sb->paintPending);
     OverlayScrollbarDestroy(sb);
     DestroyWindow(owner);
     return true;
+}
+
+static LRESULT CALLBACK ScrollbarInputTestProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR data) {
+    if (msg == WM_VSCROLL || msg == WM_HSCROLL) {
+        (*(int*)data)++;
+        return 0;
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+static void TestScrollbarInput(OverlayScrollbar* sb) {
+    int scrolls = 0;
+    HWND owner = sb->hwndOwner;
+    utassert(SetWindowSubclass(owner, ScrollbarInputTestProc, 1, (DWORD_PTR)&scrolls));
+    sb->nPos = 400;
+    Rect up = GetArrowTopRect(sb);
+    SendMessageW(sb->hwnd, WM_LBUTTONDOWN, 0, MAKELPARAM(up.x + up.dx / 2, up.y + up.dy / 2));
+    utassert(scrolls == 1);
+    SendMessageW(sb->hwnd, WM_TIMER, OverlayScrollbar::kTimerRepeatScroll, 0);
+    utassert(scrolls == 2);
+    SendMessageW(sb->hwnd, WM_LBUTTONUP, 0, 0);
+
+    Rect down = GetArrowBottomRect(sb);
+    LPARAM bottom = MAKELPARAM(down.x + down.dx / 2, down.y + down.dy / 2);
+    SendMessageW(sb->hwnd, WM_LBUTTONDOWN, 0, bottom);
+    int before = scrolls;
+    SendMessageW(sb->hwnd, WM_CANCELMODE, 0, 0);
+    SendMessageW(sb->hwnd, WM_TIMER, OverlayScrollbar::kTimerRepeatScroll, 0);
+    utassert(scrolls == before);
+    utassert(GetCapture() != sb->hwnd);
+    SendMessageW(sb->hwnd, WM_LBUTTONUP, 0, 0);
+
+    Rect thumb = GetThumbRect(sb);
+    LPARAM center = MAKELPARAM(thumb.x + thumb.dx / 2, thumb.y + thumb.dy / 2);
+    SendMessageW(sb->hwnd, WM_LBUTTONDOWN, 0, center);
+    utassert(sb->isDragging);
+    before = scrolls;
+    for (int i = 0; i < 20; i++) SendMessageW(sb->hwnd, WM_MOUSEMOVE, MK_LBUTTON, center);
+    utassert(scrolls == before);
+    SetCapture(owner);
+    utassert(!sb->isDragging);
+    ReleaseCapture();
+    SendMessageW(sb->hwnd, WM_LBUTTONUP, 0, 0);
+    RemoveWindowSubclass(owner, ScrollbarInputTestProc, 1);
 }
 
 bool OverlayScrollbar_UnitTestsNative() {
@@ -1454,6 +1659,7 @@ bool OverlayScrollbar_UnitTestsNative() {
                                       GetModuleHandleW(nullptr), nullptr);
     utassert(emptyOwner != nullptr);
     if (emptyOwner) {
+        ShowWindow(emptyOwner, SW_SHOWNOACTIVATE);
         for (auto mode : {OverlayScrollbar::Mode::Thick, OverlayScrollbar::Mode::Smart}) {
             auto* bar = OverlayScrollbarCreate(emptyOwner, OverlayScrollbar::Type::Vert, mode);
             utassert(bar && bar->hwnd);
@@ -1464,6 +1670,7 @@ bool OverlayScrollbar_UnitTestsNative() {
                 OverlayScrollbarSetInfo(bar, &info, false);
                 OverlayScrollbarShow(bar, true);
                 utassert(HwndIsVisible(bar->hwnd));
+                TestScrollbarInput(bar);
                 HWND active = GetActiveWindow();
                 OverlayScrollbarShow(bar, false);
                 utassert(!IsActive(bar));

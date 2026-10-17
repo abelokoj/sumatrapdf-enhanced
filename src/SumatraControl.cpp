@@ -63,6 +63,7 @@
 #include "CommandPalette.h"
 #include "PdfTools.h"
 #include "MergePdf.h"
+#include "AnnotationTransfer.h"
 #include "ReadAloud.h"
 #include "ReadingAutoScroll.h"
 #include "ReadingBar.h"
@@ -604,7 +605,7 @@ static TempStr MarkupAnnotsResultTemp(Str action, int x, int y, int* exitCodeOut
         bool isMarkup = tp == AnnotationType::Highlight || tp == AnnotationType::Underline ||
                         tp == AnnotationType::Squiggly || tp == AnnotationType::StrikeOut;
         bool isShape = tp == AnnotationType::Square || tp == AnnotationType::Circle || tp == AnnotationType::Polygon ||
-                       tp == AnnotationType::PolyLine || tp == AnnotationType::Ink;
+                       tp == AnnotationType::PolyLine || tp == AnnotationType::Ink || tp == AnnotationType::Line;
         bool isStamp = tp == AnnotationType::Stamp;
         bool isRedact = tp == AnnotationType::Redact;
         bool isFileAttachment = tp == AnnotationType::FileAttachment;
@@ -631,6 +632,8 @@ static TempStr MarkupAnnotsResultTemp(Str action, int x, int y, int* exitCodeOut
             typeName = StrL("PolyLine");
         } else if (tp == AnnotationType::Ink) {
             typeName = StrL("Ink");
+        } else if (tp == AnnotationType::Line) {
+            typeName = StrL("Line");
         } else if (tp == AnnotationType::Stamp) {
             typeName = StrL("Stamp");
         } else if (tp == AnnotationType::Redact) {
@@ -658,6 +661,12 @@ static TempStr MarkupAnnotsResultTemp(Str action, int x, int y, int* exitCodeOut
             Rect screen = dm->CvtToScreen(PageNo(a), r);
             out.Append(fmt("type=%s page=%d rect=%g,%g,%g,%g screen=%d,%d,%d,%d\n", typeName, PageNo(a), r.x, r.y, r.dx,
                            r.dy, screen.x, screen.y, screen.dx, screen.dy));
+            if (AnnotationSupportsDash(tp)) out.Append(fmt("linePattern=%d\n", (int)BorderLinePattern(a)));
+            if (tp == AnnotationType::Line) {
+                int start, end;
+                GetLineEndingStyles(a, &start, &end);
+                out.Append(fmt("lineEndStyles=%d,%d\n", start, end));
+            }
             // A closed polyline repeats its first vertex, so a test can tell an
             // open path from one closed with Ctrl+click (issue #6119). On its
             // own line: readers of the one above anchor at its end.
@@ -695,6 +704,8 @@ static TempStr MarkupAnnotsResultTemp(Str action, int x, int y, int* exitCodeOut
         out.Append(StrL("color="));
         SerializePdfColor(GetColor(a), out);
         out.Append(StrL("\n"));
+        RectF bounds = GetRect(a);
+        out.Append(fmt("bounds=%g,%g,%g,%g\n", bounds.x, bounds.y, bounds.dx, bounds.dy));
         for (int i = 0; i < len(quads); i++) {
             RectF r = quads[i];
             out.Append(fmt("rect=%g,%g,%g,%g\n", r.x, r.y, r.dx, r.dy));
@@ -944,6 +955,8 @@ enum class ControlCmd : u16 {
     TestFrameNcStrips = 114,
     TestMergePdf = 115,
     TestWheelWhileClosing = 116,
+    TestAnnotationTransfer = 117,
+    TestSettingsTransfer = 118,
 };
 
 enum class ControlArgType : u16 {
@@ -1190,6 +1203,82 @@ static void AppendTestResult(ControlRequest* req, int exitCode, Str result) {
     AppendArgEnd(req->results);
 }
 
+static AnnotationTransferPlan* gTransferTestPlan = nullptr;
+
+static TempStr TransferTestResult(Str action, Str arg, int sourcePage, int targetPage, int* exitCode) {
+    *exitCode = 0;
+    Str error;
+    bool ok = false;
+    str::Builder out;
+    if (str::Eq(action, StrL("reset"))) {
+        delete gTransferTestPlan;
+        gTransferTestPlan = nullptr;
+        return StrL("OK reset");
+    }
+    if (str::Eq(action, StrL("dump"))) {
+        TempStr result = AnnotationTransferDumpTemp(arg, &error);
+        if (len(error) == 0) {
+            return result;
+        }
+        *exitCode = 1;
+        TempStr resultError = str::DupTemp(error);
+        str::Free(error);
+        return resultError;
+    }
+    if (str::Eq(action, StrL("map"))) {
+        if (!gTransferTestPlan || targetPage < 0 || targetPage > gTransferTestPlan->targetPageCount) {
+            *exitCode = 1;
+            return StrL("Invalid page mapping");
+        }
+        for (auto& page : gTransferTestPlan->pages) {
+            if (page.sourcePage == sourcePage) {
+                page.targetPage = targetPage;
+                return fmt("OK source=%d target=%d", sourcePage, targetPage);
+            }
+        }
+        *exitCode = 1;
+        return StrL("Unknown source page");
+    }
+    if (str::Eq(action, StrL("import"))) {
+        int imported = 0;
+        int skipped = 0;
+        ok = gTransferTestPlan && ImportAnnotationTransfer(gTransferTestPlan, arg, &imported, &skipped, &error);
+        if (ok) {
+            return fmt("OK imported=%d skipped=%d", imported, skipped);
+        }
+    } else {
+        WindowTab* tab = len(gWindows) > 0 ? gWindows[0]->CurrentTab() : nullptr;
+        DisplayModel* dm = tab && tab->ctrl ? tab->ctrl->AsFixed() : nullptr;
+        EngineBase* engine = dm ? dm->GetEngine() : nullptr;
+        if (!engine) {
+            *exitCode = 2;
+            return StrL("NOTREADY no engine");
+        }
+        if (str::Eq(action, StrL("export"))) {
+            ok = ExportAnnotationTransfer(engine, arg, &error);
+            if (ok) {
+                return StrL("OK exported");
+            }
+        } else if (str::Eq(action, StrL("analyze"))) {
+            delete gTransferTestPlan;
+            gTransferTestPlan = AnalyzeAnnotationTransfer(engine, arg, &error);
+            ok = gTransferTestPlan != nullptr;
+            if (ok) {
+                out.Append(fmt("OK targetPages=%d\n", gTransferTestPlan->targetPageCount));
+                for (auto& page : gTransferTestPlan->pages) {
+                    out.Append(fmt("source=%d target=%d annotations=%d confidence=%.3f text=%d\n", page.sourcePage,
+                                   page.targetPage, page.annotationCount, page.confidence, (int)page.textMatched));
+                }
+                return ToStrTemp(out);
+            }
+        }
+    }
+    *exitCode = 1;
+    TempStr result = len(error) ? str::DupTemp(error) : StrL("Transfer operation failed");
+    str::Free(error);
+    return result;
+}
+
 static void ExecuteControlRequest(ControlRequest* req) {
     // test commands create engines, which need GDI+ and a few gSettings fields
     AutoGdiPlusShutdown gdiPlus;
@@ -1204,6 +1293,8 @@ static void ExecuteControlRequest(ControlRequest* req) {
         // Quit never waits on the "Unsaved changes" prompt: a test that wants
         // its changes kept saves them first (ResolveUnsavedChanges).
         case ControlCmd::Quit:
+            delete gTransferTestPlan;
+            gTransferTestPlan = nullptr;
             DiscardUnsavedChangesInAllTabs();
             AppendArgInt(req->results, 0);
             AppendArgEnd(req->results);
@@ -1244,6 +1335,19 @@ static void ExecuteControlRequest(ControlRequest* req) {
             int exitCode = 0;
             Str res = WheelWhileClosingResultTemp(&exitCode);
             AppendTestResult(req, exitCode, res);
+            break;
+        }
+
+        case ControlCmd::TestAnnotationTransfer: {
+            Str action = StringArg(req, 0);
+            Str arg = StringArg(req, 1);
+            i32 sourcePage = 0;
+            i32 targetPage = 0;
+            IntArg(req, 2, sourcePage);
+            IntArg(req, 3, targetPage);
+            int exitCode = 0;
+            Str result = TransferTestResult(action, arg, sourcePage, targetPage, &exitCode);
+            AppendTestResult(req, exitCode, result);
             break;
         }
 
@@ -2199,7 +2303,13 @@ static void ExecuteControlRequest(ControlRequest* req) {
         case ControlCmd::TestHomeSelection: {
             Str mode = StringArg(req, 0);
             if (str::EqI(mode, StrL("canvas-key")) || str::EqI(mode, StrL("search-key")) ||
-                str::EqI(mode, StrL("search-char")) || str::EqI(mode, StrL("find-search"))) {
+                str::EqI(mode, StrL("search-char")) || str::EqI(mode, StrL("find-search")) ||
+                str::EqI(mode, StrL("page-options")) || str::EqI(mode, StrL("pin-header")) ||
+                str::EqI(mode, StrL("full-page")) || str::EqI(mode, StrL("page-scroll")) ||
+                str::EqI(mode, StrL("library-state")) || str::EqI(mode, StrL("zoom-open")) ||
+                str::EqI(mode, StrL("zoom-key")) || str::EqI(mode, StrL("zoom-char")) ||
+                str::EqI(mode, StrL("zoom-plus")) || str::EqI(mode, StrL("zoom-minus")) ||
+                str::EqI(mode, StrL("complete-selected"))) {
                 i32 value = 0;
                 IntArg(req, 1, value);
                 int exitCode = 0;
@@ -2227,6 +2337,13 @@ static void ExecuteControlRequest(ControlRequest* req) {
             int exitCode = 0;
             Str res = HomeListRowsResultTemp(&exitCode);
             AppendTestResult(req, exitCode, res);
+            break;
+        }
+
+        case ControlCmd::TestSettingsTransfer: {
+            int exitCode = 0;
+            Str result = SettingsTransferResultTemp(StringArg(req, 0), StringArg(req, 1), &exitCode);
+            AppendTestResult(req, exitCode, result);
             break;
         }
 
@@ -2260,7 +2377,7 @@ static void ExecuteControlRequest(ControlRequest* req) {
 
         case ControlCmd::TestToolbarButtons: {
             int exitCode = 0;
-            Str res = ToolbarButtonsResultTemp(&exitCode);
+            Str res = ToolbarButtonsResultTemp(&exitCode, StringArg(req, 0));
             AppendTestResult(req, exitCode, res);
             break;
         }

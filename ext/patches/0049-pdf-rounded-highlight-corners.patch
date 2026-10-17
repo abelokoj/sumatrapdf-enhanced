@@ -1,0 +1,89 @@
+pdf: round highlight corners inside the selection quad
+
+Keep straight sides and modest corners for text and block highlights.
+Applied after 0033 on MuPDF 1.28.5. Existing explicit appearances are preserved.
+
+diff --git a/source/pdf/pdf-appearance.c b/source/pdf/pdf-appearance.c
+--- a/source/pdf/pdf-appearance.c
++++ b/source/pdf/pdf-appearance.c
+@@ -1179,9 +1179,10 @@
+ {
+ 	pdf_obj *qp;
+ 	fz_rect annot_rect = *rect;
+-	fz_point quad[4], mquad[4], v;
+-	float h, m, dx, dy, vn;
+-	int i, n, from_rect;
++	fz_point quad[4], corners[4], incoming[4], outgoing[4];
++	const float curve = 0.55228475f;
++	float h, radius;
++	int i, j, n, from_rect;
+ 
+ 	pdf_write_opacity_blend_mode(ctx, annot, buf, res, FZ_BLEND_MULTIPLY);
+ 	if (!pdf_write_fill_color_appearance(ctx, annot, buf))
+@@ -1193,37 +1194,35 @@
+ 	for (i = 0; i < n; i += 8)
+ 	{
+ 		h = load_markup_quad(ctx, quad, qp, i, from_rect, annot_rect);
+-		m = h / 4.2425f; /* magic number that matches adobe's appearance */
+-		dx = quad[LR].x - quad[LL].x;
+-		dy = quad[LR].y - quad[LL].y;
+-		vn = sqrtf(dx * dx + dy * dy);
+-		if (vn == 0)
+-			continue;
+-		v = fz_make_point(dx * m / vn, dy * m / vn);
+-
+-		mquad[LL].x = quad[LL].x - v.x - v.y;
+-		mquad[LL].y = quad[LL].y - v.y + v.x;
+-		mquad[UL].x = quad[UL].x - v.x + v.y;
+-		mquad[UL].y = quad[UL].y - v.y - v.x;
+-		mquad[LR].x = quad[LR].x + v.x - v.y;
+-		mquad[LR].y = quad[LR].y + v.y + v.x;
+-		mquad[UR].x = quad[UR].x + v.x + v.y;
+-		mquad[UR].y = quad[UR].y + v.y - v.x;
+-
+-		fz_append_printf(ctx, buf, "%g %g m\n", quad[LL].x, quad[LL].y);
+-		fz_append_printf(ctx, buf, "%g %g %g %g %g %g c\n",
+-			mquad[LL].x, mquad[LL].y,
+-			mquad[UL].x, mquad[UL].y,
+-			quad[UL].x, quad[UL].y);
+-		fz_append_printf(ctx, buf, "%g %g l\n", quad[UR].x, quad[UR].y);
+-		fz_append_printf(ctx, buf, "%g %g %g %g %g %g c\n",
+-			mquad[UR].x, mquad[UR].y,
+-			mquad[LR].x, mquad[LR].y,
+-			quad[LR].x, quad[LR].y);
+-		fz_append_printf(ctx, buf, "f\n");
+-
+-		union_quad(rect, quad, h/16);
+-		union_quad(rect, mquad, 0);
++		radius = fz_min(h * 0.12f, 6.0f);
++		corners[0] = quad[LL];
++		corners[1] = quad[UL];
++		corners[2] = quad[UR];
++		corners[3] = quad[LR];
++		/* Round inside the quad; straight sides never bulge beyond the selection. */
++		for (j = 0; j < 4; ++j)
++		{
++			fz_point corner = corners[j];
++			fz_point prev = corners[(j + 3) % 4];
++			fz_point next = corners[(j + 1) % 4];
++			float prev_len = hypotf(prev.x - corner.x, prev.y - corner.y);
++			float next_len = hypotf(next.x - corner.x, next.y - corner.y);
++			float r = fz_min(radius, fz_min(prev_len, next_len) * 0.5f);
++			incoming[j] = lerp_point(corner, prev, prev_len > 0 ? r / prev_len : 0);
++			outgoing[j] = lerp_point(corner, next, next_len > 0 ? r / next_len : 0);
++		}
++		fz_append_printf(ctx, buf, "%g %g m\n", outgoing[0].x, outgoing[0].y);
++		for (j = 1; j <= 4; ++j)
++		{
++			int c = j % 4;
++			fz_point a = lerp_point(incoming[c], corners[c], curve);
++			fz_point b = lerp_point(outgoing[c], corners[c], curve);
++			fz_append_printf(ctx, buf, "%g %g l\n", incoming[c].x, incoming[c].y);
++			fz_append_printf(ctx, buf, "%g %g %g %g %g %g c\n",
++				a.x, a.y, b.x, b.y, outgoing[c].x, outgoing[c].y);
++		}
++		fz_append_string(ctx, buf, "h f\n");
++		union_quad(rect, quad, 0);
+ 	}
+ }
+ 

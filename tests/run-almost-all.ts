@@ -1,3 +1,8 @@
+import { testit as annotationMode } from "./annotation-mode.ts";
+import { testit as homeCompletedDocuments } from "./home-completed-documents.ts";
+import { testit as settingsTransfer } from "./settings-transfer.ts";
+import { testit as settingsBackups } from "./settings-backups.ts";
+import { testit as blockHighlight } from "./block-highlight.ts";
 // Fast regular tests: everything except cases whose time is the test
 // (print-to-PDF, LaTeX, debounce/CPU/scroll windows, high-zoom tile settle,
 // 400-file HTML TOC, restrict.ini exe copies). Those live in run-all.ts.
@@ -20,14 +25,26 @@ import { runNamedTests, runSuiteMain, startSuiteProgress, type NamedTest, type S
 import { setTestWindowLayout } from "./winapi.ts";
 import { beginSharedControlledSession, endSharedControlledSession } from "./win-automation.ts";
 import { testit as markdownDisplayFonts } from "./markdown-display-fonts.ts";
+import { testit as annotationTransfer } from "./annotation-transfer.ts";
 import { testit as dictionaryAppearance } from "./dictionary-appearance.ts";
+import { testit as penCursorSettings } from "./pen-cursor-settings.ts";
+import { testit as fileTypeIcons } from "./file-type-icons.ts";
+import { testit as activeTabStyles } from "./active-tab-styles.ts";
 import { testit as markdownFontDownloads } from "./markdown-font-downloads.ts";
+import { testit as markdownSystemFonts } from "./markdown-system-fonts.ts";
+import { testit as markdownReadingLayout } from "./markdown-reading-layout.ts";
+import { testit as markdownMath } from "./markdown-math.ts";
+import { testit as tocFilterLayout } from "./toc-filter-layout.ts";
+import { testit as tocSidebarState } from "./toc-sidebar-state.ts";
+import { testit as sidebarHiddenParent } from "./sidebar-hidden-parent.ts";
+import { testit as tocSidebarRandomized } from "./toc-sidebar-randomized.ts";
 import { testit as markdownFontPackaging } from "./markdown-font-packaging.ts";
 import { testit as themePresets } from "./theme-presets.ts";
 import { testit as lintCommandIds } from "./lint-command-ids.ts";
 import { testit as lintMingwSources } from "./lint-mingw-sources.ts";
 import { testit as jpegXlPdf } from "./jpeg-xl-pdf.ts";
 import { testit as buildCli } from "./build-cli.ts";
+import { testit as enhancedVersion } from "./enhanced-version.ts";
 import { testit as combiningMarkFirst } from "./combining-mark-first.ts";
 import { testit as parseTipBrackets } from "./parse-tip-brackets.ts";
 import { testit as issue5840 } from "./issue-5840.ts";
@@ -119,6 +136,7 @@ import { testit as issue1846 } from "./issue-1846.ts";
 import { testit as xmpProperties } from "./xmp-properties.ts";
 import { testit as documentPropertiesCopy } from "./document-properties-copy.ts";
 import { testit as refHoverSelection } from "./ref-hover-selection.ts";
+import { testit as refHoverFalsePositive } from "./ref-hover-false-positive.ts";
 import { testit as issue5950 } from "./issue-5950.ts";
 import { testit as issue5993 } from "./issue-5993.ts";
 import { testit as issue5845 } from "./issue-5845.ts";
@@ -164,6 +182,7 @@ import { testit as issue6088 } from "./issue-6088.ts";
 import { testit as annotContentsClickAway } from "./annot-contents-click-away.ts";
 import { testit as annotColorDropdown } from "./annot-color-dropdown.ts";
 import { testit as colorPickerFormats } from "./color-picker-formats.ts";
+import { testit as paletteCustomTest } from "./annotation-palette-custom.ts";
 import { testit as pdfScrollResponsiveness } from "./pdf-scroll-responsiveness.ts";
 import { testit as inkThickness } from "./ink-thickness.ts";
 import { testit as issue6137Contents } from "./issue-6137-contents.ts";
@@ -231,6 +250,10 @@ import { testit as issue5907 } from "./issue-5907.ts";
 import { testit as settingsPersist } from "./settings-persist.ts";
 import { testit as issue5970 } from "./issue-5970.ts";
 import { testit as homeThemeIcons } from "./home-theme-icons.ts";
+import { testit as nativeWindowResize } from "./native-window-resize.ts";
+import { testit as noteCommentCard } from "./note-comment-card.ts";
+import { testit as toolbarExpansionDimensions } from "./toolbar-expansion-dimensions.ts";
+import { testit as nativeCaptionButtons } from "./native-caption-buttons.ts";
 import { testit as issue5971 } from "./issue-5971.ts";
 import { testit as issue5933 } from "./issue-5933.ts";
 import { testit as issue6037 } from "./issue-6037.ts";
@@ -406,6 +429,7 @@ export const tests: NamedTest[] = [
   ["issue-6230", issue6230],
   ["annot-color-dropdown", annotColorDropdown],
   ["color-picker-formats", colorPickerFormats],
+  ["annotation-palette-custom", paletteCustomTest],
   ["ink-thickness", inkThickness],
   ["issue-6240", issue6240],
   ["issue-5095", issue5095],
@@ -504,6 +528,7 @@ export const tests: NamedTest[] = [
   ["theme-presets", themePresets],
   ["lint-command-ids", lintCommandIds],
   ["build-cli", buildCli],
+  ["enhanced-version", enhancedVersion],
   ["parse-tip-brackets", parseTipBrackets],
   ["combining-mark-first", combiningMarkFirst],
   ["issue-5840", issue5840],
@@ -609,6 +634,7 @@ export const tests: NamedTest[] = [
   ["xmp-properties", xmpProperties],
   ["document-properties-copy", documentPropertiesCopy],
   ["ref-hover-selection", refHoverSelection],
+  ["ref-hover-false-positive", refHoverFalsePositive],
   ["issue-5950", issue5950],
   ["issue-3472", issue3472],
   ["pdf-only-menu-items", pdfOnlyMenuItems],
@@ -621,7 +647,18 @@ export const tests: NamedTest[] = [
   // --- isolated session: -appdata, saveSettings, or own window placement -
   ["markdown-display-fonts", markdownDisplayFonts],
   ["markdown-font-downloads", markdownFontDownloads],
+  ["markdown-system-fonts", markdownSystemFonts],
+  ["markdown-reading-layout", markdownReadingLayout],
+  ["markdown-math", markdownMath],
+  ["toc-filter-layout", tocFilterLayout],
+  ["toc-sidebar-state", tocSidebarState],
+  ["sidebar-hidden-parent", sidebarHiddenParent],
+  ["toc-sidebar-randomized", tocSidebarRandomized],
   ["dictionary-appearance", dictionaryAppearance],
+  ["pen-cursor-settings", penCursorSettings],
+  ["file-type-icons", fileTypeIcons],
+  ["active-tab-styles", activeTabStyles],
+  ["annotation-transfer", annotationTransfer],
   ["markdown-font-packaging", markdownFontPackaging],
   ["favorites-menu", favoritesMenu],
   ["favorites-tab-after-document-close", favoritesTabAfterDocumentClose],
@@ -691,6 +728,10 @@ export const tests: NamedTest[] = [
   ["settings-persist", settingsPersist],
   ["issue-5970", issue5970],
   ["home-theme-icons", homeThemeIcons],
+  ["native-window-resize", nativeWindowResize],
+  ["note-comment-card", noteCommentCard],
+  ["toolbar-expansion-dimensions", toolbarExpansionDimensions],
+  ["native-caption-buttons", nativeCaptionButtons],
   ["issue-5971", issue5971],
   ["command-palette-shortcut-filter", commandPaletteShortcutFilter],
   ["command-palette-alt-names", commandPaletteAltNames],
@@ -755,6 +796,11 @@ export const tests: NamedTest[] = [
   ["toc-show-on-open", tocShowOnOpen],
   ["issue-6132", issue6132],
   ["toolbar-tab-switch-pos", toolbarTabSwitchPos],
+  ["annotation-mode", annotationMode],
+  ["home-completed-documents", homeCompletedDocuments],
+  ["settings-transfer", settingsTransfer],
+  ["settings-backups", settingsBackups],
+  ["block-highlight", blockHighlight],
   ["facing-fit-tiny-viewport", facingFitTinyViewport],
   ["issue-trim-margins", issueTrimMargins],
   ["trim-empty-margins-restore", trimEmptyMarginsRestore],

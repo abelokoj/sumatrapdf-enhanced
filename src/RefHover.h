@@ -215,12 +215,13 @@ bool DetectCitationInPageText(WStr text, const Rect* coords, int textLen, Point 
                               Rect* srcRectOut = nullptr);
 
 bool FindSurnameInPageText(WStr text, const Rect* coords, int textLen, WStr surnameW, int year, float* xOut,
-                           float* yOut);
+                           float* yOut, Rect source = {});
 
 bool DetectNumericCitationInPageText(WStr text, const Rect* coords, int textLen, Point pagePos, int* numOut,
                                      Rect* srcRectOut = nullptr);
 
-bool FindNumericReferenceInPageText(WStr text, const Rect* coords, int textLen, int num, float* xOut, float* yOut);
+bool FindNumericReferenceInPageText(WStr text, const Rect* coords, int textLen, int num, float* xOut, float* yOut,
+                                    Rect source = {});
 
 //--- shared between the RefHover*.cpp files, not for use outside them
 

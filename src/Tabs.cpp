@@ -161,6 +161,7 @@ void UpdateTabWidth(MainWindow* win) {
         HWND hwnd = win->tabsCtrl->hwnd ? win->tabsCtrl->hwnd : win->hwndFrame;
         int dpi = DpiGetForHwnd(hwnd);
         win->tabsCtrl->interfaceScale = GetUiScale();
+        win->tabsCtrl->activeStyle = gSettings->activeTabStyle;
         win->tabsCtrl->tabListVisibleItems = limitValue(gSettings->tabListVisibleItems, 1, 50);
         win->tabsCtrl->tabIconDx = UiScalePxForDpi(dpi, limitValue(gSettings->toolbarSize, 8, 64));
         int iconDx = win->tabsCtrl->tabIconDx;
@@ -700,6 +701,7 @@ void CreateTabbar(MainWindow* win) {
     tabsCtrl->onContextMenu = MkFunc1(TabsContextMenu, tabsCtrl);
     tabsCtrl->onTabMigration = MkFunc1(MainWindowTabMigration, win);
     tabsCtrl->interfaceScale = GetUiScale();
+    tabsCtrl->activeStyle = gSettings->activeTabStyle;
     tabsCtrl->tabListVisibleItems = limitValue(gSettings->tabListVisibleItems, 1, 50);
     tabsCtrl->Create(args);
     win->tabsCtrl = tabsCtrl;

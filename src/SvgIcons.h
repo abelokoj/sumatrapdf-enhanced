@@ -44,6 +44,7 @@ enum class PinIconStyle {
     Soft = 10
 };
 const char* GetPinIconSvg();
+const char* GetPinIconSvg(PinIconStyle);
 enum class ColorPickerIconStyle {
     Classic = 1,
     Soft = 2,
@@ -52,6 +53,14 @@ enum class ColorPickerIconStyle {
     Tiles = 8
 };
 const char* GetColorPickerIconSvg();
+const char* GetColorPickerIconSvg(ColorPickerIconStyle);
+enum class PenCursorStyle {
+    Lacquer = 9,
+    Rollerball = 11,
+    Drafting = 12
+};
+TempStr GetActiveTabPreviewSvgTemp(int style, Color accent, Color background, Color foreground);
+TempStr GetPenCursorSvgTemp(PenCursorStyle style, Color accent, Color foreground);
 extern const char* gIconEditAnnotations;
 extern const char* gIconAnnotHighlight;
 extern const char* gIconAnnotHighlightBrush;
@@ -79,12 +88,14 @@ extern const char* gIconDictionary;
 extern const char* gIconLearning;
 extern const char* gIconStudyExport;
 extern const char* gIconPresentation;
+extern const char* gIconAnnotationMode;
 extern const char* gIconLaserPointer;
 extern const char* gIconLaserSolid;
 extern const char* gIconLaserHollow;
 extern const char* gIconLaserDot;
 
 struct Pixmap;
+Pixmap* GetFileTypeIconPreview(int style);
 
 Pixmap* GetCachedPixmapForSvg(Str svg, int dx, int dy, Color fg = kColorUnset, Color bg = kColorUnset);
 void DestroySvgPixmapIconsCache();

@@ -781,6 +781,296 @@ bool AppSettings_UnitTestsSession() {
 // called whenever global preferences change or a file is
 // added or removed from the file history (in order to keep
 // the list of recently opened documents in sync)
+static void* gAppearancePreviewOwner = nullptr;
+static Settings* gAppearancePreviewSettings = nullptr;
+static Func0 gAppearanceCancel, gAppearanceSuspend, gAppearanceResume;
+static int gAppearanceSuspendDepth = 0;
+
+void EndAppearancePreview(void* owner) {
+    if (owner != gAppearancePreviewOwner) return;
+    gAppearancePreviewOwner = nullptr;
+    gAppearancePreviewSettings = nullptr;
+    gAppearanceCancel = {};
+    gAppearanceSuspend = {};
+    gAppearanceResume = {};
+    gAppearanceSuspendDepth = 0;
+}
+
+void CancelAppearancePreview() {
+    if (!gAppearancePreviewOwner) return;
+    Func0 cancel = gAppearanceCancel;
+    EndAppearancePreview(gAppearancePreviewOwner);
+    if (cancel.IsValid()) cancel.Call();
+}
+
+void BeginAppearancePreview(void* owner, Func0 cancel, Func0 suspend, Func0 resume) {
+    if (gAppearancePreviewOwner == owner) return;
+    CancelAppearancePreview();
+    gAppearancePreviewOwner = owner;
+    gAppearancePreviewSettings = gSettings;
+    gAppearanceCancel = cancel;
+    gAppearanceSuspend = suspend;
+    gAppearanceResume = resume;
+}
+
+struct AppearanceSaveGuard {
+    void* owner = nullptr;
+    explicit AppearanceSaveGuard(bool enabled) {
+        if (!enabled || !gAppearancePreviewOwner || gSettings != gAppearancePreviewSettings) return;
+        owner = gAppearancePreviewOwner;
+        if (gAppearanceSuspendDepth++ == 0 && gAppearanceSuspend.IsValid()) gAppearanceSuspend.Call();
+    }
+    ~AppearanceSaveGuard() {
+        if (owner && owner == gAppearancePreviewOwner && --gAppearanceSuspendDepth == 0 && gAppearanceResume.IsValid())
+            gAppearanceResume.Call();
+    }
+};
+
+#if IS_DEBUG
+struct AppearanceTestState {
+    int saved = 3;
+    int visible = 1;
+    int canceled = 0;
+    int suspended = 0;
+    int resumed = 0;
+    void Cancel() {
+        canceled++;
+        gSettings->activeTabStyle = saved;
+    }
+    void Suspend() {
+        suspended++;
+        gSettings->activeTabStyle = saved;
+    }
+    void Resume() {
+        resumed++;
+        gSettings->activeTabStyle = visible;
+    }
+    void Begin() {
+        BeginAppearancePreview(this, MkMethod0<AppearanceTestState, &AppearanceTestState::Cancel>(this),
+                               MkMethod0<AppearanceTestState, &AppearanceTestState::Suspend>(this),
+                               MkMethod0<AppearanceTestState, &AppearanceTestState::Resume>(this));
+        saved = gSettings->activeTabStyle;
+        gSettings->activeTabStyle = visible;
+    }
+};
+
+void AppSettings_UnitTestsAppearance() {
+    Settings* savedSettings = gSettings;
+    if (!gSettings) {
+        gSettings = NewSettings({});
+    }
+    int original = gSettings->activeTabStyle;
+    gSettings->activeTabStyle = 3;
+    utassert(!gSettings->liveAppearancePreview);
+    AppearanceTestState first;
+    first.Begin();
+    Str data = SerializeSettings(gSettings, {});
+    Settings* persisted = NewSettings(data);
+    utassert(persisted->activeTabStyle == 3 && gSettings->activeTabStyle == 1);
+    utassert(first.suspended == 1 && first.resumed == 1);
+    DeleteSettings(persisted);
+    str::Free(data);
+    {
+        AppearanceSaveGuard outer(true);
+        utassert(gSettings->activeTabStyle == 3);
+        data = SerializeSettings(gSettings, {});
+        str::Free(data);
+        utassert(first.suspended == 2 && first.resumed == 1);
+    }
+    utassert(gSettings->activeTabStyle == 1 && first.resumed == 2);
+    AppearanceTestState second;
+    second.visible = 4;
+    second.Begin();
+    utassert(first.canceled == 1 && second.saved == 3 && gSettings->activeTabStyle == 4);
+    CancelAppearancePreview();
+    utassert(second.canceled == 1 && gSettings->activeTabStyle == 3);
+    first.Begin();
+    EndAppearancePreview(&first);
+    data = SerializeSettings(gSettings, {});
+    persisted = NewSettings(data);
+    utassert(persisted->activeTabStyle == 1 && gSettings->activeTabStyle == 1);
+    DeleteSettings(persisted);
+    str::Free(data);
+    gSettings->activeTabStyle = original;
+    if (!savedSettings) {
+        DeleteSettings(gSettings);
+        gSettings = nullptr;
+    }
+}
+#endif
+
+enum class SettingsBackupKind {
+    Automatic,
+    Manual,
+    BeforeImport
+};
+
+struct SettingsBackupJob {
+    Str data, directory, source, result;
+    SettingsBackupKind kind = SettingsBackupKind::Automatic;
+    HWND owner = nullptr;
+    bool ok = false;
+    ~SettingsBackupJob() {
+        str::Free(data);
+        str::Free(directory);
+        str::Free(source);
+        str::Free(result);
+    }
+};
+
+static Mutex gSettingsBackupMutex;
+static ConditionVariable gSettingsBackupIdle;
+static Vec<SettingsBackupJob*> gSettingsBackupQueue;
+static bool gSettingsBackupRunning = false;
+static constexpr int kAutomaticBackupsToKeep = 20;
+
+TempStr GetSettingsBackupDirTemp(Str custom) {
+    if (len(custom)) return str::DupTemp(custom);
+    return path::JoinTemp(path::GetDirTemp(GetSettingsPathTemp()), StrL("Backups"));
+}
+
+static bool AutomaticSettingsBackup() {
+    return gSettings && !str::EqI(gSettings->settingsBackupMode, StrL("manual"));
+}
+
+static void PruneSettingsBackups(Str directory, Str prefix) {
+    struct BackupFile {
+        Str path;
+        FILETIME time;
+    };
+    Vec<BackupFile> files;
+    WIN32_FIND_DATAW found{};
+    HANDLE search = FindFirstFileW(CWStrTemp(path::JoinTemp(directory, fmt("%s-auto-*.txt", prefix))), &found);
+    if (search == INVALID_HANDLE_VALUE) return;
+    do {
+        if (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        VecAppend(files,
+                  BackupFile{str::Dup(path::JoinTemp(directory, ToUtf8Temp(found.cFileName))), found.ftLastWriteTime});
+    } while (FindNextFileW(search, &found));
+    FindClose(search);
+    while (len(files) > kAutomaticBackupsToKeep) {
+        int oldest = 0;
+        for (int i = 1; i < len(files); i++) {
+            if (CompareFileTime(&files[i].time, &files[oldest].time) < 0) oldest = i;
+        }
+        file::Delete(files[oldest].path);
+        str::Free(files[oldest].path);
+        VecRemoveAt(files, oldest);
+    }
+    for (auto& file : files) str::Free(file.path);
+}
+
+static bool WriteSettingsBackup(SettingsBackupJob* job) {
+    if (!path::IsAbsolute(job->directory) || !dir::CreateAll(job->directory)) return false;
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    TempStr prefix = fmt("SumatraPDFEnhanced-settings-%08x", MurmurHash2(job->source));
+    Str kind = job->kind == SettingsBackupKind::Automatic ? StrL("auto")
+               : job->kind == SettingsBackupKind::Manual  ? StrL("manual")
+                                                          : StrL("before-import");
+    TempStr name = fmt("%s-%s-%04d%02d%02d-%02d%02d%02d-%03d.txt", prefix, kind, now.wYear, now.wMonth, now.wDay,
+                       now.wHour, now.wMinute, now.wSecond, now.wMilliseconds);
+    Str destination = str::Dup(MakeUniqueFilePathTemp(path::JoinTemp(job->directory, name)));
+    defer {
+        str::Free(destination);
+    };
+    TempStr temporary = fmt("%s.%u.tmp", destination, GetCurrentProcessId());
+    defer {
+        file::Delete(temporary);
+    };
+    if (!file::WriteFile(temporary, job->data) ||
+        !MoveFileExW(CWStrTemp(temporary), CWStrTemp(destination), MOVEFILE_WRITE_THROUGH))
+        return false;
+    job->result = str::Dup(destination);
+    if (job->kind == SettingsBackupKind::Automatic) PruneSettingsBackups(job->directory, prefix);
+    return true;
+}
+
+static void FinishSettingsBackup(SettingsBackupJob* job) {
+    defer {
+        delete job;
+    };
+    if (job->owner && IsWindow(job->owner)) {
+        TempStr msg =
+            job->ok ? fmt("%s\n\n%s", Tr("Settings backed up."), job->result)
+                    : fmt("%s\n\n%s", Tr("Could not write the settings backup. Check the folder and its permissions."),
+                          job->directory);
+        MessageBoxW(job->owner, CWStrTemp(msg), CWStrTemp(Tr("Settings backup")),
+                    MB_OK | (job->ok ? MB_ICONINFORMATION : MB_ICONWARNING));
+    } else if (!job->ok && len(gWindows)) {
+        ShowPlainWarningNotification(
+            gWindows[0]->hwndCanvas,
+            fmt("%s\n%s", Tr("Settings were saved, but their backup could not be written. Check the backup folder."),
+                job->directory),
+            8000);
+    }
+}
+
+static void SettingsBackupWorker() {
+    for (;;) {
+        SettingsBackupJob* job = nullptr;
+        {
+            AutoUnlockMutex lock(&gSettingsBackupMutex);
+            if (!len(gSettingsBackupQueue)) {
+                gSettingsBackupRunning = false;
+                gSettingsBackupIdle.WakeAll();
+                return;
+            }
+            job = gSettingsBackupQueue[0];
+            VecRemoveAt(gSettingsBackupQueue, 0);
+        }
+        job->ok = WriteSettingsBackup(job);
+        str::Free(job->data);
+        job->data = {};
+        if (job->owner || !job->ok)
+            uitask::Post(MkFunc0(FinishSettingsBackup, job), "SettingsBackupFinished");
+        else
+            delete job;
+    }
+}
+
+static bool QueueSettingsBackup(Str data, Str directory, SettingsBackupKind kind, HWND owner = nullptr) {
+    auto* job = new SettingsBackupJob();
+    job->data = str::Dup(data);
+    job->directory = str::Dup(GetSettingsBackupDirTemp(directory));
+    job->source = str::Dup(GetSettingsPathTemp());
+    job->kind = kind;
+    job->owner = owner;
+    AutoUnlockMutex lock(&gSettingsBackupMutex);
+    if (kind == SettingsBackupKind::Automatic && len(gSettingsBackupQueue)) {
+        auto* pending = gSettingsBackupQueue[len(gSettingsBackupQueue) - 1];
+        if (pending->kind == SettingsBackupKind::Automatic) {
+            delete pending;
+            gSettingsBackupQueue[len(gSettingsBackupQueue) - 1] = job;
+            return true;
+        }
+    }
+    VecAppend(gSettingsBackupQueue, job);
+    if (gSettingsBackupRunning) return true;
+    gSettingsBackupRunning = true;
+    ThreadHandle thread = StartThread(MkFunc0Void(SettingsBackupWorker), StrL("Settings backup"));
+    if (thread) {
+        SafeCloseThreadHandle(&thread);
+        return true;
+    }
+    gSettingsBackupRunning = false;
+    VecRemoveAt(gSettingsBackupQueue, len(gSettingsBackupQueue) - 1);
+    delete job;
+    return false;
+}
+
+bool FlushSettingsBackups() {
+    AutoUnlockMutex lock(&gSettingsBackupMutex);
+    ULONGLONG deadline = GetTickCount64() + 5000;
+    while (gSettingsBackupRunning) {
+        ULONGLONG now = GetTickCount64();
+        if (now >= deadline || !SleepConditionVariableSRW(&gSettingsBackupIdle.cond, &gSettingsBackupMutex.lock,
+                                                          (DWORD)(deadline - now), 0))
+            return false;
+    }
+    return true;
+}
+
 static bool SaveSettings() {
     gSaveSettingsPending = false;
     if (gForTesting) {
@@ -801,6 +1091,8 @@ static bool SaveSettings() {
         return false;
     }
     logf("SaveSettings\n");
+    // Persist saved values, including per-file colors, while the display remains in preview.
+    AppearanceSaveGuard appearance(true);
     // update display states for all tabs
     // we snapshot the list because SaveSettings() can be called re-entrantly
     // (e.g. from LoadDocumentFinish while other documents are still loading/closing)
@@ -852,6 +1144,13 @@ static bool SaveSettings() {
     if (ok) {
         RememberLastSavedPrefs(prefs);
         gSettings->lastPrefUpdate = file::GetModificationTime(path);
+        if (AutomaticSettingsBackup() &&
+            !QueueSettingsBackup(prefs, gSettings->settingsBackupDirectory, SettingsBackupKind::Automatic) &&
+            len(gWindows)) {
+            ShowWarningNotification(
+                gWindows[0]->hwndCanvas,
+                Tr("Settings were saved, but the automatic backup could not start. Try Back Up Settings Now."), 8000);
+        }
     }
     WatchedFileSetIgnore(gWatchedSettingsFile, false);
     return ok;
@@ -887,7 +1186,37 @@ void FlushScheduledSaveSettings() {
     SaveSettings();
 }
 
+static bool RequestSettingsBackup(Str directory, HWND owner, Str& error) {
+    if (gForTesting || gDontSaveSettings || !HasPermission(Perm::SavePreferences | Perm::DiskAccess)) {
+        error = Tr("Backups are unavailable in a testing or restricted instance.");
+        return false;
+    }
+    if (!path::IsAbsolute(GetSettingsBackupDirTemp(directory))) {
+        error = Tr("Choose an absolute path for the backup folder, or use the default folder.");
+        return false;
+    }
+    if (!SaveSettings()) {
+        error = Tr("Could not save the current settings. Nothing was backed up.");
+        return false;
+    }
+    Str data = SerializeSettings(gSettings, file::ReadFileWithArena(GetSettingsPathTemp(), GetTempArena()));
+    defer {
+        str::Free(data);
+    };
+    if (len(data) && QueueSettingsBackup(data, directory, SettingsBackupKind::Manual, owner)) return true;
+    error = Tr("Could not start the settings backup. Try again.");
+    return false;
+}
+
+void ShowSettingsBackup(HWND owner, Str directory) {
+    Str error;
+    if (!RequestSettingsBackup(directory, owner, error)) {
+        MessageBoxW(owner, CWStrTemp(error), CWStrTemp(Tr("Settings backup")), MB_OK | MB_ICONWARNING);
+    }
+}
+
 bool LoadSettings() {
+    CancelAppearancePreview();
     ReportIf(gSettings);
 
     auto timeStart = TimeGet();
@@ -1186,6 +1515,7 @@ static void ReloadSettings(bool force = false) {
 }
 
 void CleanUpSettings() {
+    CancelAppearancePreview();
     DeleteSettings(gSettings);
     gSettings = nullptr;
 }
@@ -1195,6 +1525,276 @@ void ForceReloadSettings() {
     FlushScheduledSaveSettings();
     ReloadSettings(true);
 }
+
+static constexpr int kSettingsTransferMaxBytes = 16 * 1024 * 1024;
+
+static int SettingsFieldIndex(const StructInfo* info, Str name) {
+    const char* fieldName = info->fieldNames;
+    for (int i = 0; i < info->fieldCount; i++, fieldName += len(fieldName) + 1) {
+        if (info->fields[i].type != SettingType::Comment && str::EqI(Str(fieldName), name)) return i;
+    }
+    return -1;
+}
+
+static bool SettingsNodeValid(const StructInfo* info, SquareTreeNode* node, int depth) {
+    if (!node || depth > 32) return false;
+    for (auto* item : node->data) {
+        int idx = SettingsFieldIndex(info, item->key);
+        if (idx < 0) continue; // Preserve settings from newer versions.
+        const FieldInfo& field = info->fields[idx];
+        bool isChild = field.type == SettingType::Struct || field.type == SettingType::StructPtr ||
+                       field.type == SettingType::Array;
+        if (isChild != (item->child != nullptr)) return false;
+        if (isChild) {
+            auto* childInfo = (const StructInfo*)field.value;
+            if (field.type != SettingType::Array) {
+                if (!SettingsNodeValid(childInfo, item->child, depth + 1)) return false;
+            } else {
+                for (auto* entry : item->child->data) {
+                    if (!SettingsNodeValid(childInfo, entry->child, depth + 1)) return false;
+                }
+            }
+        } else if (field.type == SettingType::Bool) {
+            if (!str::EqI(item->str, StrL("true")) && !str::EqI(item->str, StrL("false"))) return false;
+        } else if (field.type == SettingType::Int) {
+            int value = 0;
+            if (!str::Parse(item->str, "%d%$", &value).s) return false;
+        } else if (field.type == SettingType::Float) {
+            float value = 0;
+            if (!str::Parse(item->str, "%f%$", &value).s || !isfinite(value)) return false;
+        }
+    }
+    return true;
+}
+
+static bool SettingsDataValid(Str data) {
+    if (!len(data) || len(data) > kSettingsTransferMaxBytes || memchr(data.s, 0, len(data))) return false;
+    int depth = 0;
+    for (int start = 0; start < len(data);) {
+        int end = start;
+        while (end < len(data) && data.s[end] != '\n') end++;
+        Str line(data.s + start, end - start);
+        while (len(line) && str::IsWs(line.s[0])) {
+            line.s++;
+            line.len--;
+        }
+        while (len(line) && str::IsWs(line.s[len(line) - 1])) line.len--;
+        if (len(line) && line.s[0] != '#' && line.s[0] != ';' && !str::ContainsChar(line, '=')) {
+            for (int i = 0; i < len(line); i++) {
+                if (line.s[i] == '#' || line.s[i] == ';') {
+                    line.len = i;
+                    break;
+                }
+            }
+            while (len(line) && str::IsWs(line.s[len(line) - 1])) line.len--;
+            if (!len(line)) {
+                start = end + 1;
+                continue;
+            }
+            if (line.s[0] == ']') {
+                if (--depth < 0) return false;
+            } else if (line.s[len(line) - 1] == '[' && ++depth > 32) {
+                return false;
+            }
+        }
+        start = end + 1;
+    }
+    if (depth != 0) return false;
+    auto* root = ParseSquareTree(data);
+    defer {
+        delete root;
+    };
+    if (!SettingsNodeValid(&gSettingsInfo, root, 0)) return false;
+    for (auto* item : root->data) {
+        if (SettingsFieldIndex(&gSettingsInfo, item->key) >= 0) return true;
+    }
+    return false;
+}
+
+static bool TransferSettings(SettingsTransfer action, Str path, Str& backup, Str& error) {
+    if (!CanAccessDisk() || !HasPermission(Perm::SavePreferences)) {
+        error = Tr("Settings transfer is unavailable in restricted mode.");
+        return false;
+    }
+    if (AreLoadThreadsActive()) {
+        error = Tr("Wait for documents to finish loading, then try again.");
+        return false;
+    }
+    TempStr settingsPath = GetSettingsPathTemp();
+    if (path::IsSame(path, settingsPath)) {
+        error = Tr("Choose a separate file for your settings backup.");
+        return false;
+    }
+    if (action == SettingsTransfer::Export) {
+        if (!SaveSettings()) {
+            error = Tr("Could not save the current settings. Nothing was exported.");
+            return false;
+        }
+        Str data = SerializeSettings(gSettings, file::ReadFileWithArena(settingsPath, GetTempArena()));
+        defer {
+            str::Free(data);
+        };
+        if (len(data) && file::WriteFile(path, data)) return true;
+        error = Tr("Could not write the settings export. Choose a writable folder.");
+        return false;
+    }
+    if (gForTesting || gDontSaveSettings) {
+        error = Tr("Settings import is unavailable in a testing instance.");
+        return false;
+    }
+    i64 size = file::GetSize(path);
+    if (size <= 0 || size > kSettingsTransferMaxBytes) {
+        error = Tr("Choose a valid SumatraPDF settings file, smaller than 16 MB.");
+        return false;
+    }
+    Str data = file::ReadFile(path);
+    defer {
+        str::Free(data);
+    };
+    if (!SettingsDataValid(data)) {
+        error = Tr("This file is not a valid SumatraPDF settings export. Your settings are unchanged.");
+        return false;
+    }
+    CancelAppearancePreview();
+    if (!SaveSettings()) {
+        error = Tr("Could not save the current settings. Nothing was imported.");
+        return false;
+    }
+    SettingsBackupJob importBackup;
+    if (AutomaticSettingsBackup()) {
+        importBackup.data = file::ReadFile(settingsPath);
+        importBackup.source = str::Dup(settingsPath);
+        importBackup.directory = str::Dup(GetSettingsBackupDirTemp(gSettings->settingsBackupDirectory));
+        importBackup.kind = SettingsBackupKind::BeforeImport;
+        if (!len(importBackup.data) || !WriteSettingsBackup(&importBackup)) {
+            error = Tr("Could not create a backup. Your settings are unchanged.");
+            return false;
+        }
+    }
+    TempStr temporary = fmt("%s.import-%u-%llu.tmp", settingsPath, GetCurrentProcessId(), GetTickCount64());
+    defer {
+        file::Delete(temporary);
+    };
+    if (!file::WriteFile(temporary, data) || !MoveFileExW(CWStrTemp(temporary), CWStrTemp(settingsPath),
+                                                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        error = Tr("Could not install the imported settings. Your previous settings remain available.");
+        return false;
+    }
+    ForceReloadSettings();
+    backup = str::DupTemp(importBackup.result);
+    return true;
+}
+
+bool ShowSettingsTransfer(MainWindow* win, SettingsTransfer action, HWND owner) {
+    if (!IsMainWindowValidAndNotClosing(win)) return false;
+    if (!owner) owner = win->hwndFrame;
+    bool exporting = action == SettingsTransfer::Export;
+    WCHAR pathBuffer[32768]{};
+    if (exporting) wcscpy_s(pathBuffer, L"SumatraPDFEnhanced-settings-export.txt");
+    Str title = exporting ? Tr("Export Settings") : Tr("Import Settings");
+    OPENFILENAMEW args{};
+    args.lStructSize = sizeof(args);
+    args.hwndOwner = owner;
+    args.lpstrFile = pathBuffer;
+    args.nMaxFile = dimof(pathBuffer);
+    args.lpstrTitle = CWStrTemp(title);
+    args.lpstrFilter = L"SumatraPDF settings\0*.txt;*.bak\0All files\0*.*\0";
+    args.lpstrDefExt = L"txt";
+    args.Flags =
+        OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST | (exporting ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
+    if (!(exporting ? GetSaveFileNameW(&args) : GetOpenFileNameW(&args))) return false;
+    if (!IsMainWindowValidAndNotClosing(win)) return false;
+    Str path = str::Dup(ToUtf8Temp(pathBuffer));
+    defer {
+        str::Free(path);
+    };
+    if (!exporting) {
+        TempStr prompt =
+            fmt("%s\n\n%s\n\n%s",
+                Tr("Replace your preferences, file history, favorites, and saved sessions with this file?"),
+                AutomaticSettingsBackup()
+                    ? Tr("A backup of your current settings will be created automatically in your backup folder.")
+                    : Tr("Manual backup is selected. Use Back Up Settings Now first if you want a copy of your current "
+                         "settings."),
+                Tr("Document files, annotations, downloaded fonts, and learning data are stored separately."));
+        int result =
+            MessageBoxW(owner, CWStrTemp(prompt), CWStrTemp(title), MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
+        if (result != IDYES || !IsMainWindowValidAndNotClosing(win)) return false;
+    }
+    Str backup, error;
+    if (!TransferSettings(action, path, backup, error)) {
+        MessageBoxW(owner, CWStrTemp(error), CWStrTemp(title), MB_OK | MB_ICONERROR);
+        return false;
+    }
+    if (exporting) {
+        ShowTemporaryNotification(win->hwndCanvas, Tr("Settings exported."));
+    } else {
+        TempStr msg =
+            len(backup)
+                ? fmt("%s\n\n%s\n%s", Tr("Settings imported."), Tr("Previous settings backup:"), backup)
+                : str::DupTemp(
+                      Tr("Settings imported. No automatic backup was created because manual backup was selected."));
+        MessageBoxW(owner, CWStrTemp(msg), CWStrTemp(Tr("Import Settings")), MB_OK | MB_ICONINFORMATION);
+    }
+    return true;
+}
+
+TempStr SettingsTransferResultTemp(Str action, Str path, int* exitCodeOut) {
+    if (str::EqI(action, StrL("backup"))) {
+        Str error;
+        bool ok = RequestSettingsBackup(path, nullptr, error);
+        if (exitCodeOut) *exitCodeOut = ok ? 0 : 1;
+        return ok ? str::DupTemp(StrL("QUEUED")) : fmt("ERROR %s", error);
+    }
+    if (str::EqI(action, StrL("flush-backups"))) {
+        bool ok = FlushSettingsBackups();
+        if (exitCodeOut) *exitCodeOut = ok ? 0 : 1;
+        return str::DupTemp(ok ? StrL("OK") : StrL("ERROR backups still pending"));
+    }
+    if (str::EqI(action, StrL("set"))) {
+        int split = 0;
+        while (split < len(path) && path.s[split] != '=') split++;
+        bool ok = split < len(path) &&
+                  SetSettingsValueFromStr(Str(path.s, split), Str(path.s + split + 1, len(path) - split - 1));
+        if (ok) {
+            FlushScheduledSaveSettings();
+        }
+        if (exitCodeOut) *exitCodeOut = ok ? 0 : 1;
+        return str::DupTemp(ok ? StrL("OK") : StrL("ERROR invalid setting"));
+    }
+    Str backup, error;
+    bool validAction = str::EqI(action, StrL("export")) || str::EqI(action, StrL("import"));
+    bool ok = validAction &&
+              TransferSettings(str::EqI(action, StrL("export")) ? SettingsTransfer::Export : SettingsTransfer::Import,
+                               path, backup, error);
+    if (exitCodeOut) *exitCodeOut = ok ? 0 : 1;
+    return ok ? fmt("OK backup=%s", backup) : fmt("ERROR %s", error);
+}
+
+#if IS_DEBUG
+void SettingsTransfer_UnitTests() {
+    utassert(!SettingsDataValid({}));
+    utassert(!SettingsDataValid(StrL("Not a settings file")));
+    utassert(!SettingsDataValid(StrL("UiLanguage = en\0binary")));
+    utassert(!SettingsDataValid(StrL("UIFontSize = abc\n")));
+    utassert(!SettingsDataValid(StrL("ShowToolbar = perhaps\n")));
+    utassert(!SettingsDataValid(StrL("Annotations = broken\n")));
+    utassert(!SettingsDataValid(StrL("UiLanguage = en\nAnnotations [\n")));
+    utassert(!SettingsDataValid(StrL("UiLanguage = en\n]\n")));
+    utassert(SettingsDataValid(StrL("UiLanguage = en\n")));
+    Settings* prefs = NewSettings({});
+    prefs->homePageFixedHeader = true;
+    prefs->homePageFullPageThumbnails = true;
+    prefs->liveAppearancePreview = true;
+    Str serialized = SerializeSettings(prefs, {});
+    utassert(SettingsDataValid(serialized));
+    Settings* restored = NewSettings(serialized);
+    utassert(restored->homePageFixedHeader && restored->homePageFullPageThumbnails && restored->liveAppearancePreview);
+    str::Free(serialized);
+    DeleteSettings(restored);
+    DeleteSettings(prefs);
+}
+#endif
 
 void ReloadDeferredSettings() {
     if (!gReloadDeferred || AreLoadThreadsActive()) {
@@ -1966,6 +2566,8 @@ static const char* gEnumPrintScale[] = {"shrink", "fit", "none", nullptr};
 static const char* gEnumCollate[] = {"default", "collate", "nocollate", nullptr};
 static const char* gEnumFreeTextAlignment[] = {"left", "center", "right", nullptr};
 static const char* gEnumHelpTheme[] = {"app", "light", "dark", nullptr};
+static const char* gEnumSettingsBackup[] = {"automatic", "manual", nullptr};
+static const char* gEnumAnnotColumns[] = {"1", "2", "3", nullptr};
 
 struct EnumSettingDef {
     const char* name; // full path or leaf name (last dotted segment)
@@ -1988,6 +2590,8 @@ static const EnumSettingDef gEnumSettings[] = {
     {"Collate", gEnumCollate},
     {"FreeTextAlignment", gEnumFreeTextAlignment},
     {"HelpTheme", gEnumHelpTheme},
+    {"SettingsBackupMode", gEnumSettingsBackup},
+    {"AnnotationToolbarColumns", gEnumAnnotColumns},
 };
 // clang-format on
 
@@ -2062,6 +2666,22 @@ bool SetSettingsValueFromStr(Str path, Str value) {
     u8* p = nullptr;
     if (!gSettings || len(path) == 0) {
         return false;
+    }
+    if (str::EqI(path, StrL("AnnotationToolbarColumns"))) {
+        int columns = 0;
+        if (!str::Parse(value, "%d%$", &columns).s || columns < 1 || columns > 3) return false;
+    }
+    if (str::EqI(path, StrL("AnnotationToolbarStyle"))) {
+        int style = 0;
+        if (!str::Parse(value, "%d%$", &style).s || style < 1 || style > 2) return false;
+    }
+    if (str::EqI(path, StrL("AnnotationModeIconStyle"))) {
+        int style = 0;
+        if (!str::Parse(value, "%d%$", &style).s || style < 1 || style > 2) return false;
+    }
+    if (str::EqI(path, StrL("AnnotationPageNumberStyle")) || str::EqI(path, StrL("AnnotationThreeColumnPageStyle"))) {
+        int style = 0;
+        if (!str::Parse(value, "%d%$", &style).s || style < 1 || style > 3) return false;
     }
     if (!FindSettingInStruct(&gSettingsInfo, (u8*)gSettings, {}, path, &type, &p)) {
         return false;
@@ -2164,6 +2784,15 @@ void DeleteFavorite(Favorite* fav) {
 Settings* NewSettings(Str data) {
     Settings* settings = (Settings*)DeserializeStruct(&gSettingsInfo, data);
     if (!settings) return nullptr;
+    settings->annotationToolbarColumns = limitValue(settings->annotationToolbarColumns, 1, 3);
+    settings->annotationToolbarStyle = limitValue(settings->annotationToolbarStyle, 1, 2);
+    settings->annotationModeIconStyle = limitValue(settings->annotationModeIconStyle, 1, 2);
+    settings->annotationPageNumberStyle = limitValue(settings->annotationPageNumberStyle, 1, 3);
+    settings->annotationThreeColumnPageStyle = limitValue(settings->annotationThreeColumnPageStyle, 1, 3);
+    if (!str::EqI(settings->settingsBackupMode, StrL("automatic")) &&
+        !str::EqI(settings->settingsBackupMode, StrL("manual"))) {
+        str::ReplaceWithCopy(&settings->settingsBackupMode, StrL("automatic"));
+    }
     if (settings && !settings->scrollbarWidthExpanded) {
         // Expand a saved width once; fresh profiles already have the new default.
         SquareTreeNode* root = ParseSquareTree(data);
@@ -2177,6 +2806,7 @@ Settings* NewSettings(Str data) {
         settings->pinIconStyle != (int)PinIconStyle::Round && settings->pinIconStyle != (int)PinIconStyle::Soft) {
         settings->pinIconStyle = (int)PinIconStyle::Soft;
     }
+    if (settings->fileTypeIconStyle < 1 || settings->fileTypeIconStyle > 3) settings->fileTypeIconStyle = 3;
     switch ((ColorPickerIconStyle)settings->colorPickerIconStyle) {
         case ColorPickerIconStyle::Classic:
         case ColorPickerIconStyle::Soft:
@@ -2360,11 +2990,12 @@ static bool FileStateWorthKeepingWithoutHistory(FileState* fs) {
 // FileState identity kept when RememberStatePerDocument is false. Display
 // fields (page, zoom, scroll, window) are omitted (#5907).
 static SeqStrings kFileStateKeepNoPerDoc =
-    "Favorites\0EBookUI\0FilePath\0DecryptionKey\0OpenCount\0IsPinned\0IsMissing\0UseDefaultState\0";
+    "Favorites\0EBookUI\0FilePath\0DecryptionKey\0OpenCount\0IsPinned\0Completed\0IsMissing\0UseDefaultState\0";
 
 // prevData is used to preserve fields that exists in prevField but not in Settings
 // caller has to free()
 Str SerializeSettings(Settings* prefs, Str prevData) {
+    AppearanceSaveGuard appearance(prefs == gSettings);
     Vec<FileState*>* allFileStates = prefs->fileStates;
     Vec<FileState*> withFavorites;
 

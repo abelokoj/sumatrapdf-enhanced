@@ -61,6 +61,7 @@ Color DarkModeDialogBgColor() {
 }
 
 static void RoundPopupMenu(HWND hwnd);
+static bool IsNativeCornerPopup(HWND hwnd);
 
 void WindowApplyScaledCaption(HWND hwnd) {
     ApplyScaledWindowCaption(hwnd);
@@ -74,9 +75,13 @@ bool WindowApplyRoundedCorners(HWND hwnd) {
     if (style & WS_CHILD) return false;
     if ((style & WS_CAPTION) != WS_CAPTION) {
         LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        if (!(style & WS_POPUP) || !WindowBaseFromHwnd(hwnd) || (exStyle & (WS_EX_LAYERED | WS_EX_TRANSPARENT)))
+        if (!(style & WS_POPUP) || (exStyle & (WS_EX_LAYERED | WS_EX_TRANSPARENT)))
+            return false;
+        if (!WindowBaseFromHwnd(hwnd) && !IsNativeCornerPopup(hwnd))
             return false;
         RoundPopupMenu(hwnd);
+        DWM_WINDOW_CORNER_PREFERENCE preference = DWMWCP_ROUNDSMALL;
+        DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &preference, sizeof(preference));
         return true;
     }
     // DWM handles maximized and snapped windows; older Windows ignores this attribute.
@@ -164,6 +169,8 @@ static void DrawMenuBorder(HDC dc, Size size, int diameter, Rect client, Color b
     gfx.FillRoundedRect({0, 0, size.dx, size.dy}, diameter, kColorTransparent, ThemeEdgeColor());
 }
 
+constexpr UINT kMsgUahNcPaintMenuPopup = 0x0095;
+
 static void PaintMenuBorder(HWND hwnd) {
     if (!gSettings || !IsWindowVisible(hwnd)) return;
     Size size = HwndWindowRect(hwnd).Size();
@@ -174,6 +181,9 @@ static void PaintMenuBorder(HWND hwnd) {
     MapWindowPoints(hwnd, nullptr, (POINT*)&client, 2);
     Rect bounds = HwndWindowRect(hwnd);
     OffsetRect(&client, -bounds.x, -bounds.y);
+    if (client.left <= 0 && client.top <= 0 && client.right >= size.dx && client.bottom >= size.dy) {
+        InflateRect(&client, -1, -1);
+    }
     Color background = ThemeMainWindowBackgroundColor();
     if (WindowBase* window = WindowBaseFromHwnd(hwnd))
         background = window->GetColor(kColWinBg);
@@ -184,6 +194,8 @@ static void PaintMenuBorder(HWND hwnd) {
             background = ThemeWindowControlBackgroundColor();
         else if (_wcsicmp(name, TOOLTIPS_CLASSW) == 0)
             background = (Color)SendMessageW(hwnd, TTM_GETTIPBKCOLOR, 0, 0);
+        else if (wcscmp(name, L"#32768") == 0)
+            background = DarkModeIsActive() ? ThemeWindowControlBackgroundColor() : GetSysColor(COLOR_MENU);
     }
     DrawMenuBorder(dc, size, 2 * GetAppCornerRadius(DpiGetForHwnd(hwnd), 6), ToRect(client), background);
     ReleaseDC(hwnd, dc);
@@ -199,11 +211,12 @@ static LRESULT CALLBACK MenuRoundSubclass(HWND hwnd, UINT msg, WPARAM wp, LPARAM
     LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
     static thread_local bool applying = false;
     if (!applying && (msg == WM_WINDOWPOSCHANGED || msg == WM_NCPAINT || msg == WM_PAINT || msg == WM_SHOWWINDOW ||
-                      msg == WM_DPICHANGED || msg == WM_SETFONT || msg == WM_THEMECHANGED)) {
+                      msg == WM_DPICHANGED || msg == WM_SETFONT || msg == WM_THEMECHANGED ||
+                      msg == kMsgUahNcPaintMenuPopup)) {
         applying = true;
         ApplyMenuRegion(hwnd, cache);
         if ((GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CAPTION) != WS_CAPTION &&
-            (msg == WM_NCPAINT || msg == WM_PAINT || msg == WM_THEMECHANGED))
+            (msg == WM_NCPAINT || msg == WM_PAINT || msg == WM_THEMECHANGED || msg == kMsgUahNcPaintMenuPopup))
             PaintMenuBorder(hwnd);
         applying = false;
     }
@@ -222,13 +235,17 @@ static void RoundPopupMenu(HWND hwnd) {
         data = (DWORD_PTR)cache;
     }
     ApplyMenuRegion(hwnd, (MenuRegionCache*)data);
+    DWM_WINDOW_CORNER_PREFERENCE preference =
+        ((GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CAPTION) == WS_CAPTION) ? DWMWCP_ROUND : DWMWCP_ROUNDSMALL;
+    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &preference, sizeof(preference));
 }
 
 static LRESULT CALLBACK MenuCornersHook(int code, WPARAM wp, LPARAM lp) {
     if (code >= 0) {
         auto* message = (CWPRETSTRUCT*)lp;
         if (message->message == WM_NCCREATE || message->message == WM_WINDOWPOSCHANGED ||
-            message->message == WM_SHOWWINDOW) {
+            message->message == WM_SHOWWINDOW || message->message == WM_NCPAINT ||
+            message->message == kMsgUahNcPaintMenuPopup) {
             if (IsNativeCornerPopup(message->hwnd)) RoundPopupMenu(message->hwnd);
         }
     }
@@ -252,6 +269,7 @@ void DarkModeInit() {
     gUiScrollbarTrackPos = AppScrollbarTrackPos;
     gUiScrollbarInset = AppScrollbarInset;
     gUiScrollbarWidth = GetAppScrollbarWidth;
+    gUiScrollbarCssTemp = AppScrollbarStyleTemp;
     // WindowBase::UpdateTheme() re-applies dark mode through this hook, so
     // gui/ never names darkmodelib. Installed even when the lib isn't used:
     // DarkModeApplyToWindow() no-ops then
@@ -261,6 +279,7 @@ void DarkModeInit() {
     }
     DarkMode::initDarkMode();
     DarkMode::setColorizeTitleBarConfig(true);
+    DarkMode::setRoundCornerConfig(DWMWCP_ROUND);
 }
 
 // push the current palette (which may be the system's, in high contrast mode)
@@ -725,6 +744,14 @@ void WindowCorners_UnitTests() {
             PaintAppCaption(dialog.hwnd, &state, frameDc);
             GdiFlush();
             Rect hoveredClose = AppCaptionButton(dialog.hwnd, HTCLOSE);
+            utassert(hoveredClose.y == 0 && hoveredClose.Right() == window.dx);
+            utassert(GetPixel(frameDc, hoveredClose.x + UiScalePxForDpi(dialog.GetDpi(), 2),
+                              hoveredClose.y + UiScalePxForDpi(dialog.GetDpi(), 2)) ==
+                     (gColsCloseBtn[kColCloseCircleHover] & 0x00ffffff));
+            utassert(GetPixel(frameDc, hoveredClose.x + UiScalePxForDpi(dialog.GetDpi(), 2),
+                              hoveredClose.Bottom() - UiScalePxForDpi(dialog.GetDpi(), 2)) ==
+                     (gColsCloseBtn[kColCloseCircleHover] & 0x00ffffff));
+            utassert(GetPixel(frameDc, window.dx - 1, 0) != (gColsCloseBtn[kColCloseCircleHover] & 0x00ffffff));
             utassert(GetPixel(frameDc, hoveredClose.x + hoveredClose.dx / 2, hoveredClose.y + hoveredClose.dy / 4) ==
                      (gColsCloseBtn[kColCloseCircleHover] & 0x00ffffff));
             SelectObject(frameDc, previousBitmap);
@@ -734,7 +761,9 @@ void WindowCorners_UnitTests() {
             utassert(SendMessageW(dialog.hwnd, WM_NCHITTEST, 0, MAKELPARAM(window.x + title.x, window.y + title.y)) ==
                      HTCAPTION);
             Rect close = AppCaptionButton(dialog.hwnd, HTCLOSE);
-            utassert(close.dy == caption.dy);
+            utassert(close.dy == caption.Bottom());
+            Rect closeContent = AppCaptionButtonContent(dialog.hwnd, HTCLOSE);
+            utassert(closeContent.y == caption.y && closeContent.dy == caption.dy);
             utassert(SendMessageW(dialog.hwnd, WM_NCHITTEST, 0,
                                   MAKELPARAM(window.x + close.x + close.dx / 2, window.y + close.y + close.dy / 2)) ==
                      HTCLOSE);
@@ -784,13 +813,24 @@ void WindowCorners_UnitTests() {
                 if (!dialog.hwnd) continue;
                 ApplyScaledWindowCaption(dialog.hwnd);
                 Rect caption = AppCaptionRect(dialog.hwnd);
+                Rect frame = HwndWindowRect(dialog.hwnd);
+                Rect close = AppCaptionButton(dialog.hwnd, HTCLOSE);
                 Rect content = AppCaptionButtonContent(dialog.hwnd, HTCLOSE);
-                utassert(content.Right() == caption.Right());
-                utassert(content == AppCaptionButton(dialog.hwnd, HTCLOSE));
-                utassert(content.dx >= caption.dy);
-                utassert(content.Right() <= caption.Right());
+                utassert(content.Right() == frame.dx);
+                utassert(close.y == 0 && close.Bottom() == caption.Bottom());
+                utassert(content.y == caption.y && content.dy == caption.dy);
+                utassert(content.dx >= UiScalePxForDpi(dialog.GetDpi(), 16));
                 utassert(AppCaptionButton(dialog.hwnd, HTCLOSE)
                              .Contains({content.x + content.dx / 2, content.y + content.dy / 2}));
+                utassert(AppCaptionHitTest(dialog.hwnd, {close.x + 1, 1}) == HTCLOSE);
+                SendMessageW(dialog.hwnd, WM_NCMOUSEMOVE, HTCLOSE, 0);
+                SendMessageW(dialog.hwnd, WM_NCMOUSELEAVE, 0, 0);
+                LONG_PTR exStyle = GetWindowLongPtrW(dialog.hwnd, GWL_EXSTYLE);
+                SetWindowLongPtrW(dialog.hwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYOUTRTL);
+                Rect mirrored = AppCaptionButton(dialog.hwnd, HTCLOSE);
+                utassert(mirrored.x == 0 && mirrored.y == 0 && mirrored.dx == close.dx);
+                utassert(AppCaptionHitTest(dialog.hwnd, {1, 1}) == HTCLOSE);
+                SetWindowLongPtrW(dialog.hwnd, GWL_EXSTYLE, exStyle);
                 dialog.Destroy();
             }
         }

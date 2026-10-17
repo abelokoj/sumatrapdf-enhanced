@@ -293,7 +293,9 @@ struct MainWindow { // NOLINT(clang-analyzer-optin.performance.Padding)
     DropDown* findEdit = nullptr;
     // optional "10-25" page-range field of the active find UI (issue #5694)
     Edit* findPagesEdit = nullptr;
-    FindBarWnd* findBar = nullptr;       // compact toolbar overlay
+    FindBarWnd* findBar = nullptr; // compact toolbar overlay
+    Rect findBarPos;
+    int findBarPosDpi = 96;
     FindWindowWnd* findWindow = nullptr; // floating window variant (SearchUIFloating)
     // owned by the toolbar layout
     Edit* pageEdit = nullptr;
@@ -521,6 +523,8 @@ struct MainWindow { // NOLINT(clang-analyzer-optin.performance.Padding)
     HwndSlot* menuSlot = nullptr;
     HwndSlot* toolbarTopSlot = nullptr;
     HwndSlot* toolbarBottomSlot = nullptr;
+    HwndSlot* toolbarLeftSlot = nullptr;
+    HwndSlot* toolbarRightSlot = nullptr;
     // tabs-in-titlebar caption: VirtCtrl buttons + HwndSlots for tabs/menu
     VBox* captionLayout = nullptr;
     HBox* captionRow1 = nullptr;
@@ -577,6 +581,10 @@ struct MainWindow { // NOLINT(clang-analyzer-optin.performance.Padding)
     // a hide of the overlay toolbar is scheduled (after kDelayToolbarHide)
     bool toolbarOverlayHidePending = false;
     bool isFullScreen = false;
+    bool annotationMode = false;
+    bool annotationToolbarOverlayShown = false;
+    int annotationToolbarPosition = 0;
+    long annotationCaptionStyle = 0;
     // chrome-less always-on-top preview from Explorer Space (issue #2568)
     bool isQuickLook = false;
     PresentationMode presentation = PM_DISABLED;
@@ -602,6 +610,8 @@ struct MainWindow { // NOLINT(clang-analyzer-optin.performance.Padding)
             int presentation = 0;
             bool tabsInTitlebar = false;
             bool isFullScreen = false;
+            bool annotationMode = false;
+            int toolbarPosition = 0;
             bool tabsVisible = false;
             bool isToolbarVisible = false;
             bool isToolbarOverlay = false;

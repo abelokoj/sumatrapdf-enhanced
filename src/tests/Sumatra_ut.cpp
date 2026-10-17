@@ -22,6 +22,7 @@
 #include "DocProperties.h"
 #include "EngineBase.h"
 #include "AppSettings.h"
+#include "FileHistory.h"
 #include "Flags.h"
 #include "Commands.h"
 #include "SvgIcons.h"
@@ -60,6 +61,7 @@ void DisplayModelZoom_UnitTests();
 void DisplayModelScroll_UnitTests();
 void ToolbarReorder_UnitTests();
 void AppSettings_UnitTestsShapeDefaults();
+void Toolbar_UnitTestsShapes();
 bool ChangeColor_UnitTestsOpacity();
 bool AnnotEditToolbar_UnitTestsOpacity();
 extern void KeyboardHelpLayout_UnitTests();
@@ -86,12 +88,19 @@ void VirtCtrl_UnitTests();
 bool TableOfContents_UnitTestSnapshotNamedDest();
 bool MarkdownModel_UnitTestBrowserNavigationUrl();
 void MarkdownFonts_UnitTests();
+void FileTypeIconsTest();
+void AdvancedAppearancePreviewTest();
+void FileTypeIconRegistryTest();
+void AnnotationTransferTests();
 #ifdef _MSC_VER
 bool WebViewLoaderArgumentsTest();
 #endif
 bool MarkdownToc_UnitTestHtmlLinks();
 bool MarkdownToc_UnitTestHtmlHeadings();
 bool MarkdownToc_UnitTestMermaid();
+bool MarkdownEdit_UnitTests();
+bool EngineMupdf_UnitTestMarkdownLayout();
+bool MarkdownModel_UnitTestResourceCache();
 bool EbookDoc_UnitTestNormalizeURL();
 bool ExternalViewers_UnitTestPDFXChangePaths();
 bool Canvas_UnitTestScrollLineAmount();
@@ -117,22 +126,28 @@ bool AppSettings_UnitTestsUiScale();
 bool AppSettings_UnitTestsScrollbars();
 bool AppSettings_UnitTestsSession();
 bool AnnotPlacement_UnitTestInkProfiles();
+bool AnnotPlacement_UnitTestPenCursor();
 void ToolbarLayout_UnitTests();
 void DropDown_UnitTestsDeferred();
+void DropDown_UnitTestsPreviews();
+void AppSettings_UnitTestsAppearance();
 void FindBarLayout_UnitTests();
 void FindWindowLayout_UnitTests();
 void EditSizing_UnitTests();
 bool HomePage_UnitTestsTextSizing();
 bool HomePage_UnitTestsCompactHeader();
+bool HomePage_UnitTestsVersion();
 bool SettingsDialog_UnitTestsSizing();
 bool RoundedControl_UnitTestHidden();
 void WindowCorners_UnitTests();
 void MenuOwnerDraw_UnitTests();
 void TabsCtrl_UnitTests();
+void FileHistoryCompleted_UnitTests();
 void RefHoverPopup_UnitTests();
 void SelectionToolbar_UnitTests();
 bool OverlayScrollbar_UnitTestsNative();
 bool OverlayScrollbar_UnitTestsPerf();
+bool OverlayScrollbar_UnitTestsAppearance();
 void ReadingColors_UnitTests();
 bool CpdfBookmarks_UnitTests();
 bool AnnotEditToolbar_UnitTestsFontRefresh();
@@ -143,6 +158,8 @@ bool EngineMupdf_UnitTestEbookMarginCss();
 bool EngineMupdf_UnitTestMergeEBookUI();
 bool EngineMupdf_UnitTestPageLabels();
 bool Annotation_UnitTestInkRoundtrip();
+bool Annotation_UnitTestNoteAppearance();
+bool Annotation_TestStrokeTools();
 bool Annotation_UnitTestFontRoundtrip();
 bool Annotation_UnitTestShapeOpacity();
 bool Accelerators_UnitTestFolderNavIsSafe();
@@ -153,6 +170,15 @@ bool ShortcutParse_UnitTestShiftedPunct();
 bool AnnotSearch_UnitTests();
 void ReadAloudHighlight_UnitTests();
 bool RenderCache_UnitTestCookieUnlocked();
+
+static bool MarkdownLayoutTest() {
+    auto* savedHistory = FileHistoryStates();
+    Vec<FileState*> empty;
+    FileHistorySetStates(&empty);
+    bool ok = EngineMupdf_UnitTestMarkdownLayout();
+    FileHistorySetStates(savedHistory);
+    return ok;
+}
 
 static void ParseFileArgsTest() {
     FileArgs* fa = ParseFileArgs(StrL("C:\\foo.pdf?page=4"));
@@ -721,13 +747,86 @@ int RunAppUnitTests(bool forAi) {
     }
     printf("Running unit tests\n");
 #if IS_DEBUG
-    WCHAR markdownOnly[2]{};
-    if (GetEnvironmentVariableW(L"SUMATRA_MARKDOWN_FONTS_ONLY", markdownOnly, dimof(markdownOnly))) {
+    WCHAR enhancedVersionOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_ENHANCED_VERSION_ONLY", enhancedVersionOnly, dimof(enhancedVersionOnly))) {
+        utassert(HomePage_UnitTestsVersion());
+        EnhancedUpdate_UnitTests();
+        return utassert_print_results();
+    }
+    WCHAR enhancedUpdateOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_ENHANCED_UPDATE_ONLY", enhancedUpdateOnly, dimof(enhancedUpdateOnly))) {
+        EnhancedUpdate_UnitTests();
+        return utassert_print_results();
+    }
+    WCHAR appearanceOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_APPEARANCE_ONLY", appearanceOnly, dimof(appearanceOnly))) {
         Settings* savedSettings = gSettings;
         gSettings = NewSettings({});
         if (!ThemeGetCount()) CreateThemeCommands();
         SetCurrentThemeFromSettings();
+        DropDown_UnitTestsPreviews();
+        AppSettings_UnitTestsAppearance();
+        ThemePalettePreviewTest();
+        AdvancedAppearancePreviewTest();
+        utassert(MarkdownToc_UnitTestHtmlLinks());
+        utassert(SettingsDialog_UnitTestsSizing());
+        DeleteSettings(gSettings);
+        gSettings = savedSettings;
+        return utassert_print_results();
+    }
+    WCHAR fileIconsOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_FILE_ICONS_ONLY", fileIconsOnly, dimof(fileIconsOnly))) {
+        Settings* savedSettings = gSettings;
+        gSettings = NewSettings({});
+        if (!ThemeGetCount()) CreateThemeCommands();
+        SetCurrentThemeFromSettings();
+        FileTypeIconsTest();
+        FileTypeIconRegistryTest();
+        utassert(SettingsDialog_UnitTestsSizing());
+        DeleteSettings(gSettings);
+        gSettings = savedSettings;
+        return utassert_print_results();
+    }
+    WCHAR nextAnnotationsOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_NEXT_ANNOTATIONS_ONLY", nextAnnotationsOnly, dimof(nextAnnotationsOnly))) {
+        Settings* savedSettings = gSettings;
+        gSettings = NewSettings({});
+        if (!ThemeGetCount()) CreateThemeCommands();
+        SetCurrentThemeFromSettings();
+        utassert(Annotation_TestStrokeTools());
+        utassert(Annotation_UnitTestNoteAppearance());
+        DeleteSettings(gSettings);
+        gSettings = savedSettings;
+        if (gSettings) SetCurrentThemeFromSettings();
+        return utassert_print_results();
+    }
+    WCHAR markdownReadingOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_MARKDOWN_READING_ONLY", markdownReadingOnly, dimof(markdownReadingOnly))) {
+        Settings* savedSettings = gSettings;
+        gSettings = NewSettings({});
+        if (!ThemeGetCount()) CreateThemeCommands();
+        SetCurrentThemeFromSettings();
+        utassert(MarkdownLayoutTest());
+        utassert(MarkdownModel_UnitTestResourceCache());
+        utassert(MarkdownToc_UnitTestHtmlLinks());
+        utassert(MarkdownToc_UnitTestHtmlHeadings());
+        utassert(MarkdownToc_UnitTestMermaid());
+        DeleteSettings(gSettings);
+        gSettings = savedSettings;
+        if (gSettings) SetCurrentThemeFromSettings();
+        return utassert_print_results();
+    }
+    WCHAR markdownOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_MARKDOWN_FONTS_ONLY", markdownOnly, dimof(markdownOnly))) {
+        utassert(MarkdownEdit_UnitTests());
+        Settings* savedSettings = gSettings;
+        gSettings = NewSettings({});
+        if (!ThemeGetCount()) CreateThemeCommands();
+        SetCurrentThemeFromSettings();
+        utassert(MarkdownLayoutTest());
         MarkdownFonts_UnitTests();
+        utassert(MarkdownModel_UnitTestResourceCache());
+        AnnotationTransferTests();
 #ifdef _MSC_VER
         utassert(WebViewLoaderArgumentsTest());
 #endif
@@ -772,6 +871,7 @@ int RunAppUnitTests(bool forAi) {
     WCHAR shapeOnly[2]{};
     if (GetEnvironmentVariableW(L"SUMATRA_SHAPE_DEFAULTS_ONLY", shapeOnly, dimof(shapeOnly))) {
         AppSettings_UnitTestsShapeDefaults();
+        Toolbar_UnitTestsShapes();
         return utassert_print_results();
     }
     WCHAR toolbarDragOnly[2]{};
@@ -827,6 +927,8 @@ int RunAppUnitTests(bool forAi) {
         utassert(AppSettings_UnitTestsScrollbars());
         VirtCtrl_UnitTests();
         utassert(OverlayScrollbar_UnitTestsNative());
+        utassert(OverlayScrollbar_UnitTestsAppearance());
+        utassert(OverlayScrollbar_UnitTestsPerf());
         utassert(MarkdownToc_UnitTestHtmlLinks());
         DeleteSettings(gSettings);
         gSettings = savedSettings;
@@ -857,6 +959,16 @@ int RunAppUnitTests(bool forAi) {
         return utassert_print_results();
     }
     WCHAR homeOnly[2]{};
+    WCHAR transferOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_SETTINGS_TRANSFER_ONLY", transferOnly, dimof(transferOnly))) {
+        SettingsTransfer_UnitTests();
+        return utassert_print_results();
+    }
+    WCHAR completedOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_HOME_COMPLETED_ONLY", completedOnly, dimof(completedOnly))) {
+        FileHistoryCompleted_UnitTests();
+        return utassert_print_results();
+    }
     if (GetEnvironmentVariableW(L"SUMATRA_HOME_UI_ONLY", homeOnly, dimof(homeOnly))) {
         utassert(HomePage_UnitTestsTextSizing());
         utassert(HomePage_UnitTestsCompactHeader());
@@ -886,6 +998,12 @@ int RunAppUnitTests(bool forAi) {
         if (gSettings) SetCurrentThemeFromSettings();
         return utassert_print_results();
     }
+    WCHAR refHoverOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_REF_HOVER_ONLY", refHoverOnly, dimof(refHoverOnly))) {
+        RefHoverTest();
+        RefHoverPopup_UnitTests();
+        return utassert_print_results();
+    }
     WCHAR popupsOnly[2]{};
     if (GetEnvironmentVariableW(L"SUMATRA_TOOLBAR_POPUPS_ONLY", popupsOnly, dimof(popupsOnly))) {
         VirtCtrl_UnitTests();
@@ -907,6 +1025,7 @@ int RunAppUnitTests(bool forAi) {
         return utassert_print_results();
     }
     if (GetEnvironmentVariableW(L"SUMATRA_SETTINGS_TIMING_ONLY", settingsOnly, dimof(settingsOnly))) {
+        utassert(AnnotPlacement_UnitTestPenCursor());
         PlatformFont_UnitTestsMeasure();
         utassert(RoundedControl_UnitTestHidden());
         utassert(Canvas_UnitTestToolNavigation());
@@ -927,6 +1046,17 @@ int RunAppUnitTests(bool forAi) {
     JsonTest();
     RefHoverTest();
     MarkdownFonts_UnitTests();
+    utassert(MarkdownEdit_UnitTests());
+    {
+        Settings* savedSettings = gSettings;
+        gSettings = NewSettings({});
+        utassert(MarkdownLayoutTest());
+        DeleteSettings(gSettings);
+        gSettings = savedSettings;
+    }
+    AnnotationTransferTests();
+    FileTypeIconsTest();
+    FileTypeIconRegistryTest();
 #ifdef _MSC_VER
     utassert(WebViewLoaderArgumentsTest());
 #endif
@@ -994,12 +1124,18 @@ int RunAppUnitTests(bool forAi) {
     utassert(AppSettings_UnitTestsScrollbars());
     utassert(AppSettings_UnitTestsSession());
     utassert(AnnotPlacement_UnitTestInkProfiles());
+    utassert(AnnotPlacement_UnitTestPenCursor());
     ToolbarLayout_UnitTests();
     DropDown_UnitTestsDeferred();
+    DropDown_UnitTestsPreviews();
+    AppSettings_UnitTestsAppearance();
+    ThemePalettePreviewTest();
+    AdvancedAppearancePreviewTest();
     FindBarLayout_UnitTests();
     FindWindowLayout_UnitTests();
     EditSizing_UnitTests();
     utassert(HomePage_UnitTestsTextSizing());
+    utassert(HomePage_UnitTestsVersion());
     utassert(SettingsDialog_UnitTestsSizing());
     utassert(RoundedControl_UnitTestHidden());
     WindowCorners_UnitTests();
@@ -1011,6 +1147,8 @@ int RunAppUnitTests(bool forAi) {
     ReadingColors_UnitTests();
     utassert(HomePage_UnitTestsCompactHeader());
     utassert(CpdfBookmarks_UnitTests());
+    FileHistoryCompleted_UnitTests();
+    SettingsTransfer_UnitTests();
     utassert(AnnotEditToolbar_UnitTestsFontRefresh());
     utassert(RegistryProviders_UnitTests());
     utassert(EngineMupdf_UnitTestEbookLineSpacingCss());
@@ -1019,6 +1157,7 @@ int RunAppUnitTests(bool forAi) {
     utassert(EngineMupdf_UnitTestMergeEBookUI());
     utassert(EngineMupdf_UnitTestPageLabels());
     utassert(Annotation_UnitTestInkRoundtrip());
+    utassert(Annotation_UnitTestNoteAppearance());
     utassert(Annotation_UnitTestFontRoundtrip());
     utassert(Accelerators_UnitTestFolderNavIsSafe());
     utassert(Accelerators_UnitTestTreeTakesLetters());

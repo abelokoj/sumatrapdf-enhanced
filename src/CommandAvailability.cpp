@@ -28,6 +28,7 @@
 #include "ReadAloud.h"
 #include "Favorites.h"
 #include "UpdateCheck.h"
+#include "Canvas.h"
 #include "CommandAvailability.h"
 
 // clang-format off
@@ -49,6 +50,9 @@ static UINT_PTR gNoDocWhitelist[] = {
     CmdSetInverseSearch,
     CmdAdvancedSettings,
     CmdOpenSettingsFile,
+    CmdExportSettings,
+    CmdImportSettings,
+    CmdBackupSettings,
     CmdChangeLanguage,
     CmdChangeTheme,
     CmdThemeLight,
@@ -161,6 +165,9 @@ static UINT_PTR removeIfNoPrefsPerms[] = {
     CmdSetInverseSearch,
     CmdAdvancedSettings,
     CmdOpenSettingsFile,
+    CmdExportSettings,
+    CmdImportSettings,
+    CmdBackupSettings,
     CmdPinSelectedDocument,
     CmdForgetSelectedDocument,
     CmdFavoriteAdd,
@@ -200,6 +207,7 @@ static UINT_PTR removeIfNoCopyPerms[] = {
 };
 
 static UINT_PTR removeIfNoDiskAccessPerm[] = {
+    CmdEditMarkdown,
     CmdEditBookmarks,
     CmdNewWindow,
     CmdOpenFile,
@@ -214,6 +222,8 @@ static UINT_PTR removeIfNoDiskAccessPerm[] = {
     CmdShowInFolder,
     CmdSaveAs,
     CmdExportStudyNotes,
+    CmdExportAnnotationsTransfer,
+    CmdImportAnnotationsTransfer,
     CmdSaveSelectionAsImage,
     CmdRenameFile,
     CmdDeleteFile,
@@ -222,6 +232,9 @@ static UINT_PTR removeIfNoDiskAccessPerm[] = {
     CmdContributeTranslation,
     CmdAdvancedSettings,
     CmdOpenSettingsFile,
+    CmdExportSettings,
+    CmdImportSettings,
+    CmdBackupSettings,
     CmdFavoriteAdd,
     CmdFavoriteDel,
     CmdFavoriteToggle,
@@ -241,11 +254,14 @@ static UINT_PTR removeIfNoDiskAccessPerm[] = {
 };
 
 static UINT_PTR removeIfAnnotsNotSupported[] = {
+    CmdAnnotationShapes,
     CmdAnnotationLasso,
     CmdLassoFreehand,
     CmdLassoRectangle,
     CmdLassoDelete,
     CmdExportStudyNotes,
+    CmdExportAnnotationsTransfer,
+    CmdImportAnnotationsTransfer,
     CmdSaveAnnotations,
     CmdSaveAnnotationsNewFile,
     CmdDiscardChanges,
@@ -643,6 +659,9 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
         return CommandVisibility::Hide;
     }
 
+    // Editing remains deferred until its save/reopen acceptance is complete.
+    if (cmdId == CmdEditMarkdown) return CommandVisibility::Hide;
+
     if (cmdId == CmdShowGeneratedHTML && !ctx.isMarkdown) {
         return CommandVisibility::Hide;
     }
@@ -691,7 +710,9 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
     }
 
     if (!ctx.supportsAnnots) {
-        if ((cmdId >= (int)CmdCreateAnnotFirst) && (cmdId <= (int)CmdCreateAnnotLast)) {
+        if ((cmdId >= (int)CmdCreateAnnotFirst && cmdId <= (int)CmdCreateAnnotLast) || cmdId == CmdCreateAnnotArrow ||
+            cmdId == CmdCreateAnnotDashedLine || MathShapeForCommand(cmdId) >= 0 ||
+            MathShapeForCommand(origCmdId) >= 0) {
             return CommandVisibility::Hide;
         }
         if (CmdIdInList(cmdId, removeIfAnnotsNotSupported)) {
@@ -699,7 +720,8 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
         }
     }
 
-    if (!ctx.hasTextSelection && CmdIdInList(cmdId, createAnnotFromSelection)) {
+    bool blockHighlight = cmdId == CmdCreateAnnotHighlight && ctx.hasSelection;
+    if (!ctx.hasTextSelection && !blockHighlight && CmdIdInList(cmdId, createAnnotFromSelection)) {
         return MapForSurface(CommandVisibility::Disable, surface);
     }
 
@@ -839,6 +861,9 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
     }
 
     if (cmdId == CmdCopyAnnotation || cmdId == CmdCutAnnotation) {
+        if (ctx.win && ctx.win->annotationLasso.active && len(ctx.win->annotationLasso.selected) > 0)
+            return AnnotationLassoCanCopy(ctx.win) ? CommandVisibility::Show
+                                                   : MapForSurface(CommandVisibility::Disable, surface);
         // same targeting as CmdDeleteAnnotation: the annotation under the cursor
         // (right-click doesn't select), otherwise the selected one
         Annotation* annot = ctx.annotationUnderCursor;

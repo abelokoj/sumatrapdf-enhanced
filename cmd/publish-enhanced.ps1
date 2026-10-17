@@ -1,9 +1,11 @@
 param(
-    [Parameter(Mandatory)][ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')][string]$Version,
+    [Parameter(Mandatory)][string]$Version,
     [Parameter(Mandatory)][string]$PackageDirectory,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$SourceCommit
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'helper/enhanced-version.ps1')
+Assert-EnhancedVersion $Version
 $repoRoot = Split-Path $PSScriptRoot -Parent
 if ($env:GH_REPO -ne 'abelokoj/sumatrapdf-enhanced') { throw 'Publication requires the canonical Enhanced repository' }
 $upstream = Get-Content -LiteralPath (Join-Path $repoRoot 'enhanced-upstream.json') -Raw | ConvertFrom-Json
@@ -103,6 +105,11 @@ $notesRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTem
 $notesPath = Join-Path $notesRoot 'enhanced-public-release-notes.md'
 [IO.File]::WriteAllText($notesPath,$notes)
 $tag = "enhanced-$Version"
+$historyJson = & gh api --paginate --slurp "repos/$env:GH_REPO/releases?per_page=100"
+if ($LASTEXITCODE -ne 0) { throw 'Unable to verify complete release sequence' }
+$historyPages = $historyJson | ConvertFrom-Json
+$history = @($historyPages | ForEach-Object { $_ })
+Assert-EnhancedReleaseSequence $Version $history
 $existingJson = & gh release view $tag --json isDraft,targetCommitish 2>$null
 if ($LASTEXITCODE -eq 0) {
     $existing = $existingJson | ConvertFrom-Json

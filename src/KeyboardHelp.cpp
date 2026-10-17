@@ -24,6 +24,9 @@
 #if IS_DEBUG
 #include "base/tests/UtAssert.h"
 #include "Theme.h"
+#include "EngineBase.h"
+#include "SumatraPDF.h"
+#include "RenderCache.h"
 #endif
 
 #include "Commands.h"
@@ -183,6 +186,7 @@ struct KeyboardHelpWnd : WindowBase {
     ~KeyboardHelpWnd() override = default;
     bool Create(const KeyboardHelpArgs&);
     void OnDpiChanged(WindowBase::DpiChangedEvent* ev);
+    void OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent* ev);
 };
 
 static KeyboardHelpWnd* gKeyboardHelpWnd = nullptr;
@@ -273,6 +277,55 @@ static void OnHelpKeyDown(KeyEvent* ev) {
     }
 }
 
+struct KeyboardHelpTable : Table {
+    int keysDx = 0;
+
+    Size Layout(Constraints bc) override {
+        keysDx = 0;
+        int descriptionsDx = 0;
+        for (int row = 0; row < rows; row++) {
+            keysDx = std::max(keysDx, GetCell(row, 0)->Layout(ExpandInf()).dx);
+            descriptionsDx = std::max(descriptionsDx, GetCell(row, 1)->Layout(ExpandInf()).dx);
+        }
+        int width = bc.ConstrainWidth(keysDx + colGap + descriptionsDx);
+        keysDx = std::min(keysDx, std::max(1, (width - colGap) / 2));
+        int descriptionWidth = std::max(1, width - keysDx - colGap);
+        int height = 0;
+        for (int row = 0; row < rows; row++) {
+            auto* key = CellAt(row, 0);
+            auto* description = CellAt(row, 1);
+            key->childSize = key->child->Layout(ExpandHeight(keysDx));
+            description->childSize = description->child->Layout(ExpandHeight(descriptionWidth));
+            height += std::max(key->childSize.dy, description->childSize.dy);
+            if (row) height += rowGap;
+        }
+        return bc.Constrain({width, height});
+    }
+
+    int MinIntrinsicHeight(int width) override { return Layout(ExpandHeight(width)).dy; }
+
+    void SetBounds(Rect rect) override {
+        lastBounds = rect;
+        int y = rect.y;
+        for (int row = 0; row < rows; row++) {
+            auto* key = CellAt(row, 0);
+            auto* description = CellAt(row, 1);
+            int height = std::max(key->childSize.dy, description->childSize.dy);
+            key->child->SetBounds({rect.x + keysDx - key->childSize.dx, y, key->childSize.dx, height});
+            description->child->SetBounds(
+                {rect.x + keysDx + colGap, y, std::max(1, rect.dx - keysDx - colGap), height});
+            y += height + rowGap;
+        }
+    }
+};
+
+static VirtRichText* KeyboardHelpDescription(Str text, PlatformFont* font) {
+    auto* description = new VirtRichText();
+    description->font = font;
+    description->AddPlainText(text);
+    return description;
+}
+
 static ILayout* BuildKeyboardHelpLayout(KeyboardHelpDataSource* ds, ScrollBox** scrollOut) {
     PlatformFont* fontRow = GetAppFont();
     PlatformFont* fontHeader = GetBoldPlatformFont(fontRow);
@@ -288,6 +341,7 @@ static ILayout* BuildKeyboardHelpLayout(KeyboardHelpDataSource* ds, ScrollBox** 
     VBox* columns[2] = {new VBox(), new VBox()};
     for (VBox* column : columns) {
         column->gap = sectionGap;
+        column->alignCross = CrossAxisAlign::Stretch;
     }
 
     for (const KbSectionDef& definition : kSections) {
@@ -311,7 +365,7 @@ static ILayout* BuildKeyboardHelpLayout(KeyboardHelpDataSource* ds, ScrollBox** 
         section->gap = rowGap;
         section->AddChild(new VirtText(ds->Translate(Str(definition.title)), fontHeader));
 
-        auto* table = new Table();
+        auto* table = new KeyboardHelpTable();
         table->SetSize(nRows, 2);
         table->colGap = keysDescriptionGap;
         table->rowGap = rowGap;
@@ -322,7 +376,7 @@ static ILayout* BuildKeyboardHelpLayout(KeyboardHelpDataSource* ds, ScrollBox** 
             TableCell& keysCell = table->SetCell(i, 0, caps);
             keysCell.alignH = CrossAxisAlign::CrossEnd;
             keysCell.alignV = CrossAxisAlign::CrossCenter;
-            TableCell& descCell = table->SetCell(i, 1, new VirtText(descriptions.At(i), fontRow));
+            TableCell& descCell = table->SetCell(i, 1, KeyboardHelpDescription(descriptions.At(i), fontRow));
             descCell.alignV = CrossAxisAlign::CrossCenter;
         }
         section->AddChild(table);
@@ -368,7 +422,7 @@ static ILayout* BuildKeyboardHelpLayout(KeyboardHelpDataSource* ds, ScrollBox** 
             auto* section = new VBox();
             section->gap = rowGap;
             section->AddChild(new VirtText(ds->Translate(StrL("Custom")), fontHeader));
-            auto* table = new Table();
+            auto* table = new KeyboardHelpTable();
             table->SetSize(nRows, 2);
             table->colGap = keysDescriptionGap;
             table->rowGap = rowGap;
@@ -379,7 +433,7 @@ static ILayout* BuildKeyboardHelpLayout(KeyboardHelpDataSource* ds, ScrollBox** 
                 TableCell& keysCell = table->SetCell(i, 0, caps);
                 keysCell.alignH = CrossAxisAlign::CrossEnd;
                 keysCell.alignV = CrossAxisAlign::CrossCenter;
-                TableCell& descCell = table->SetCell(i, 1, new VirtText(descriptions.At(i), fontRow));
+                TableCell& descCell = table->SetCell(i, 1, KeyboardHelpDescription(descriptions.At(i), fontRow));
                 descCell.alignV = CrossAxisAlign::CrossCenter;
             }
             section->AddChild(table);
@@ -387,8 +441,9 @@ static ILayout* BuildKeyboardHelpLayout(KeyboardHelpDataSource* ds, ScrollBox** 
         }
     }
 
-    auto* content = new HBox();
-    content->gap = columnGap;
+    auto* content = new Wrap();
+    content->colGap = columnGap;
+    content->rowGap = sectionGap;
     content->AddChild(columns[0]);
     content->AddChild(columns[1]);
     auto* scroll = new ScrollBox(content);
@@ -420,7 +475,7 @@ bool KeyboardHelpWnd::Create(const KeyboardHelpArgs& helpArgs) {
     }
     Size size = layout->Layout(ExpandInf());
     Rect work = PlatformWindowWorkArea(parentFrame);
-    DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+    DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME;
     int captionHeight =
         std::max(DpiGetSystemMetrics(SM_CYCAPTION), PlatformFontLineHeight(GetAppFont()) + UiScalePx(12));
     if (!work.IsEmpty() && size.dy + captionHeight > work.dy) style |= WS_VSCROLL;
@@ -430,6 +485,8 @@ bool KeyboardHelpWnd::Create(const KeyboardHelpArgs& helpArgs) {
     args.style = style;
     args.exStyle = WS_EX_TOOLWINDOW;
     args.visible = false;
+    onGetMinMaxInfo =
+        MkMethod1<KeyboardHelpWnd, WindowBase::GetMinMaxInfoEvent*, &KeyboardHelpWnd::OnGetMinMaxInfo>(this);
     onDpiChanged = MkMethod1<KeyboardHelpWnd, WindowBase::DpiChangedEvent*, &KeyboardHelpWnd::OnDpiChanged>(this);
     CreateCustom(args);
     if (!hwnd) {
@@ -464,6 +521,18 @@ void KeyboardHelpWnd::OnDpiChanged(WindowBase::DpiChangedEvent* ev) {
     ev->didHandle = true;
 }
 
+void KeyboardHelpWnd::OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent* ev) {
+    if (!hwnd) return;
+    DpiScope scope(hwnd);
+    Rect work = PlatformWindowWorkArea(hwnd);
+    Rect frame = HwndWindowRect(hwnd), client = HwndClientRect(hwnd);
+    int line = PlatformFontLineHeight(GetAppFont());
+    int width = std::max(DpiScale(320), 12 * line);
+    int height = std::max(DpiScale(200), 8 * line);
+    ev->mmi->ptMinTrackSize = {std::min(width + frame.dx - client.dx, work.dx),
+                               std::min(height + frame.dy - client.dy, work.dy)};
+}
+
 void RefreshKeyboardHelpFont() {
     KeyboardHelpWnd* w = gKeyboardHelpWnd;
     if (!w || !w->hwnd || !w->dataSource) return;
@@ -480,9 +549,8 @@ void RefreshKeyboardHelpFont() {
     WindowApplyScaledCaption(w->hwnd);
     Rect rect = HwndWindowRect(w->hwnd);
     Rect work = PlatformWindowWorkArea(w->hwnd);
-    Size ideal = layout->Layout(ExpandInf());
-    int chromeDx = rect.dx - HwndClientRect(w->hwnd).dx;
-    int wantDx = std::max(rect.dx, ideal.dx + chromeDx);
+    int minimum = std::max(DpiScale(320), 12 * PlatformFontLineHeight(GetAppFont()));
+    int wantDx = std::max(rect.dx, minimum + rect.dx - HwndClientRect(w->hwnd).dx);
     if (!work.IsEmpty()) wantDx = std::min(wantDx, work.dx);
     SetWindowPos(w->hwnd, nullptr, rect.x, rect.y, wantDx, rect.dy, SWP_NOZORDER | SWP_NOACTIVATE);
     w->DoLayout();
@@ -491,7 +559,40 @@ void RefreshKeyboardHelpFont() {
 }
 
 #if IS_DEBUG
+static int CheckShortcutRows(ILayout* layout, Rect viewport) {
+    int checked = 0;
+    if (str::Eq(Str(layout->kind), StrL("table"))) {
+        auto* table = (KeyboardHelpTable*)layout;
+        for (int row = 0; row < table->rows; row++) {
+            for (int col = 0; col < 2; col++) {
+                auto* label = (VirtRichText*)table->GetCell(row, col);
+                Rect bounds = label->lastBounds;
+                utassert(bounds.dx > 0 && bounds.dy > 0);
+                utassert(bounds.x >= viewport.x && bounds.Right() <= viewport.Right());
+                for (TipWord* word = label->words.next; word; word = word->next) {
+                    utassert(word->x >= 0 && (word->x == 0 || word->x + word->dx <= bounds.dx));
+                    utassert(word->y >= 0 && word->y + word->dy <= bounds.dy);
+                }
+            }
+            checked++;
+        }
+    }
+    for (int i = 0; i < layout->LayoutChildCount(); i++) {
+        ILayout* child = layout->LayoutChildAt(i);
+        if (child) checked += CheckShortcutRows(child, viewport);
+    }
+    return checked;
+}
+
 void KeyboardHelpLayout_UnitTests() {
+    RenderCache* savedCache = gRenderCache;
+    if (!savedCache) gRenderCache = new RenderCache();
+    defer {
+        if (!savedCache) {
+            delete gRenderCache;
+            gRenderCache = nullptr;
+        }
+    };
     Settings* saved = gSettings;
     gSettings = NewSettings({});
     defer {
@@ -507,7 +608,7 @@ void KeyboardHelpLayout_UnitTests() {
         RefreshUiFonts();
         WindowBase window;
         window.CreateCustom({.title = StrL("Keyboard Shortcuts"),
-                             .style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VSCROLL,
+                             .style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_VSCROLL,
                              .pos = {-10000, -10000, 600, 400},
                              .visible = false});
         utassert(window.hwnd != nullptr);
@@ -530,6 +631,15 @@ void KeyboardHelpLayout_UnitTests() {
         Rect before = scroll->lastBounds;
         for (int i = 0; i < 20; i++) scroll->ScrollTo((i & 1) ? 0 : scroll->MaxScrollY());
         utassert(scroll->lastBounds == before);
+        for (int width : {400, 800, 1200}) {
+            ResizeHwndToClientArea(window.hwnd, UiScalePx(width), UiScalePx(300), false);
+            window.DoLayout();
+            scroll->ScrollTo(0);
+            int count = CheckShortcutRows(window.layout, scroll->lastBounds);
+            utassert(count > 10);
+            scroll->ScrollTo(scroll->MaxScrollY());
+            utassert(CheckShortcutRows(window.layout, scroll->lastBounds) == count);
+        }
         window.Destroy();
     }
 }

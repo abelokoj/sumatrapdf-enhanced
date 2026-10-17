@@ -86,12 +86,37 @@ static Gdiplus::Color GdipCol(Color c) {
     return GdiRgbFromColor(c);
 }
 
-// the text stays readable on a tab that carries a color of its own
-static Color TabTextColorForBackground(Color text, Color tabBg) {
-    if (abs((int)GetLightness(text) - (int)GetLightness(tabBg)) >= 80) {
-        return text;
+static Color MixTabColor(Color base, Color accent, int percent) {
+    auto mix = [percent](int a, int b) { return (u8)((a * (100 - percent) + b * percent + 50) / 100); };
+    return MkRgb(mix(GetRed(base), GetRed(accent)), mix(GetGreen(base), GetGreen(accent)),
+                 mix(GetBlue(base), GetBlue(accent)));
+}
+
+static double TabLuminance(Color color) {
+    auto linear = [](u8 value) {
+        double x = value / 255.;
+        return x <= .04045 ? x / 12.92 : pow((x + .055) / 1.055, 2.4);
+    };
+    return .2126 * linear(GetRed(color)) + .7152 * linear(GetGreen(color)) + .0722 * linear(GetBlue(color));
+}
+
+static double TabContrast(Color a, Color b) {
+    double x = TabLuminance(a), y = TabLuminance(b);
+    return (std::max(x, y) + .05) / (std::min(x, y) + .05);
+}
+
+static Color TabReadableColor(Color ink, Color background, double minimum = 4.7) {
+    if (TabContrast(ink, background) >= minimum) return ink;
+    Color goal = TabContrast(kColBlack, background) > TabContrast(kColWhite, background) ? kColBlack : kColWhite;
+    for (int percent = 5; percent <= 100; percent += 5) {
+        Color color = MixTabColor(ink, goal, percent);
+        if (TabContrast(color, background) >= minimum) return color;
     }
-    return IsLightColor(tabBg) ? kColBlack : kColWhite;
+    return goal;
+}
+
+static Color TabTextColorForBackground(Color text, Color tabBg) {
+    return TabReadableColor(text, tabBg);
 }
 
 //--- TabCtrl: one tab
@@ -114,6 +139,8 @@ struct TabCtrl : VirtCtrl {
     bool IsUnderMouse();
     bool CloseVisible();
     Color BgColor();
+    Color TabAccent();
+    int ActiveStyle();
 
     Size GetIdealSize() override;
     void SetBounds(Rect) override;
@@ -157,20 +184,24 @@ bool TabCtrl::IsUnderMouse() {
     return tabsCtrl && tabsCtrl->tabHighlighted == Idx();
 }
 
+int TabCtrl::ActiveStyle() {
+    int style = tabsCtrl->activeStyle;
+    return style == 1 || style == 4 ? style : 3;
+}
+
+Color TabCtrl::TabAccent() {
+    Color color = IsSpecialColor(ti->tabColor) ? GetColor(kColTabAccent) : ti->tabColor;
+    return IsSpecialColor(color) ? MkRgb(0x26, 0x75, 0xe8) : MkRgb(GetRed(color), GetGreen(color), GetBlue(color));
+}
+
 Color TabCtrl::BgColor() {
     Color selected = GetColor(kColTabBg);
     Color inactive = GetColor(kColTabInactiveBg);
     bool isSelected = IsSelected();
     bool isUnderMouse = IsUnderMouse();
-    // a tab with a color of its own keeps it, shaded when it isn't selected
-    if (!IsSpecialColor(ti->tabColor)) {
-        if (isSelected) {
-            return ti->tabColor;
-        }
-        return AccentColor(ti->tabColor, isUnderMouse ? 35 : 25);
-    }
     if (isSelected) {
-        return selected;
+        if (ActiveStyle() != 3) return TabAccent();
+        return MixTabColor(selected, TabAccent(), IsLightColor(selected) ? 19 : 35);
     }
     return isUnderMouse ? AccentColor(inactive, 10) : inactive;
 }
@@ -192,6 +223,7 @@ void TabCtrl::SetBounds(Rect r) {
 
     // Padding between circle and tab edge; grow with the button.
     int closePad = std::max(tabsCtrl->ScaleMetric(6), closeDx / 2);
+    closePad = std::max(1, (closePad + 2) / 4);
     // Keep the glyph inside the tab when tabs are very narrow.
     if (closeDx + closePad > dx && dx > 0) {
         closeDx = std::min(closeDx, std::max(tabsCtrl->ScaleMetric(12), dx - 2));
@@ -236,19 +268,33 @@ void TabCtrl::Paint(VirtPaintCtx& ctx) {
     HWND hwnd = GetHwnd();
     Rect r = ctx.bounds;
     Color tabBgCol = BgColor();
-    Color textColor = TabTextColorForBackground(GetColor(kColTabText), tabBgCol);
+    bool selected = IsSelected();
+    Color textColor =
+        TabTextColorForBackground(selected && ActiveStyle() == 3 ? TabAccent() : GetColor(kColTabText), tabBgCol);
     if (ti->isError) {
         // a tab whose document failed to load shows its title in red, shaded
         // to stay readable on light and dark tab backgrounds
-        textColor = IsLightColor(tabBgCol) ? MkRgb(0xC4, 0x1E, 0x1E) : MkRgb(0xFF, 0x6A, 0x6A);
+        textColor =
+            TabReadableColor(IsLightColor(tabBgCol) ? MkRgb(0xC4, 0x1E, 0x1E) : MkRgb(0xFF, 0x6A, 0x6A), tabBgCol);
     }
 
-    gfx->FillRoundedRect(r, tabsCtrl->ScaleMetric(8), tabBgCol);
+    Rect surface = r;
+    int radius = tabsCtrl->ScaleMetric(selected ? 5 : 8);
+    if (selected && ActiveStyle() == 4) {
+        int inset = std::min(tabsCtrl->ScaleMetric(3), std::min(r.dx, r.dy) / 4);
+        surface = {r.x + inset, r.y + inset, r.dx - 2 * inset, r.dy - 2 * inset};
+        radius = tabsCtrl->ScaleMetric(6);
+    }
+    Color border = selected && ActiveStyle() == 3 ? TabReadableColor(TabAccent(), tabBgCol, 3.1) : kColorTransparent;
+    gfx->FillRoundedRect(surface, radius, tabBgCol, border);
 
     bool isRtl = IsTabsRtl(hwnd);
-    Rect separator = TabSeparatorRect(r, std::max(1, tabsCtrl->ScaleMetric(1)), isRtl);
-    gfx->FillRect(separator, AccentColor(tabBgCol, 48));
+    if (!selected) {
+        Rect separator = TabSeparatorRect(r, std::max(1, tabsCtrl->ScaleMetric(1)), isRtl);
+        gfx->FillRect(separator, AccentColor(tabBgCol, 48));
+    }
     PlatformFont* font = tabsCtrl->GetFont();
+    if (selected) font = GetBoldPlatformFont(font);
 
     // draw text — inset from the close glyph (size varies with tab height),
     // or using the full tab width when the ✕ is hidden
@@ -296,7 +342,7 @@ void TabCtrl::Paint(VirtPaintCtx& ctx) {
     u32 fmt = gfxTextEllipsis | gfxTextVCenter | (isRtl ? gfxTextRight : gfxTextLeft);
     gfx->DrawText(ti->text, rFile, fmt, font, textColor);
     if (pageDx > 0) {
-        Color pageCol = AccentColor(textColor, 40);
+        Color pageCol = TabReadableColor(AccentColor(textColor, 40), tabBgCol);
         u32 pageFmt = gfxTextVCenter | gfxTextNoClip | (isRtl ? gfxTextRight : gfxTextLeft);
         gfx->DrawText(ti->pageText, rPage, pageFmt, pageFont, pageCol);
     }
@@ -316,6 +362,7 @@ void TabCtrl::Paint(VirtPaintCtx& ctx) {
 
     // the ✕ blends into the tab, so it takes the tab's background
     closeBtn->SetColor(kColCloseCircle, tabBgCol);
+    closeBtn->SetColor(kColCloseX, textColor);
 }
 
 void TabCtrl::OnMouseDown(VirtMouseEvent* ev) {
@@ -1542,6 +1589,54 @@ void TabsCtrl_UnitTests() {
     SendMessageW(tc.hwnd, WM_MOUSEHWHEEL, MAKEWPARAM(0, WHEEL_DELTA), 0);
     utassert(tc.scrollDx == tc.tabSize.dx);
     tc.SetSelected(24);
+    {
+        auto* tab = tc.TabCtrlAt(24);
+        int previousIcon = tc.tabIconDx;
+        LONG_PTR previousStyle = GetWindowLongPtrW(parent, GWL_EXSTYLE);
+        Rect bounds{10, 5, 300, 64};
+        for (bool rtl : {false, true}) {
+            SetWindowLongPtrW(parent, GWL_EXSTYLE, rtl ? previousStyle | WS_EX_LAYOUTRTL : previousStyle);
+            for (int icon : {12, 24, 48, 80}) {
+                tc.tabIconDx = icon;
+                tab->SetBounds(bounds);
+                int previousPadding = std::max(tc.ScaleMetric(6), tab->rClose.dx / 2);
+                int padding = rtl ? tab->rClose.x - bounds.x : bounds.Right() - tab->rClose.Right();
+                utassert(padding == std::max(1, (previousPadding + 2) / 4));
+                Rect hit = tab->closeBtn->lastBounds;
+                utassert(hit.Contains({tab->rClose.x + tab->rClose.dx / 2, tab->rClose.y + tab->rClose.dy / 2}));
+                utassert(hit.dx >= tc.ScaleMetric(40) && hit.dy == bounds.dy);
+            }
+        }
+        SetWindowLongPtrW(parent, GWL_EXSTYLE, previousStyle);
+        tc.tabIconDx = previousIcon;
+        tc.LayoutTabs();
+    }
+    Color savedTabColors[kColTabCount];
+    memcpy(savedTabColors, gColsTab, sizeof(savedTabColors));
+    for (Color ground : {MkRgb(245, 248, 252), MkRgb(36, 42, 51)}) {
+        gColsTab[kColTabBg] = ground;
+        gColsTab[kColTabInactiveBg] = ground;
+        for (int style : {1, 3, 4}) {
+            tc.activeStyle = style;
+            auto* selected = tc.TabCtrlAt(24);
+            for (Color accent :
+                 {MkRgb(0x26, 0x75, 0xe8), kColWhite, kColBlack, MkRgb(255, 255, 0), MkRgb(0xad, 0x34, 0x4a)}) {
+                gColsTab[kColTabAccent] = accent;
+                selected->ti->tabColor = kColorUnset;
+                Color bg = selected->BgColor();
+                utassert(TabContrast(TabReadableColor(accent, bg), bg) >= 4.5);
+                utassert(TabContrast(TabReadableColor(accent, bg, 3.1), bg) >= 3);
+                utassert(tc.TabCtrlAt(0)->BgColor() == ground);
+                selected->ti->tabColor = MkRgb(0x08, 0x79, 0x69);
+                utassert(selected->TabAccent() == MkRgb(0x08, 0x79, 0x69));
+                utassert(style == 3 ? selected->BgColor() != selected->TabAccent()
+                                    : selected->BgColor() == selected->TabAccent());
+            }
+        }
+    }
+    tc.activeStyle = 3;
+    tc.TabCtrlAt(24)->ti->tabColor = kColorUnset;
+    memcpy(gColsTab, savedTabColors, sizeof(savedTabColors));
     utassert(tc.scrollDx + tc.viewportDx >= tc.tabSize.dx * tc.TabCount());
     int end = tc.scrollDx;
     SendMessageW(tc.hwnd, WM_MOUSEHWHEEL, MAKEWPARAM(0, 1), 0);

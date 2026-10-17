@@ -6,6 +6,8 @@ import { assemblePdf, cmdId, runStandalone, tmpPath } from "./util.ts";
 import { findCanvas, killAndWait, launchControlled, sendCommandSync } from "./win-automation.ts";
 import {
   getClientRect,
+  getWindowRect,
+  captureWindowToPng,
   getClipboardText,
   sendMessage,
   packCoords,
@@ -20,6 +22,9 @@ import {
 } from "./winapi.ts";
 
 const WM_COPY = 0x0301;
+const WM_MOUSEWHEEL = 0x020a;
+const MK_CONTROL = 0x0008;
+const WHEEL_DELTA = 120;
 
 function fixture(): string {
   const text = "BT /F1 14 Tf 72 740 Td (Reference preview selectable text) Tj 0 -24 Td (Second reference line) Tj ET";
@@ -27,12 +32,13 @@ function fixture(): string {
   return assemblePdf([
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 8 0 R /Annots [7 0 R] >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 8 0 R /Annots [9 0 R 7 0 R] >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>",
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     `<< /Length ${text.length} >>\nstream\n${text}\nendstream`,
     "<< /Type /Annot /Subtype /Link /Rect [0 0 612 792] /Border [0 0 0] /Dest [4 0 R /XYZ 0 792 1] >>",
     `<< /Length ${source.length} >>\nstream\n${source}\nendstream`,
+    "<< /Type /Annot /Subtype /Link /Rect [306 0 612 792] /Border [0 0 0] /Dest [4 0 R /XYZ 72 716 1] >>",
   ]);
 }
 
@@ -54,7 +60,7 @@ export async function testit(): Promise<void> {
     const size = getClientRect(canvas);
     const shown = await client.request(ControlCommand.TestRefHover, [
       "show",
-      (size.right / 2) | 0,
+      ((size.right / 2) | 0) - 40,
       (size.bottom / 3) | 0,
     ]);
     if (shown[0] !== 0) throw new Error(`Reference selection: show failed: ${shown[1]}`);
@@ -92,7 +98,15 @@ export async function testit(): Promise<void> {
     const afterDown = await client.request(ControlCommand.TestRefHover, []);
     if (!String(afterDown[1] ?? "").includes("visible=1"))
       throw new Error("Reference selection: activating the preview dismissed it");
+    const frozenWindow = getWindowRect(popup);
+    await client.request(ControlCommand.TestRefHover, ["show", ((size.right / 2) | 0) + 40, (size.bottom / 3) | 0]);
+    await Bun.sleep(100);
+    for (let i = 0; i < 40; i++) {
+      sendMessage(popup, WM_MOUSEMOVE, MK_LBUTTON, point(i % 2 ? 350 : 400, 46));
+    }
     sendMessage(popup, WM_MOUSEMOVE, MK_LBUTTON, point(400, 46));
+    if (JSON.stringify(getWindowRect(popup)) !== JSON.stringify(frozenWindow))
+      throw new Error("Reference selection: preview moved during selection");
     sendMessage(popup, WM_LBUTTONUP, 0, point(400, 46));
     sendMessage(popup, WM_COPY, 0, 0);
     const first = (await getClipboardText()).trim();
@@ -100,6 +114,8 @@ export async function testit(): Promise<void> {
       throw new Error(
         `Reference selection: drag copied ${JSON.stringify(first)}; ${raw}; client=${JSON.stringify(getClientRect(popup))}; afterDown=${afterDown[1]}`,
       );
+
+    captureWindowToPng(popup, join(dir, "selected-preview.png"));
 
     sendMessage(popup, WM_LBUTTONDOWN, MK_LBUTTON | MK_SHIFT, point(220, 70));
     sendMessage(popup, WM_LBUTTONUP, MK_SHIFT, point(220, 70));
@@ -116,6 +132,23 @@ export async function testit(): Promise<void> {
     sendMessage(popup, WM_COPY, 0, 0);
     if ((await getClipboardText()).trim() !== "Reference")
       throw new Error("Reference selection: double-click did not select one word");
+    const stableRect = getWindowRect(popup);
+    const beforeWheel = await client.request(ControlCommand.TestRefHover, []);
+    const beforeY = Number(/ y=(-?\d+)/.exec(String(beforeWheel[1]))?.[1]);
+    const beforeZoom = Number(/ zoom=(\d+)/.exec(String(beforeWheel[1]))?.[1]);
+    sendMessage(popup, WM_MOUSEWHEEL, (-WHEEL_DELTA & 0xffff) * 0x10000, 0);
+    const scrolled = await client.request(ControlCommand.TestRefHover, []);
+    if (Number(/ y=(-?\d+)/.exec(String(scrolled[1]))?.[1]) <= beforeY)
+      throw new Error(`Reference selection: wheel did not scroll: ${beforeWheel[1]} -> ${scrolled[1]}`);
+    sendMessage(popup, WM_MOUSEWHEEL, (WHEEL_DELTA * 0x10000) | MK_CONTROL, 0);
+    const zoomed = await client.request(ControlCommand.TestRefHover, []);
+    if (Number(/ zoom=(\d+)/.exec(String(zoomed[1]))?.[1]) <= beforeZoom)
+      throw new Error("Reference selection: Ctrl+wheel did not zoom");
+    if (JSON.stringify(getWindowRect(popup)) !== JSON.stringify(stableRect))
+      throw new Error("Reference selection: wheel changed popup placement");
+    sendMessage(popup, WM_COPY, 0, 0);
+    if ((await getClipboardText()).trim() !== "Reference")
+      throw new Error("Reference selection: wheel lost the selected text");
     sendMessage(popup, WM_KEYDOWN, VK_ESCAPE, 0);
     const hidden = await client.request(ControlCommand.TestRefHover, []);
     if (!String(hidden[1] ?? "").includes("visible=0"))

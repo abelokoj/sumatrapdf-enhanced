@@ -46,6 +46,11 @@ EBookUI* GetEBookUI() {
     return nullptr;
 }
 
+struct MarkdownUI;
+MarkdownUI* GetMarkdownUI() {
+    return nullptr;
+}
+
 FileEBookUI* GetFileEBookUI(Str) {
     return nullptr;
 }

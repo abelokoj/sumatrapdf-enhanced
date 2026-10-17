@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2026 Artifex Software, Inc.
+﻿// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -193,6 +193,9 @@ pdf_write_dash_pattern(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, pdf_ob
 			fz_append_printf(ctx, buf, " %g", length);
 	}
 	fz_append_printf(ctx, buf, "]0 d\n");
+	/* Zero-length dash segments need round caps to remain visible as dots. */
+	if (pdf_annot_border_dash_item(ctx, annot, 0) == 0)
+		fz_append_printf(ctx, buf, "1 J\n");
 }
 
 static float pdf_write_border_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf)
@@ -1179,9 +1182,10 @@ pdf_write_highlight_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf
 {
 	pdf_obj *qp;
 	fz_rect annot_rect = *rect;
-	fz_point quad[4], mquad[4], v;
-	float h, m, dx, dy, vn;
-	int i, n, from_rect;
+	fz_point quad[4], corners[4], incoming[4], outgoing[4];
+	const float curve = 0.55228475f;
+	float h, radius;
+	int i, j, n, from_rect;
 
 	pdf_write_opacity_blend_mode(ctx, annot, buf, res, FZ_BLEND_MULTIPLY);
 	if (!pdf_write_fill_color_appearance(ctx, annot, buf))
@@ -1193,37 +1197,35 @@ pdf_write_highlight_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf
 	for (i = 0; i < n; i += 8)
 	{
 		h = load_markup_quad(ctx, quad, qp, i, from_rect, annot_rect);
-		m = h / 4.2425f; /* magic number that matches adobe's appearance */
-		dx = quad[LR].x - quad[LL].x;
-		dy = quad[LR].y - quad[LL].y;
-		vn = sqrtf(dx * dx + dy * dy);
-		if (vn == 0)
-			continue;
-		v = fz_make_point(dx * m / vn, dy * m / vn);
-
-		mquad[LL].x = quad[LL].x - v.x - v.y;
-		mquad[LL].y = quad[LL].y - v.y + v.x;
-		mquad[UL].x = quad[UL].x - v.x + v.y;
-		mquad[UL].y = quad[UL].y - v.y - v.x;
-		mquad[LR].x = quad[LR].x + v.x - v.y;
-		mquad[LR].y = quad[LR].y + v.y + v.x;
-		mquad[UR].x = quad[UR].x + v.x + v.y;
-		mquad[UR].y = quad[UR].y + v.y - v.x;
-
-		fz_append_printf(ctx, buf, "%g %g m\n", quad[LL].x, quad[LL].y);
-		fz_append_printf(ctx, buf, "%g %g %g %g %g %g c\n",
-			mquad[LL].x, mquad[LL].y,
-			mquad[UL].x, mquad[UL].y,
-			quad[UL].x, quad[UL].y);
-		fz_append_printf(ctx, buf, "%g %g l\n", quad[UR].x, quad[UR].y);
-		fz_append_printf(ctx, buf, "%g %g %g %g %g %g c\n",
-			mquad[UR].x, mquad[UR].y,
-			mquad[LR].x, mquad[LR].y,
-			quad[LR].x, quad[LR].y);
-		fz_append_printf(ctx, buf, "f\n");
-
-		union_quad(rect, quad, h/16);
-		union_quad(rect, mquad, 0);
+		radius = fz_min(h * 0.12f, 6.0f);
+		corners[0] = quad[LL];
+		corners[1] = quad[UL];
+		corners[2] = quad[UR];
+		corners[3] = quad[LR];
+		/* Round inside the quad; straight sides never bulge beyond the selection. */
+		for (j = 0; j < 4; ++j)
+		{
+			fz_point corner = corners[j];
+			fz_point prev = corners[(j + 3) % 4];
+			fz_point next = corners[(j + 1) % 4];
+			float prev_len = hypotf(prev.x - corner.x, prev.y - corner.y);
+			float next_len = hypotf(next.x - corner.x, next.y - corner.y);
+			float r = fz_min(radius, fz_min(prev_len, next_len) * 0.5f);
+			incoming[j] = lerp_point(corner, prev, prev_len > 0 ? r / prev_len : 0);
+			outgoing[j] = lerp_point(corner, next, next_len > 0 ? r / next_len : 0);
+		}
+		fz_append_printf(ctx, buf, "%g %g m\n", outgoing[0].x, outgoing[0].y);
+		for (j = 1; j <= 4; ++j)
+		{
+			int c = j % 4;
+			fz_point a = lerp_point(incoming[c], corners[c], curve);
+			fz_point b = lerp_point(outgoing[c], corners[c], curve);
+			fz_append_printf(ctx, buf, "%g %g l\n", incoming[c].x, incoming[c].y);
+			fz_append_printf(ctx, buf, "%g %g %g %g %g %g c\n",
+				a.x, a.y, b.x, b.y, outgoing[c].x, outgoing[c].y);
+		}
+		fz_append_string(ctx, buf, "h f\n");
+		union_quad(rect, quad, 0);
 	}
 }
 
@@ -1397,6 +1399,23 @@ pdf_write_caret_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, fz
 	*bbox = fz_make_rect(0, 0, 20, 14);
 }
 
+/* Original Enhanced pinned-paper artwork; retain standard Text/Note semantics. */
+static void
+pdf_write_pinned_note(fz_context *ctx, pdf_annot *annot, fz_buffer *buf)
+{
+	fz_append_string(ctx, buf, "% EnhancedPinnedNote\nq\n0.42105263 0 0 -0.42105263 1.2631579 16 cm\n1 j\n1.4 w\n");
+	if (!pdf_write_fill_color_appearance(ctx, annot, buf))
+		fz_append_string(ctx, buf, "1 0.941176 0.666667 rg\n");
+	fz_append_string(ctx, buf,
+		"0.447059 0.380392 0.211765 RG\n5 8 m 27 8 l 27 33 l 21 31 l 14 34 l 5 33 l h B\n"
+		"0.862745 0.780392 0.486275 rg\n21 31 m 27 33 l 24 27 l h f\n"
+		"0.780392 0.313725 0.25098 rg\n0.45098 0.207843 0.168627 RG\n1.2 w\n"
+		"10 15 m 13 6 l 18 7 l 17 17 l 14 20 l h B\n"
+		"0.901961 0.396078 0.313725 rg\n13 6 m 12 0 21 0 21 5 c 21 8 18 11 16 10 c h B\n"
+		"0.360784 0.329412 0.313725 RG\n1.4 w\n14 19 m 12 24 l S\n"
+		"0.705882 0.611765 0.32549 RG\n1.2 w\n9 27 m 21 27 l S\n9 30 m 17 30 l S\nQ\n");
+}
+
 static void
 pdf_write_icon_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, fz_rect *rect, fz_rect *bbox, pdf_obj **res)
 {
@@ -1406,6 +1425,14 @@ pdf_write_icon_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, fz_
 	float y = rect->y1 - w;
 
 	pdf_write_opacity(ctx, annot, buf, res);
+	name = pdf_annot_icon_name(ctx, annot);
+	if (pdf_annot_type(ctx, annot) == PDF_ANNOT_TEXT && !strcmp(name, "Note"))
+	{
+		pdf_write_pinned_note(ctx, annot, buf);
+		*rect = fz_make_rect(x, y, x + w, y + w);
+		*bbox = fz_make_rect(0, 0, 16, 16);
+		return;
+	}
 
 	if (!pdf_write_fill_color_appearance(ctx, annot, buf))
 		fz_append_string(ctx, buf, "1 g\n");

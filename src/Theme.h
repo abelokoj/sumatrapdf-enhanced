@@ -7,6 +7,10 @@ void SetThemeByIndex(int themeIdx);
 int ThemeGetCount();
 Str ThemeGetNameAt(int idx);
 int ThemeGetCurrentIndex();
+bool ThemeGetPaletteAt(int idx, Color& foreground, Color& background, Color& accent);
+#if IS_DEBUG
+void ThemePalettePreviewTest();
+#endif
 void ToggleLightDarkTheme();
 void SetLightDarkTheme(bool dark);
 Str ToggleLightDarkThemeTargetName();

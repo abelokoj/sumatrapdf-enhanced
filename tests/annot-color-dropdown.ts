@@ -30,6 +30,7 @@ import {
   VK_ESCAPE,
   VK_DOWN,
   WM_COMMAND,
+  getRootWindow,
   WM_KEYDOWN,
   WM_RBUTTONDOWN,
   WM_RBUTTONUP,
@@ -44,6 +45,7 @@ import {
   parkCursorAway,
   pressKey,
   scrollToolbarToCommand,
+  selectToolbarShape,
   sendCommandSync,
 } from "./win-automation.ts";
 
@@ -417,8 +419,19 @@ const DEFAULT_COLORS: Record<string, string> = {
   CmdCreateAnnotFileAttachment: "#ffffff00",
 };
 
+function isShapeCommand(cmd: number): boolean {
+  return [
+    "CmdCreateAnnotLine",
+    "CmdCreateAnnotPolyLine",
+    "CmdCreateAnnotSquare",
+    "CmdCreateAnnotCircle",
+    "CmdCreateAnnotPolygon",
+  ].some((name) => cmdId(name) === cmd);
+}
+
 // the visible annotation button for a command, in toolbar client coords
 async function annotButtonRect(client: ControlClient, frame: number, cmd: number): Promise<Rect | null> {
+  if (isShapeCommand(cmd)) cmd = cmdId("CmdAnnotationShapes");
   const raw = await scrollToolbarToCommand(client, frame, cmd);
   const re = /annotation-idx=\d+ cmd=(\d+) hidden=(\d) enabled=\d rect=(-?\d+),(-?\d+),(-?\d+),(-?\d+)/g;
   let m: RegExpExecArray | null;
@@ -462,6 +475,11 @@ async function openToolbarPalette(
   command: number,
   bounds: Rect,
 ): Promise<void> {
+  if (isShapeCommand(command)) {
+    await selectToolbarShape(client, getRootWindow(toolbar), getWindowPid(toolbar), command, true);
+    return;
+  }
+
   const lp = packCoords(bounds.x + (bounds.dx >> 1), bounds.y + (bounds.dy >> 1));
   sendMessage(toolbar, WM_RBUTTONDOWN, MK_RBUTTON, lp);
   sendMessage(toolbar, WM_RBUTTONUP, 0, packCoords(-1, -1));
@@ -566,10 +584,12 @@ async function testToolbarButtons(): Promise<void> {
     await openToolbarPalette(client, toolbar, cmdId("CmdCreateAnnotSquare"), square);
     const raw = await pollUntil(
       async () => String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? ""),
-      (s) => /^dropdown-item idx=1 /m.test(s),
+      (s) => /dropdown-item .*text=#ff00ff00/m.test(s),
       { error: (s) => `annot-color-dropdown: the Square palette did not offer its second swatch\n${s}` },
     );
-    const item = /^dropdown-item idx=1 cmd=\d+ current=\d rect=(-?\d+),(-?\d+),(-?\d+),(-?\d+)/m.exec(raw);
+    const item = /^dropdown-item idx=\d+ cmd=\d+ current=\d rect=(-?\d+),(-?\d+),(-?\d+),(-?\d+) text=#ff00ff00$/m.exec(
+      raw,
+    );
     if (!item) {
       throw new Error(`annot-color-dropdown: the Square drop-down has no second swatch\n${raw}`);
     }
@@ -578,11 +598,9 @@ async function testToolbarButtons(): Promise<void> {
     const cx = (+item[1]! + +item[3]!) >> 1;
     const cy = (+item[2]! + +item[4]!) >> 1;
     await clickAt(menu, cx - origin.x, cy - origin.y, 0);
-    await pollUntil(
-      () => findTopWindow(pid, HOVER_MENU_CLASS),
-      (hwnd) => hwnd === 0 || !isWindowVisible(hwnd),
-      { error: "annot-color-dropdown: the Square palette stayed open after picking green" },
-    );
+    if (!isWindowVisible(menu))
+      throw new Error("annot-color-dropdown: Shapes must remain open to adjust fill and thickness");
+    await closeHoverMenu(pid, frame);
 
     sendMessage(frame, WM_COMMAND, cmdId("CmdCreateAnnotSquare"), packCoords(300, 300));
     await client.waitForRenderIdle();

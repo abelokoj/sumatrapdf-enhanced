@@ -1,5 +1,5 @@
-// Wheel bursts keep their full distance, settle promptly, and reverse without
-// leaving a stale destination. Uses a warmed PDF so this measures input easing.
+// A 2000-page PDF retains wheel distance, settles promptly, and never overshoots.
+// Warming pages separates input response from asynchronous rendering.
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { cmdId, makePdf, runStandalone, TESTS_TMP_DIR, tmpPath } from "./util.ts";
@@ -17,6 +17,7 @@ import { findCanvas, killAndWait, launchControlled, sendCommandSync } from "./wi
 const WM_MOUSEWHEEL = 0x020a;
 const WM_VSCROLL = 0x0115;
 const SB_TOP = 6;
+const SB_BOTTOM = 7;
 
 export async function testit(): Promise<void> {
   setProcessDpiAware();
@@ -29,7 +30,7 @@ export async function testit(): Promise<void> {
     "SmoothScroll = true\nScrollLineAmount = 16\nScrollEdgeTurnsPage = false\nMouseWheelTurnsPage = false\nRestoreSession = false\nCheckForUpdates = false\n",
   );
   const pdf = join(directory, "reader.pdf");
-  writeFileSync(pdf, makePdf(8, 612, 0, 0), "latin1");
+  writeFileSync(pdf, makePdf(2000, 612, 0, 0), "latin1");
   const { proc, client, frame } = await launchControlled(["-appdata", directory, pdf]);
   try {
     sendCommandSync(frame, cmdId("CmdZoomFitWidthAndContinuous"));
@@ -51,7 +52,9 @@ export async function testit(): Promise<void> {
     const fractionalStart = performance.now();
     while (getScrollInfo(canvas).pos < fractionalTarget && performance.now() - fractionalStart < 1000) await sleep(5);
     if (getScrollInfo(canvas).pos !== fractionalTarget)
-      throw new Error("Small touchpad deltas were discarded until a whole line accumulated");
+      throw new Error(
+        `Small touchpad deltas were discarded until a whole line accumulated: notch=${notch}, expected=${fractionalTarget}, actual=${getScrollInfo(canvas).pos}`,
+      );
     for (let i = 8; i < 120; i++) wheel(-1);
     await client.waitForRenderIdle();
     if (getScrollInfo(canvas).pos !== notch) throw new Error("Fractional wheel input lost distance");
@@ -99,6 +102,22 @@ export async function testit(): Promise<void> {
     if (getScrollInfo(canvas, 0).pos !== horizontalNotch) throw new Error("Horizontal wheel input lost distance");
     for (let i = 0; i < 120; i++) horizontalWheel(-1);
     if (getScrollInfo(canvas, 0).pos !== 0) throw new Error("Horizontal reversal left a stale remainder");
+    sendCommandSync(frame, cmdId("CmdZoomFitWidthAndContinuous"));
+    await client.waitForRenderIdle();
+    sendMessage(canvas, WM_VSCROLL, SB_BOTTOM, 0);
+    const end = getScrollInfo(canvas);
+    if (end.pos !== Math.max(end.min, end.max - end.page + 1))
+      throw new Error("Reader did not reach the last page edge");
+    for (let i = 0; i < 8; i++) wheel(-120);
+    await client.waitForRenderIdle();
+    if (getScrollInfo(canvas).pos !== end.pos) throw new Error("Scrolling at the document end bounced");
+    wheel(120);
+    await client.waitForRenderIdle();
+    if (getScrollInfo(canvas).pos !== end.pos - notch) throw new Error("Scroll did not reverse from the document edge");
+    sendMessage(canvas, WM_VSCROLL, SB_TOP, 0);
+    for (let i = 0; i < 8; i++) wheel(120);
+    await client.waitForRenderIdle();
+    if (getScrollInfo(canvas).pos !== 0) throw new Error("Scrolling at the document start bounced");
     console.log(`PDF wheel median 95% travel: ${latencies[1]!.toFixed(1)} ms; bursts and reversal: OK`);
   } finally {
     client.close();

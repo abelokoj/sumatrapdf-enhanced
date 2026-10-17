@@ -75,6 +75,7 @@ enum class AnnotEditKind {
     InteriorColor,
     Opacity,
     Border,
+    CornerRadius,
     FontName,
     Bold,
     Italic,
@@ -302,6 +303,8 @@ static Str KindName(AnnotEditKind kind) {
             return StrL("opacity");
         case AnnotEditKind::Border:
             return StrL("border");
+        case AnnotEditKind::CornerRadius:
+            return StrL("cornerRadius");
         case AnnotEditKind::FontName:
             return StrL("font");
         case AnnotEditKind::Bold:
@@ -493,6 +496,13 @@ static void CollectItems(Annotation* annot, Vec<AnnotEditItem>& out) {
         it.kind = AnnotEditKind::TextColor;
         it.color = ColorWithOpacity(DefaultAppearanceTextColor(annot), annot, AnnotationSupportsOpacity(type));
         it.tooltip = Tr("Text Color");
+        VecAppend(out, it);
+    }
+    if (type == AnnotationType::Square) {
+        AnnotEditItem it;
+        it.kind = AnnotEditKind::CornerRadius;
+        it.number = (int)roundf(AnnotationCornerRadius(annot));
+        it.tooltip = Tr("Corner radius (pt)");
         VecAppend(out, it);
     }
     // a color chip is also the opacity chip: it shows the color as it looks on
@@ -726,9 +736,11 @@ static void PaintLineEndingMark(Gfx* gfx, Point tip, Point along, Color col, int
         case 5:   // ClosedArrow
         case 8: { // RClosedArrow
             Point t = (style == 8) ? back(size) : tip;
-            Point base = (style == 8) ? tip : back(size);
-            Point l = {base.x - (dy / 2), base.y + (dx / 2)};
-            Point r = {base.x + (dy / 2), base.y - (dx / 2)};
+            Point start = (style == 8) ? tip : back(size);
+            PointF left, right;
+            if (!BuildArrowHead({(float)start.x, (float)start.y}, {(float)t.x, (float)t.y}, size / 8.8f, left, right))
+                break;
+            Point l{(int)roundf(left.x), (int)roundf(left.y)}, r{(int)roundf(right.x), (int)roundf(right.y)};
             gfx->DrawLineAA(t, l, col, 1.5f);
             gfx->DrawLineAA(t, r, col, 1.5f);
             gfx->DrawLineAA(l, r, col, 1.5f);
@@ -1106,6 +1118,8 @@ static void PaintStyleToggle(Gfx* gfx, Rect r, AnnotEditKind kind, Color col, Pl
 
 static TempStr ChipLabelTemp(const AnnotEditItem& item) {
     switch (item.kind) {
+        case AnnotEditKind::CornerRadius:
+            return fmt("R %d", item.number);
         case AnnotEditKind::Opacity:
             return fmt("%d%%", ((item.number * 100) + 127) / 255);
         case AnnotEditKind::Border:
@@ -1165,6 +1179,7 @@ void AnnotEditChip::Paint(VirtPaintCtx& ctx) {
             break;
         case AnnotEditKind::Opacity:
         case AnnotEditKind::Border:
+        case AnnotEditKind::CornerRadius:
         case AnnotEditKind::FontName:
         case AnnotEditKind::TextSize: {
             Str label = ChipLabelTemp(item);
@@ -1588,6 +1603,14 @@ static void ChipBorderPicked(AnnotEditToolbar* tb, int width) {
     ChipThicknessPicked(tb, (float)width);
 }
 
+static void ChipRadiusPicked(AnnotEditToolbar* tb, int radius) {
+    if (!IsAnnotEditToolbarLive(tb) || tb->win->CurrentTab() != tb->tab) return;
+    Annotation* annot = tb->tab->selectedAnnotation;
+    if (!AnnotationIsLive(annot) || annot != tb->annot || Type(annot) != AnnotationType::Square) return;
+    SetAnnotationCornerRadius(annot, (float)radius);
+    AnnotChanged(tb->tab);
+}
+
 // ranges of the number sliders; widths and sizes are in PDF points
 constexpr int kBorderWidthMax = 12;
 constexpr int kFreeTextSizeMin = 6;
@@ -1694,6 +1717,10 @@ static void OnChipClick(AnnotEditChip* chip, VirtMouseEvent*) {
                                  kBorderWidthMax, MkFunc1(ChipBorderPicked, tb), true);
             break;
         }
+        case AnnotEditKind::CornerRadius:
+            ShowAnnotSliderPopup(tb->win, chipScreen, Tr("Corner radius (pt)"), chip->item.number, 0, 1000,
+                                 MkFunc1(ChipRadiusPicked, tb), true);
+            break;
         case AnnotEditKind::TextSize: {
             ShowAnnotSliderPopup(tb->win, chipScreen, Tr("Text Size"), chip->item.number, kFreeTextSizeMin,
                                  kFreeTextSizeMax, MkFunc1(ChipTextSizePicked, tb), true);

@@ -15,7 +15,7 @@ extern bool gDisableDocumentRestrictions;
 // doesn't save settings
 extern bool gForTesting;
 extern Str gBuiltOn;
-extern Str currentVersion; // e.g. "3.2.1138"
+extern Str currentVersion; // Enhanced product version
 extern Str gitCommidId;
 extern Str preReleaseVersion;
 

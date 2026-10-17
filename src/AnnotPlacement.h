@@ -11,6 +11,7 @@ struct InkPenProfile;
 constexpr WORD kAnnotationPlacementCommandCode = 0x5341;
 
 bool CommandUsesPlacementMode(int cmdId);
+void SetLineToolCreateArgs(int cmd, AnnotCreateArgs&);
 AnnotPlacementKind PlacementKindFromCommand(int cmdId);
 
 bool IsPlacingAnnotation(MainWindow*);

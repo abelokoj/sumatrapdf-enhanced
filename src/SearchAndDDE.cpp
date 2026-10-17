@@ -3029,7 +3029,8 @@ static Str HandleGetFileStateCmd(Str cmd, bool* ack, str::Builder& res) {
     res.Append(fmt("pageCount: %d\n", ctrl->PageCount()));
     res.Append(fmt("zoom: %g\n", zoom));
     res.Append(fmt("view: %s\n", view));
-    res.Append(fmt("sumver: %s\n", StrL(CURR_VERSION_STRA)));
+    res.Append(fmt("sumver: %s\n", StrL(ENHANCED_VERSION_STRA)));
+    res.Append(fmt("upstreamver: %s\n", StrL(CURR_VERSION_STRA)));
     return next;
 }
 

@@ -49,7 +49,7 @@ static RectF DetectRegion(EngineBase* engine, int pageNo, RectF mediabox, float 
 // used as the initial render zoom so popup text height matches the page.
 void RefHoverOnTimer(RefHoverState* s, HWND hwndCanvas, EngineBase* engine, float pageZoom) {
     KillTimer(hwndCanvas, kRefHoverTimerID);
-    if (!s || !engine || s->pending.destPage <= 0) {
+    if (!s || !engine || s->pending.destPage <= 0 || s->resizing || s->selecting || RefHoverHasSelection(s)) {
         return;
     }
     RefHoverClearSelection(s);

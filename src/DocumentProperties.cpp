@@ -1200,7 +1200,7 @@ bool PropertiesWnd::Create(HWND parent) {
         vbox->AddChild(btnRow);
     }
 
-    layout = new Padding(vbox, DpiScaledInsets(0, kButtonPadding, kButtonPadding, kButtonPadding));
+    layout = PadWindowScroll(vbox, editProps, DpiScaledInsets(0, kButtonPadding, kButtonPadding, kButtonPadding));
 
     SetPropsText(ToStr(propsText));
     SizeToContent();

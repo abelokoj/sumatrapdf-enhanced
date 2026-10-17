@@ -1993,6 +1993,8 @@ HRGN RoundedControlRegion(HWND hwnd, Size size) {
 }
 
 struct RoundedControlState {
+    Rect clip;
+    bool hasClip = false;
     Size size;
     int diameter = 0;
     bool updating = false;
@@ -2015,6 +2017,11 @@ static void UpdateControlCorners(HWND hwnd, RoundedControlState* state) {
     HRGN region = RoundedControlRegion(hwnd, size);
     if (!region) {
         return;
+    }
+    if (state->hasClip) {
+        HRGN clip = CreateRectRgn(state->clip.x, state->clip.y, state->clip.Right(), state->clip.Bottom());
+        CombineRgn(region, region, clip, RGN_AND);
+        DeleteObject(clip);
     }
     state->updating = true;
     if (!SetWindowRgn(hwnd, region, FALSE)) {
@@ -2112,11 +2119,27 @@ void RoundControlCorners(HWND hwnd) {
     UpdateControlCorners(hwnd, state);
 }
 
+void RoundControlSetClip(HWND hwnd, Rect clip) {
+    DWORD_PTR data = 0;
+    if (!GetWindowSubclass(hwnd, RoundedControlProc, (UINT_PTR)RoundedControlProc, &data)) return;
+    auto* state = (RoundedControlState*)data;
+    state->clip = clip;
+    state->hasClip = true;
+}
+
 void RoundControlUseCustomPaint(HWND hwnd) {
+    RoundControlSetPaint(hwnd, RoundedControlPaint::Custom);
+}
+
+void RoundControlSetPaint(HWND hwnd, RoundedControlPaint paint) {
     RoundControlCorners(hwnd);
     DWORD_PTR data = 0;
     if (GetWindowSubclass(hwnd, RoundedControlProc, (UINT_PTR)RoundedControlProc, &data)) {
-        ((RoundedControlState*)data)->customPaint = true;
+        auto* state = (RoundedControlState*)data;
+        bool custom = paint == RoundedControlPaint::Custom;
+        if (state->customPaint == custom) return;
+        state->customPaint = custom;
+        InvalidateRect(hwnd, nullptr, FALSE);
     }
 }
 
@@ -2152,6 +2175,12 @@ bool RoundedControl_UnitTestHidden() {
         return false;
     }
     RoundControlCorners(combo);
+    RoundControlSetPaint(combo, RoundedControlPaint::Custom);
+    DWORD_PTR stateData = 0;
+    bool reversiblePaint = GetWindowSubclass(combo, RoundedControlProc, (UINT_PTR)RoundedControlProc, &stateData) &&
+                           ((RoundedControlState*)stateData)->customPaint;
+    RoundControlSetPaint(combo, RoundedControlPaint::Native);
+    reversiblePaint = reversiblePaint && !((RoundedControlState*)stateData)->customPaint;
     int before = roundedPaintCount;
     SendMessageW(combo, WM_NCPAINT, 1, 0);
     bool skipped = roundedPaintCount == before;
@@ -2176,7 +2205,7 @@ bool RoundedControl_UnitTestHidden() {
     if (bitmap) DeleteObject(bitmap);
     if (dc) DeleteDC(dc);
     DestroyWindow(parent);
-    return skipped && retainedOwnerPaint;
+    return skipped && retainedOwnerPaint && reversiblePaint;
 }
 #endif
 

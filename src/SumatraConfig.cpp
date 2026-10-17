@@ -22,7 +22,7 @@ Str gBuiltOn = Str(QM(BUILT_ON));
 Str gBuiltOn;
 #endif
 
-Str currentVersion = Str(CURR_VERSION_STRA);
+Str currentVersion = StrL(ENHANCED_VERSION_STRA);
 
 #ifdef PRE_RELEASE_VER
 Str preReleaseVersion = Str(QM(PRE_RELEASE_VER));

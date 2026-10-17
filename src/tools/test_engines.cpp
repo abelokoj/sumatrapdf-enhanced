@@ -26,6 +26,10 @@ void log(Str s) {
 }
 
 struct EBookUI;
+struct MarkdownUI;
+MarkdownUI* GetMarkdownUI() {
+    return nullptr;
+}
 EBookUI* GetEBookUI() {
     return nullptr;
 }

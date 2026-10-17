@@ -1491,6 +1491,7 @@ static void OnVScroll(MainWindow* win, WPARAM wp, int lineSteps = 1, int scrollP
     //      si.nMax, si.nPage, si.nPos, isFitPage ? 1 : 0, lineHeight, singlePageWithScrollbar);
 
     if (singlePageWithScrollbar) {
+        StopSmoothScroll(win);
         // In SinglePage mode, scrollbar position directly corresponds to page number
         int targetPage = ctrl->CurrentPageNo();
 
@@ -1542,6 +1543,8 @@ static void OnVScroll(MainWindow* win, WPARAM wp, int lineSteps = 1, int scrollP
     // (issue #4662). Page-up/down and thumb stay instant.
     bool isLineScroll = (msg == SB_LINEUP || msg == SB_LINEDOWN);
     bool useSmoothScroll = gSettings->smoothScroll && (gInMouseWheelScroll || isLineScroll);
+    // An explicit top/page/thumb action also cancels motion when already there.
+    if (!useSmoothScroll) StopSmoothScroll(win);
     // While a smooth scroll is in flight the animation moves the view a bit at a
     // time, and ScrollYTo -> UpdateScrollbars keeps nPos on that lagging
     // position. Stepping from it discards the distance still to be travelled, so
@@ -2269,6 +2272,7 @@ void CancelAnnotationLasso(MainWindow* win) {
     ClearLassoSelection(lasso);
     lasso.active = false;
     lasso.tab = nullptr;
+    HideSelectionToolbar(win);
     if (capture && GetCapture() == win->hwndCanvas) ReleaseCapture();
     HwndInvalidate(win->hwndCanvas);
 }
@@ -2383,6 +2387,8 @@ static SelectionDragEdge LassoHandle(MainWindow* win, Point pt) {
 
 static bool LassoOnDown(MainWindow* win, Point pt) {
     if (!ValidateLasso(win)) return false;
+    HideSelectionToolbar(win);
+    ResetSelectionToolbarDismissed(win);
     auto& lasso = win->annotationLasso;
     auto* dm = win->AsFixed();
     bool rotate = HitLassoRotation(win, pt);
@@ -2672,6 +2678,49 @@ bool HandleAnnotationLassoCommand(MainWindow* win, int cmdId) {
     return true;
 }
 
+bool CopyAnnotationLasso(MainWindow* win, bool cut) {
+    if (!win || !ValidateLasso(win) || win->annotationLasso.drawing || win->annotationLasso.transforming ||
+        !HasPermission(Perm::CopySelection))
+        return false;
+    const auto& selected = win->annotationLasso.selected;
+    return cut ? CutAnnotations(selected) : CopyAnnotations(selected);
+}
+
+bool AnnotationLassoCanCopy(MainWindow* win) {
+    if (!win || !ValidateLasso(win) || len(win->annotationLasso.selected) == 0 || !HasPermission(Perm::CopySelection))
+        return false;
+    for (auto* annot : win->annotationLasso.selected)
+        if (!AnnotationCanBeCopied(annot->type) && !AnnotationIsTextMarkup(annot->type)) return false;
+    return true;
+}
+
+static void FinishLassoStyle(MainWindow* win, bool changed) {
+    UpdateLassoBounds(win->annotationLasso);
+    if (!changed) return;
+    NotifyAnnotationsChanged(win->CurrentTab());
+    MainWindowRerender(win);
+}
+
+void SetAnnotationLassoPattern(MainWindow* win, AnnotationLinePattern pattern) {
+    if (!win || !ValidateLasso(win) || win->annotationLasso.drawing || win->annotationLasso.transforming) return;
+    auto* engine = win->AsFixed()->GetEngine();
+    EngineMupdfBeginOperation(engine, "Change selection line pattern");
+    bool changed = false;
+    for (auto* annot : win->annotationLasso.selected) changed |= SetBorderLinePattern(annot, pattern);
+    EngineMupdfEndOperation(engine);
+    FinishLassoStyle(win, changed);
+}
+
+void SmoothAnnotationLasso(MainWindow* win) {
+    if (!win || !ValidateLasso(win) || win->annotationLasso.drawing || win->annotationLasso.transforming) return;
+    auto* engine = win->AsFixed()->GetEngine();
+    EngineMupdfBeginOperation(engine, "Smooth selection");
+    bool changed = false;
+    for (auto* annot : win->annotationLasso.selected) changed |= SmoothAnnotation(annot);
+    EngineMupdfEndOperation(engine);
+    FinishLassoStyle(win, changed);
+}
+
 bool AnnotationLassoOnKeyDown(MainWindow* win, WPARAM key) {
     if (!ValidateLasso(win)) return false;
     auto& lasso = win->annotationLasso;
@@ -2882,6 +2931,7 @@ void Canvas_UnitTestsLasso() {
     utassert(len(lasso.path) == 0 && len(lasso.selected) == 0 && lasso.bounds.IsEmpty() && lasso.preview.IsEmpty());
     utassert(lasso.edge == SelectionDragEdge::None);
     TestLassoEditing();
+    utassert(Annotation_TestStrokeTools());
 }
 
 bool Canvas_UnitTestLassoGeometry() {
@@ -4367,7 +4417,7 @@ static void DebugOutlinePageElements(DisplayModel* dm, HDC hdc, bool images) {
     Color col = images ? MkRgb(0x00, 0xa0, 0x00) : kColBlue;
     AutoRestoreGdiObject autoPen(hdc, CreatePen(PS_SOLID, 1, col), true);
 
-    for (int pageNo = dm->PageCount(); pageNo >= 1; --pageNo) {
+    for (int pageNo = dm->LastVisiblePageNo(); pageNo > 0 && pageNo >= dm->FirstVisiblePageNo(); --pageNo) {
         PageInfo* pi = dm->GetPageInfo(pageNo);
         if (!pi || !pi->isShown || 0.0 == pi->visibleRatio) {
             continue;
@@ -4631,7 +4681,7 @@ static void PaintPageGrid(DisplayModel* dm, HDC hdc) {
     int majorWidth = g.style == PageGridStyleKind::Solid ? 2 : 1;
     HPEN penMajor = CreatePen(PS_SOLID, majorWidth, g.color);
 
-    for (int pageNo = 1; pageNo <= dm->PageCount(); pageNo++) {
+    for (int pageNo = dm->FirstVisiblePageNo(); pageNo > 0 && pageNo <= dm->LastVisiblePageNo(); pageNo++) {
         PageInfo* pi = dm->GetPageInfo(pageNo);
         if (!pi || !pi->isShown || 0.0 == pi->visibleRatio) {
             continue;
@@ -4728,7 +4778,7 @@ static void PaintPdfPageBoxes(DisplayModel* dm, HDC hdc) {
     HFONT hfont = font ? font->GetHFont() : nullptr;
 
     Vec<PdfPageBox> boxes;
-    for (int pageNo = 1; pageNo <= dm->PageCount(); pageNo++) {
+    for (int pageNo = dm->FirstVisiblePageNo(); pageNo > 0 && pageNo <= dm->LastVisiblePageNo(); pageNo++) {
         PageInfo* pi = dm->GetPageInfo(pageNo);
         if (!pi || !pi->isShown || 0.0 == pi->visibleRatio) {
             continue;
@@ -4771,7 +4821,7 @@ static void DebugShowFitContentArea(DisplayModel* dm, HDC hdc) {
     Rect viewPortRect(Point(), dm->GetViewPort().Size());
     AutoRestoreGdiObject autoPen(hdc, CreatePen(PS_SOLID, 2, kColRed), true);
 
-    for (int pageNo = dm->PageCount(); pageNo >= 1; --pageNo) {
+    for (int pageNo = dm->LastVisiblePageNo(); pageNo > 0 && pageNo >= dm->FirstVisiblePageNo(); --pageNo) {
         PageInfo* pi = dm->GetPageInfo(pageNo);
         if (!pi || !pi->isShown || 0.0 == pi->visibleRatio) {
             continue;
@@ -5116,7 +5166,7 @@ static bool DrawDocument(MainWindow* win, HDC hdc, Rect rcArea) {
     bool anyPageVisible = false;
 
     bool isRtl = IsUIRtl();
-    for (int pageNo = 1; pageNo <= dm->PageCount(); ++pageNo) {
+    for (int pageNo = dm->FirstVisiblePageNo(); pageNo > 0 && pageNo <= dm->LastVisiblePageNo(); ++pageNo) {
         PageInfo* pi = dm->GetPageInfo(pageNo);
         if (!pi || 0.0F == pi->visibleRatio) {
             continue;
@@ -7992,6 +8042,19 @@ void Canvas_UnitTestsTextSelect() {
     };
     gSettings->smoothScroll = true;
     dm->GoToPage(1, false);
+    SCROLLINFO topScroll{sizeof(topScroll), SIF_ALL};
+    topScroll.nMax = dm->GetCanvasSize().dy - 1;
+    topScroll.nPage = dm->GetViewPort().dy;
+    topScroll.nPos = dm->yOffset();
+    SetScrollInfo(canvas, SB_VERT, &topScroll, FALSE);
+    int topY = dm->yOffset();
+    StartOrUpdateSmoothScrollY(&win, topY + 96);
+    OnVScroll(&win, SB_TOP);
+    utassert(!win.scrollAnimActive && dm->yOffset() == topY);
+    OnTimer(&win, canvas, kSmoothScrollTimerID);
+    utassert(dm->yOffset() == topY);
+    StopSmoothScroll(&win);
+
     StartOrUpdateSmoothScrollY(&win, dm->yOffset() + 96);
     dm->GoToPage(3, false);
     int navigatedY = dm->yOffset();

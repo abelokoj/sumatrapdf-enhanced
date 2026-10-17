@@ -10,6 +10,10 @@ Line spacing is editable: presets are shortcuts, and custom positive values up t
 
 Optional reading fonts download from GitHub only when you select them and click OK. They stay cached for offline use and are not bundled in the installer or installed into Windows.
 
+The font chooser separates **App fonts** and **System fonts** with labeled dividers. Group headings cannot be saved as a font.
+
+**Dictionary text scale (%)** and **Learning Hub text scale (%)** are independent settings from 50% to 300%, including custom decimals. 100% follows the app-wide text size and interface scale; for example 137.5% enlarges only that window's text by another 37.5%. Text, reading results, buttons, lists and in-window headings update when settings are applied. Window chrome continues to follow the app-wide scale.
+
 ## Sources and attribution
 
 - [Princeton WordNet](https://wordnet.princeton.edu/) is the authoritative project.

@@ -10,6 +10,7 @@
 #include "gui/Layout.h"
 #include "gui/win/WinGui.h"
 #include "gui/GuiColors.h"
+#include "gui/VirtHost.h"
 
 // #include "Theme.h"
 
@@ -557,11 +558,19 @@ class webview2_navigation_completed_handler : public ICoreWebView2NavigationComp
         return E_NOINTERFACE;
     }
     HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2* /*sender*/, ICoreWebView2NavigationCompletedEventArgs* args) {
-        if (!args || !m_wnd || !m_wnd->events.navigationCompleted) {
+        if (!args || !m_wnd) {
             return S_OK;
         }
         BOOL success = FALSE;
         args->get_IsSuccess(&success);
+        if (success && gUiScrollbarCssTemp) {
+            TempStr css = gUiScrollbarCssTemp();
+            m_wnd->Eval(
+                fmt("(()=>{let s=document.querySelector('style#sumatra-scrollbars');"
+                    "if(!s){s=document.createElement('style');s.id='sumatra-scrollbars';"
+                    "(document.head||document.documentElement).appendChild(s);}s.textContent=%s;})()",
+                    json::EscapeStrTemp(css)));
+        }
         WCHAR* uri = nullptr;
         ICoreWebView2* webview = m_wnd->webview;
         if (webview) {
@@ -571,7 +580,7 @@ class webview2_navigation_completed_handler : public ICoreWebView2NavigationComp
         if (uri) {
             CoTaskMemFree(uri);
         }
-        if (url) {
+        if (url && m_wnd->events.navigationCompleted) {
             m_wnd->events.navigationCompleted(m_wnd->events.ctx, url, success != FALSE);
         }
         UpdateWebViewHistory(m_wnd);
@@ -1309,7 +1318,7 @@ void WebviewWnd::OnControllerReady(ICoreWebView2Controller* controller) {
         resourceHandler->Release();
     }
 
-    if (events.navigationStarting || events.navigationCompleted || events.historyChanged) {
+    if (events.navigationStarting || events.navigationCompleted || events.historyChanged || gUiScrollbarCssTemp) {
         ::EventRegistrationToken token = {};
         if (events.navigationStarting) {
             auto* handler = new webview2_navigation_starting_handler(this);
@@ -1319,7 +1328,7 @@ void WebviewWnd::OnControllerReady(ICoreWebView2Controller* controller) {
             webview->add_NewWindowRequested(newWindowHandler, &token);
             newWindowHandler->Release();
         }
-        if (events.navigationCompleted) {
+        if (events.navigationCompleted || gUiScrollbarCssTemp) {
             auto* handler = new webview2_navigation_completed_handler(this);
             webview->add_NavigationCompleted(handler, &token);
             handler->Release();

@@ -145,7 +145,7 @@ static void AddRoundedRectPath(GraphicsPath& path, const Rect& rc, int d) {
     path.CloseFigure();
 }
 
-void GfxGdiplus::FillRoundedRect(const Rect& r, int radius, Color fill, Color border) {
+void GfxGdiplus::FillRoundedRect(const Rect& r, int radius, Color fill, Color border, float borderWidth) {
     if (r.IsEmpty()) {
         return;
     }
@@ -162,7 +162,7 @@ void GfxGdiplus::FillRoundedRect(const Rect& r, int radius, Color fill, Color bo
         gfx->FillPath(&br, &path);
     }
     if (!ColorSkipsPaint(border)) {
-        Pen pen(ToGdipColor(border), 1);
+        Pen pen(ToGdipColor(border), borderWidth);
         gfx->DrawPath(&pen, &path);
     }
 }

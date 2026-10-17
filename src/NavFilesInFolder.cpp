@@ -1428,7 +1428,7 @@ bool NavFilesInFolderWnd::Create(MainWindow* mainWin, Str filePath) {
         vbox->AddChild(new Padding(center, Insets{DpiScale(4), 0, 0, 0}));
     }
 
-    auto* padding = new Padding(vbox, DpiScaledInsets(4, 8));
+    auto* padding = PadWindowScroll(vbox, listBox, DpiScaledInsets(4, 8));
     layout = padding;
 
     TempStr dir = len(filePath) > 0 ? path::GetDirTemp(filePath) : Str{};

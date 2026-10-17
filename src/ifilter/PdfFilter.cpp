@@ -18,6 +18,10 @@
 #include "PdfFilter.h"
 
 struct EBookUI;
+struct MarkdownUI;
+MarkdownUI* GetMarkdownUI() {
+    return nullptr;
+}
 EBookUI* GetEBookUI() {
     return nullptr;
 }

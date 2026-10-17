@@ -87,6 +87,9 @@ for (const style of styles) {
         throw new Error(`Incorrect dimensions for ${style.name}/${ext}/${size}`);
       }
       pngs.push(png);
+      if (ext === "pdf" && size === 256) {
+        write(path.join(root, "src/gfx/filetypes/previews", `${style.name}.png`), png);
+      }
     }
     const ico = makeIco(pngs);
     if (ico.length > 512 * 1024) throw new Error(`Icon too large: ${ext}`);

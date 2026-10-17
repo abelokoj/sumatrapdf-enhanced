@@ -374,6 +374,24 @@ static SeqStrings gCommandNames =
     "CmdLassoFreehand\0"
     "CmdLassoRectangle\0"
     "CmdLassoDelete\0"
+    "CmdExportAnnotationsTransfer\0"
+    "CmdImportAnnotationsTransfer\0"
+    "CmdAnnotationShapes\0"
+    "CmdAnnotationMode\0"
+    "CmdExportSettings\0"
+    "CmdImportSettings\0"
+    "CmdBackupSettings\0"
+    "CmdCreateAnnotArrow\0"
+    "CmdCreateAnnotDashedLine\0"
+    "CmdEditMarkdown\0"
+    "CmdCreateAnnotParabola\0"
+    "CmdCreateAnnotNegativeParabola\0"
+    "CmdCreateAnnotCubic\0"
+    "CmdCreateAnnotNegativeCubic\0"
+    "CmdCreateAnnotReciprocal\0"
+    "CmdCreateAnnotNegativeReciprocal\0"
+    "CmdCreateAnnotAxes2D\0"
+    "CmdCreateAnnotAxes3D\0"
     "\0";
 
 static i32 gCommandIds[] = {
@@ -737,6 +755,24 @@ static i32 gCommandIds[] = {
     CmdLassoFreehand,
     CmdLassoRectangle,
     CmdLassoDelete,
+    CmdExportAnnotationsTransfer,
+    CmdImportAnnotationsTransfer,
+    CmdAnnotationShapes,
+    CmdAnnotationMode,
+    CmdExportSettings,
+    CmdImportSettings,
+    CmdBackupSettings,
+    CmdCreateAnnotArrow,
+    CmdCreateAnnotDashedLine,
+    CmdEditMarkdown,
+    CmdCreateAnnotParabola,
+    CmdCreateAnnotNegativeParabola,
+    CmdCreateAnnotCubic,
+    CmdCreateAnnotNegativeCubic,
+    CmdCreateAnnotReciprocal,
+    CmdCreateAnnotNegativeReciprocal,
+    CmdCreateAnnotAxes2D,
+    CmdCreateAnnotAxes3D,
 };
 
 SeqStrings gCommandDescriptions =
@@ -1100,6 +1136,24 @@ SeqStrings gCommandDescriptions =
     "Lasso: Freehand Selection\0"
     "Lasso: Rectangular Selection\0"
     "Lasso: Delete Selected Annotations\0"
+    "Export Annotations for Transfer...\0"
+    "Import Annotations from Another Version...\0"
+    "Shapes\0"
+    "Annotation Mode\0"
+    "Export Settings...\0"
+    "Import Settings...\0"
+    "Back Up Settings Now...\0"
+    "Create Arrow Annotation\0"
+    "Create Dashed Line Annotation\0"
+    "Edit Markdown...\0"
+    "Create Parabola Annotation\0"
+    "Create Negative Parabola Annotation\0"
+    "Create Cubic Annotation\0"
+    "Create Negative Cubic Annotation\0"
+    "Create Reciprocal Annotation\0"
+    "Create Negative Reciprocal Annotation\0"
+    "Create 2D Axes Annotation\0"
+    "Create 3D Axes Annotation\0"
     "\0";
 
 SeqStrings gCommandAltDescs =
@@ -1739,6 +1793,8 @@ CustomCommand* CreateCommandFromDefinition(Str definition) {
         case CmdCreateAnnotLink:
         case CmdCreateAnnotFreeText:
         case CmdCreateAnnotLine:
+        case CmdCreateAnnotArrow:
+        case CmdCreateAnnotDashedLine:
         case CmdCreateAnnotSquare:
         case CmdCreateAnnotCircle:
         case CmdCreateAnnotPolygon:

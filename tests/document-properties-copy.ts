@@ -6,6 +6,7 @@ import { cmdId, ROOT, runStandalone, tmpPath } from "./util.ts";
 import { killAndWait, launchControlled, sendCommandSync } from "./win-automation.ts";
 import {
   clientToScreen,
+  captureWindowToPng,
   enumWindows,
   findChildWindow,
   getClientRect,
@@ -83,6 +84,17 @@ async function checkCopy(theme: string, scale: number): Promise<void> {
     const clientRect = getClientRect(properties);
     const origin = clientToScreen(properties, 0, 0);
     const editRect = getWindowRect(edit);
+    const outerGap = origin.x + clientRect.right - editRect.right;
+    if (outerGap > 1) {
+      throw new Error(`Properties scrollbar: ${outerGap}px unused to its right (${theme}, ${scale}%)`);
+    }
+    const captureDir = process.env.SUMATRA_PROPERTIES_CAPTURE_DIR;
+    if (captureDir) {
+      mkdirSync(captureDir, { recursive: true });
+      if (!captureWindowToPng(properties, join(captureDir, `${theme.replaceAll(" ", "-")}-${scale}.png`))) {
+        throw new Error("Properties scrollbar: capture failed");
+      }
+    }
     const footerTop = editRect.bottom - origin.y;
     const point = packCoords(
       clientRect.right - Math.round((60 * scale) / 100),

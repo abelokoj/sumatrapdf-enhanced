@@ -15,6 +15,7 @@
 #include "gui/Layout.h"
 #include "gui/win/WinGui.h"
 #include "gui/PlatformFont.h"
+#include "gui/PlatformWindow.h"
 #include "gui/Gfx.h"
 #include "gui/GuiColors.h"
 #include "gui/VirtCtrl.h"
@@ -127,8 +128,8 @@ struct CommandPaletteWnd : WindowBase {
     StrVecCP settings;
     VirtListBox* listBox = nullptr;
     PageThumbnailsCtrl* thumbnailCtrl = nullptr;
-    HBox* switchRow = nullptr;
-    HBox* helpRow = nullptr;
+    Wrap* switchRow = nullptr;
+    Wrap* helpRow = nullptr;
     int helpKind = -1;
     // the selected setting's doc comment, shown under the list in "= settings"
     ILayout* settingHelpBox = nullptr;
@@ -148,6 +149,7 @@ struct CommandPaletteWnd : WindowBase {
     void OnKeyDown(KeyEvent*);
     void OnActivate(WindowBase::ActivateEvent*);
     void OnCommand(WindowBase::CommandEvent*);
+    void OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent*);
 
     void CollectStrings(MainWindow*);
     void CollectTabsRegular(MainWindow*, WindowTab* currTab);
@@ -1021,10 +1023,22 @@ static VirtRichText* NewHelpText(const HelpStyle& st, Str markup) {
 
 // a row of help items: virtual controls sitting in the palette's layout next
 // to the real edit and list
-static HBox* NewHelpRow(HBox* box) {
-    box->alignMain = MainAxisAlign::MainCenter;
+static Wrap* NewHelpRow(Wrap* box) {
     box->alignCross = CrossAxisAlign::CrossCenter;
     return box;
+}
+
+void CommandPaletteWnd::OnGetMinMaxInfo(WindowBase::GetMinMaxInfoEvent* ev) {
+    if (!layout || !hwnd) return;
+    DpiScope scope(hwnd);
+    int line = PlatformFontLineHeight(font);
+    int width = std::max(DpiScale(320), 12 * line);
+    int height = (switchRow ? switchRow->MinIntrinsicHeight(width) : 0) +
+                 (helpRow ? helpRow->MinIntrinsicHeight(width) : 0) + 8 * line;
+    Rect frame = HwndWindowRect(hwnd), client = HwndClientRect(hwnd);
+    Rect work = PlatformWindowWorkArea(hwnd);
+    ev->mmi->ptMinTrackSize = {std::min(width + frame.dx - client.dx, work.dx),
+                               std::min(height + frame.dy - client.dy, work.dy)};
 }
 
 enum {
@@ -1206,11 +1220,13 @@ bool CommandPaletteWnd::Create(MainWindow* win, Str prefix, int smartTabAdvance)
     {
         CreateCustomArgs args;
         args.visible = false;
-        args.style = WS_POPUPWINDOW;
+        args.style = WS_POPUPWINDOW | WS_THICKFRAME;
         // owned tool window: stays above the frame, off the taskbar (#6126)
         args.owner = win->hwndFrame;
         args.exStyle = WS_EX_TOOLWINDOW;
         args.font = GetFont();
+        onGetMinMaxInfo =
+            MkMethod1<CommandPaletteWnd, WindowBase::GetMinMaxInfoEvent*, &CommandPaletteWnd::OnGetMinMaxInfo>(this);
         CreateCustom(args);
     }
     if (!hwnd) {
@@ -1246,11 +1262,13 @@ bool CommandPaletteWnd::Create(MainWindow* win, Str prefix, int smartTabAdvance)
 
     if (!smartTabMode) {
         vbox->AddChild(new Spacer(0, DpiScale(4)));
-        auto* box = new HBox();
+        auto* box = new Wrap();
         box->rtl = CommandPaletteUiRtl();
         switchRow = NewHelpRow(box);
         FillSwitchRow();
-        vbox->AddChild(switchRow);
+        auto* centered = new Align(switchRow);
+        centered->HAlign = AlignCenter;
+        vbox->AddChild(centered);
     }
 
     {
@@ -1300,14 +1318,16 @@ bool CommandPaletteWnd::Create(MainWindow* win, Str prefix, int smartTabAdvance)
     }
 
     {
-        auto* box = new HBox();
+        auto* box = new Wrap();
         box->rtl = CommandPaletteUiRtl();
         helpRow = NewHelpRow(box);
-        vbox->AddChild(helpRow);
+        auto* centered = new Align(helpRow);
+        centered->HAlign = AlignCenter;
+        vbox->AddChild(centered);
         UpdateHelpRow();
     }
 
-    auto* padding = new Padding(vbox, DpiScaledInsets(4, 8));
+    auto* padding = PadWindowScroll(vbox, listBox, DpiScaledInsets(4, 8));
     layout = padding;
 
     auto rc = HwndClientRect(win->hwndFrame);

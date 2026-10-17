@@ -80,6 +80,15 @@ static bool IsNamePrefix(WStr word) {
     return false;
 }
 
+static bool HitsCitationGlyph(Rect glyph, Point pt) {
+    if (glyph.IsEmpty()) {
+        return false;
+    }
+    // Allow rounding at glyph edges without making nearby prose a hover target.
+    glyph.Inflate(1, 1);
+    return glyph.Contains(pt);
+}
+
 // Detect a "(Surname et al., 2020)" / "Surname (2020)" citation pattern at
 // pagePos in a page's glyph arrays. On success, returns true and fills
 // *surnameOut with a freshly-allocated UTF-8 surname (caller frees) and
@@ -233,9 +242,11 @@ bool DetectCitationInPageText(WStr text, const Rect* coords, int textLen, Point 
 
     // 4. Walk back from the year through punctuation to find the surname.
     int p = bestYearPos - 1;
+    bool citationPunctuation = false;
     // Skip spaces and citation punctuation: ", " " ( ", " "
     while (p >= 0 && (s.s[p] == L' ' || s.s[p] == L'\t' || s.s[p] == L',' || s.s[p] == L'(' || s.s[p] == L'\n' ||
                       s.s[p] == L';')) {
+        citationPunctuation |= s.s[p] == L',' || s.s[p] == L'(';
         p--;
     }
 
@@ -262,6 +273,7 @@ bool DetectCitationInPageText(WStr text, const Rect* coords, int textLen, Point 
             }
             // "et" required.
             if (r >= 1 && (s.s[r] == L't' || s.s[r] == L'T') && (s.s[r - 1] == L'e' || s.s[r - 1] == L'E')) {
+                citationPunctuation = true;
                 p = r - 2;
                 while (p >= 0 && s.s[p] == L' ') {
                     p--;
@@ -346,6 +358,21 @@ bool DetectCitationInPageText(WStr text, const Rect* coords, int textLen, Point 
         return false;
     }
 
+    if (!citationPunctuation && !(surnameStart > 0 && s.s[surnameStart - 1] == L'(')) {
+        return false;
+    }
+    bool hit = false;
+    for (int ci = surnameStart; ci < bestYearPos + 4; ci++) {
+        int gi = chunkGlyphs[ci];
+        if (gi >= 0 && HitsCitationGlyph(coords[gi], pagePos)) {
+            hit = true;
+            break;
+        }
+    }
+    if (!hit) {
+        return false;
+    }
+
     // Build surname string (author names are short).
     WCHAR surnameScratch[128]{};
     wstr::Builder surnameW;
@@ -385,7 +412,7 @@ bool DetectCitationInPageText(WStr text, const Rect* coords, int textLen, Point 
 // contains `year`. Returns true on hit and fills xOut/yOut with the entry's
 // anchor (top-left of the matching line's first glyph).
 bool FindSurnameInPageText(WStr text, const Rect* coords, int textLen, WStr surnameW, int year, float* xOut,
-                           float* yOut) {
+                           float* yOut, Rect source) {
     if (len(text) == 0 || textLen <= 0 || !coords || len(surnameW) == 0) {
         return false;
     }
@@ -459,6 +486,13 @@ bool FindSurnameInPageText(WStr text, const Rect* coords, int textLen, WStr surn
             }
         }
         if (matchAt < 0) {
+            continue;
+        }
+        // Parenthesized body citations are not bibliography destinations.
+        if (matchAt > i && text.s[matchAt - 1] == L'(') {
+            continue;
+        }
+        if (!coords[matchAt].Intersect(source).IsEmpty()) {
             continue;
         }
         // Verify the year appears within the next ~6 lines worth of glyphs
@@ -705,6 +739,17 @@ bool DetectNumericCitationInPageText(WStr text, const Rect* coords, int textLen,
         return false;
     }
 
+    bool hit = false;
+    for (int k = openPos; k <= closePos; k++) {
+        if (HitsCitationGlyph(coords[seq[k]], pagePos)) {
+            hit = true;
+            break;
+        }
+    }
+    if (!hit) {
+        return false;
+    }
+
     // 3. Pick the number token nearest the cursor inside the brackets.
     int bestNum = 0;
     int bestTokDist = INT_MAX;
@@ -763,7 +808,8 @@ bool DetectNumericCitationInPageText(WStr text, const Rect* coords, int textLen,
 // Search a page's glyph arrays for a bibliography entry whose line starts with
 // "[num]" at the page's leftmost text column. Returns true on hit and fills
 // xOut/yOut with the entry's anchor (top-left of the "[" glyph).
-bool FindNumericReferenceInPageText(WStr text, const Rect* coords, int textLen, int num, float* xOut, float* yOut) {
+bool FindNumericReferenceInPageText(WStr text, const Rect* coords, int textLen, int num, float* xOut, float* yOut,
+                                    Rect source) {
     if (len(text) == 0 || textLen <= 0 || !coords || num <= 0) {
         return false;
     }
@@ -793,6 +839,9 @@ bool FindNumericReferenceInPageText(WStr text, const Rect* coords, int textLen, 
             continue;
         }
         if (val != num) {
+            continue;
+        }
+        if (!coords[i].Intersect(source).IsEmpty()) {
             continue;
         }
         // Reject a mid-line "[num]" (body-text citation): require clear space

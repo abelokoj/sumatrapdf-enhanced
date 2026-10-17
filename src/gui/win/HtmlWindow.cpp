@@ -3,6 +3,8 @@
 
 #include "base/Base.h"
 #include "gui/Dpi.h"
+#include "gui/UIModels.h"
+#include "gui/VirtHost.h"
 #include "base/AutoWin.h"
 #include "base/Win.h"
 #include "base/GuessFileType.h"
@@ -1620,6 +1622,10 @@ void HtmlWindow::SetScrollbarToAuto() {
     hr = body->put_scroll(s);
     ReportIf(FAILED(hr));
     SysFreeString(s);
+    HWND browserHwnd = GetBrowserControlHwnd(hwndParent);
+    if (browserHwnd && gUiInstallScrollbar && (GetWindowLongPtrW(browserHwnd, GWL_STYLE) & (WS_VSCROLL | WS_HSCROLL))) {
+        gUiInstallScrollbar(browserHwnd);
+    }
 }
 
 // Returns the current scroll position of the document, or (-1, -1) if it

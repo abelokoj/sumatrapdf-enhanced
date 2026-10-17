@@ -176,6 +176,25 @@ struct LearningWindow {
 };
 static Vec<LearningWindow*> gLearningWindows;
 static int gLearningSerial = 0;
+static PlatformFont* LearningFont(LearningWindow* w) {
+    auto* base = GetAppFontForDpi(DpiGet());
+    float scale = gSettings && w
+                      ? (w->dictionary ? gSettings->dictionaryUI.fontScale : gSettings->dictionaryUI.learningHubScale)
+                      : 100;
+    if (!isfinite(scale) || scale < 50 || scale > 300) scale = 100;
+    if (scale == 100) return base;
+    return GetPlatformFont(base->GetName(), base->GetSize() * scale / 100, base->GetStyle());
+}
+static LearningWindow* LearningOwner(HWND child) {
+    HWND root = GetAncestor(child, GA_ROOT);
+    for (auto* w : gLearningWindows)
+        if (w->hwnd == root) return w;
+    return nullptr;
+}
+static PlatformFont* LearningControlFont(HWND child) {
+    HFONT font = (HFONT)SendMessageW(child, WM_GETFONT, 0, 0);
+    return font ? GetPlatformFont(font) : LearningFont(LearningOwner(child));
+}
 
 static LearningWindow* FindLearningWindow(HWND hwnd, int serial) {
     for (LearningWindow* w : gLearningWindows) {
@@ -281,9 +300,9 @@ static void UpdateGuide(LearningWindow* w);
 static void UpdateLearningChrome(LearningWindow* w);
 static void Feedback(LearningWindow* w, bool correct, Str message);
 static void SetLearningIcons(LearningWindow* w);
-static int LearningIconSize();
-static int LearningRowHeight() {
-    int content = std::max(PlatformFontLineHeight(GetAppFontForDpi(DpiGet())), LearningIconSize());
+static int LearningIconSize(LearningWindow*);
+static int LearningRowHeight(LearningWindow* w) {
+    int content = std::max(PlatformFontLineHeight(LearningFont(w)), LearningIconSize(w));
     return std::max(UiScalePx(32), content + UiScalePx(16));
 }
 static bool HasLearningGlyph(int id);
@@ -401,7 +420,7 @@ static void FormatDetails(LearningWindow* w) {
     POINT scroll{};
     SendMessageW(child, EM_GETSCROLLPOS, 0, (LPARAM)&scroll);
     LOGFONTW font{};
-    GetObjectW(GetAppFontForDpi(DpiGet())->GetHFont(), sizeof(font), &font);
+    GetObjectW(LearningFont(w)->GetHFont(), sizeof(font), &font);
     CHARFORMAT2W base{};
     base.cbSize = sizeof(base);
     base.dwMask = CFM_FACE | CFM_SIZE | CFM_COLOR | CFM_BOLD | CFM_ITALIC | CFM_LINK;
@@ -688,7 +707,7 @@ static void FitLearningInput(LearningWindow* w, int id) {
             available -= item.bounds.right - item.bounds.left + UiScalePx(10);
         }
     }
-    int row = std::max(UiScalePx(32), GetAppFontSize() + UiScalePx(16));
+    int row = std::max(UiScalePx(32), PlatformFontLineHeight(LearningFont(w)) + UiScalePx(16));
     int oldWidth = input->bounds.right - input->bounds.left;
     int width = LearningInputWidth(w, id, std::max(available, 1), row);
     int shift = width - oldWidth;
@@ -880,7 +899,7 @@ static void MeasureLearning(LearningWindow* w) {
     GetClientRect(w->hwnd, &client);
     VecReset(w->placements);
     int pad = UiScalePx(16), gap = UiScalePx(8);
-    int row = LearningRowHeight();
+    int row = LearningRowHeight(w);
     int width = std::max((int)client.right - pad * 2, row * 3), y = pad;
     bool measuring = false;
     // Stack overflowing groups instead of shrinking their text or hit targets.
@@ -903,27 +922,27 @@ static void MeasureLearning(LearningWindow* w) {
             bool footer = w->dictionary && (id == lcDeck || id == lcSave || id == lcLearned || id == lcOpenVocabulary);
             int inset = footer ? gap : pad;
             int size = combo ? std::max(row * 3, LearningTextWidth(child) + row + gap * 2) : row * 3;
-            if (combo && id == lcDeck && !w->dictionary && w->managementVisible) size += LearningIconSize() + gap;
+            if (combo && id == lcDeck && !w->dictionary && w->managementVisible) size += LearningIconSize(w) + gap;
             if (footer && combo) {
                 int reserved = 0;
                 for (int action : {lcSave, lcLearned, lcOpenVocabulary}) {
                     HWND button = Control(w, action);
                     if (!button || !(GetWindowLongPtrW(button, GWL_STYLE) & WS_VISIBLE)) continue;
-                    reserved +=
-                        LearningTextWidth(button) + gap * 3 + (HasLearningGlyph(action) ? LearningIconSize() + gap : 0);
+                    reserved += LearningTextWidth(button) + gap * 3 +
+                                (HasLearningGlyph(action) ? LearningIconSize(w) + gap : 0);
                 }
                 size = std::max(row * 3, LearningTextWidth(child) + row + gap * 2);
                 if (width - reserved >= row * 3) size = std::min(size, width - reserved);
             }
             if (!combo && !edit) {
                 HDC dc = PlatformFontMeasurementDC();
-                HGDIOBJ old = SelectObject(dc, GetAppFontForDpi(DpiGet())->GetHFont());
+                HGDIOBJ old = SelectObject(dc, LearningFont(w)->GetHFont());
                 WStr text = ToWStrTemp(LearningButtonCaption(child, id));
                 SIZE extent{};
                 GetTextExtentPoint32W(dc, CWStrTemp(text), len(text), &extent);
                 SelectObject(dc, old);
-                size =
-                    std::min(width, (int)extent.cx + inset * 2 + (HasLearningGlyph(id) ? LearningIconSize() + gap : 0));
+                size = std::min(width,
+                                (int)extent.cx + inset * 2 + (HasLearningGlyph(id) ? LearningIconSize(w) + gap : 0));
             }
             if (label) size = LearningTextWidth(child) + UiScalePx(4);
             if (LearningIconOnlyButton(id)) size = row;
@@ -935,7 +954,7 @@ static void MeasureLearning(LearningWindow* w) {
             if (edit && (id == lcQuery || id == lcAnswer || id == lcNewDeck)) {
                 int action = id == lcQuery ? lcLookup : id == lcAnswer ? lcCheck : lcCreateDeck;
                 int reserved = Control(w, action) ? LearningTextWidth(Control(w, action)) + pad * 2 + gap : 0;
-                if (Control(w, action) && HasLearningGlyph(action)) reserved += LearningIconSize() + gap;
+                if (Control(w, action) && HasLearningGlyph(action)) reserved += LearningIconSize(w) + gap;
                 size = LearningInputWidth(w, id, std::max(row * 3, width - reserved), row);
             }
             size = std::min(width, size);
@@ -958,7 +977,7 @@ static void MeasureLearning(LearningWindow* w) {
             }
             int h =
                 std::max(row, WrappedHeight(child, ToWStrTemp(LearningButtonCaption(child, id)),
-                                            size - gap * 2 - (HasLearningGlyph(id) ? LearningIconSize() + gap : 0)) +
+                                            size - gap * 2 - (HasLearningGlyph(id) ? LearningIconSize(w) + gap : 0)) +
                                   (footer ? gap : gap * 2));
             if (label || LearningIconOnlyButton(id) || (edit && !(GetWindowLongPtrW(child, GWL_STYLE) & ES_MULTILINE)))
                 h = row;
@@ -968,7 +987,7 @@ static void MeasureLearning(LearningWindow* w) {
         }
         if (found) y += height + gap;
     };
-    int title = WrappedHeight(Control(w, lcTitle), ToWStrTemp(Read(w, lcTitle)), width - LearningIconSize() - pad);
+    int title = WrappedHeight(Control(w, lcTitle), ToWStrTemp(Read(w, lcTitle)), width - LearningIconSize(w) - pad);
     Place(w, lcTitle, pad, y, width, title);
     y += title + gap;
     group({lcGuideStart, lcQueryLabel, lcQuery, lcLookup});
@@ -1046,7 +1065,7 @@ static void MeasureLearning(LearningWindow* w) {
         y = start;
         int listWidth = matching && width >= row * 16 ? (width - gap) / 2 : width;
         int stacks = matching && listWidth == width ? 2 : 1;
-        int grip = std::max(UiScalePx(24), LearningIconSize());
+        int grip = std::max(UiScalePx(24), LearningIconSize(w));
         int minimumAnswers = row * 3 * stacks;
         int panels = std::max(row * 2 + minimumAnswers, (int)client.bottom - y - tail - grip - gap * (stacks + 2));
         int prompt = choices ? std::clamp(panels * w->promptShare / 100, row * 2, panels - minimumAnswers)
@@ -2349,7 +2368,8 @@ static bool SetLibraryRows(LearningWindow* w, const Vec<VocabularyWord*>& words,
         bool reuse = cached && first < len(list->libraryHeights) && str::Eq(list->libraryHeights[first].id, word->id) &&
                      str::Eq(list->libraryHeights[first].caption, caption);
         if (!reuse) VecAppend(measureRows, len(heights));
-        VecAppend(heights, reuse ? list->libraryHeights[first].height : GetAppFontSizeForDpi(DpiGet()) + UiScalePx(20));
+        VecAppend(heights,
+                  reuse ? list->libraryHeights[first].height : PlatformFontLineHeight(LearningFont(w)) + UiScalePx(20));
         ids.Append(word->id);
         captions.Append(caption);
     }
@@ -2381,7 +2401,7 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             list->partialWrap = false;
             list->strings.Append(ToUtf8Temp(WStr((WCHAR*)lp)));
             list->wrapDirty = list->topsDirty = true;
-            VecAppend(list->heights, GetAppFontSizeForDpi(DpiGet()) + DpiScale(20));
+            VecAppend(list->heights, PlatformFontLineHeight(LearningControlFont(hwnd)) + DpiScale(20));
             return len(list->strings) - 1;
         case LB_RESETCONTENT:
             list->partialWrap = false;
@@ -2627,6 +2647,7 @@ static LRESULT CALLBACK ChoiceWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 static void DrawLearningChoice(DRAWITEMSTRUCT* item) {
+    auto* w = LearningOwner(item->hwndItem);
     RECT rc = item->rcItem;
     bool selected = (item->itemState & ODS_SELECTED) != 0;
     HBRUSH brush = CreateSolidBrush(ThemeControlBackgroundColor());
@@ -2656,7 +2677,7 @@ static void DrawLearningChoice(DRAWITEMSTRUCT* item) {
     SetBkMode(item->hDC, TRANSPARENT);
     SetTextColor(item->hDC, ThemeWindowTextColor());
     HFONT font = (HFONT)SendMessageW(item->hwndItem, WM_GETFONT, 0, 0);
-    HGDIOBJ old = SelectObject(item->hDC, font ? font : GetAppFontForDpi(DpiGet())->GetHFont());
+    HGDIOBJ old = SelectObject(item->hDC, font ? font : LearningControlFont(item->hwndItem)->GetHFont());
     InflateRect(&rc, -UiScalePx(10), -UiScalePx(10));
     RECT label = rc;
     auto* list = (ChoiceList*)GetWindowLongPtrW(item->hwndItem, GWLP_USERDATA);
@@ -2670,7 +2691,7 @@ static void DrawLearningChoice(DRAWITEMSTRUCT* item) {
     WStr text = LbGetTextTemp(item->hwndItem, item->itemID);
     if (item->CtlID == lcLibrary && len(text) >= 3 && text.s[len(text) - 1] == L'✔') {
         text = WStr(text.s, len(text) - 3);
-        int size = LearningIconSize();
+        int size = LearningIconSize(w);
         RECT check{rc.right - size, rc.top, rc.right, rc.top + size};
         DrawGreenCheck(item->hDC, check, selected ? ThemeHotBackgroundColor() : ThemeControlBackgroundColor());
         rc.right -= size + UiScalePx(8);
@@ -2689,7 +2710,7 @@ static void FitPackDropdown(LearningWindow* w) {
         HWND combo = Control(w, id);
         if (!combo) continue;
         HDC dc = PlatformFontMeasurementDC();
-        HGDIOBJ font = SelectObject(dc, GetAppFontForDpi(DpiGet())->GetHFont());
+        HGDIOBJ font = SelectObject(dc, LearningFont(w)->GetHFont());
         int width = 0;
         int count = (int)SendMessageW(combo, CB_GETCOUNT, 0, 0);
         for (int i = 0; i < count; i++) {
@@ -2698,14 +2719,14 @@ static void FitPackDropdown(LearningWindow* w) {
             SendMessageW(combo, CB_GETLBTEXT, i, (LPARAM)text);
             SIZE size{};
             GetTextExtentPoint32W(dc, text, std::max(length, 0), &size);
-            width = std::max(width, (int)size.cx + LearningIconSize() + UiScalePx(40));
+            width = std::max(width, (int)size.cx + LearningIconSize(w) + UiScalePx(40));
         }
         SelectObject(dc, font);
         MONITORINFO monitor{sizeof(monitor)};
         if (GetMonitorInfoW(MonitorFromWindow(w->hwnd, MONITOR_DEFAULTTONEAREST), &monitor))
             width = std::min(width, (int)(monitor.rcWork.right - monitor.rcWork.left) - UiScalePx(32));
         SendMessageW(combo, CB_SETDROPPEDWIDTH, std::max(width, UiScalePx(240)), 0);
-        int height = LearningRowHeight();
+        int height = LearningRowHeight(w);
         SendMessageW(combo, CB_SETITEMHEIGHT, 0, height);
         SendMessageW(combo, CB_SETITEMHEIGHT, (WPARAM)-1, height);
         int chrome = std::max(0, HwndWindowRect(combo).dy - height);
@@ -2741,10 +2762,10 @@ static void DrawPackChoice(LearningWindow* w, DRAWITEMSTRUCT* item) {
                          : deckChoice && item->itemID < (UINT)len(w->deckInstalled) && w->deckInstalled[item->itemID];
     SetBkMode(item->hDC, TRANSPARENT);
     SetTextColor(item->hDC, (item->itemState & ODS_DISABLED) ? ThemeWindowTextDisabledColor() : ThemeWindowTextColor());
-    HGDIOBJ font = SelectObject(item->hDC, GetAppFontForDpi(DpiGet())->GetHFont());
+    HGDIOBJ font = SelectObject(item->hDC, LearningFont(w)->GetHFont());
     InflateRect(&rc, -UiScalePx(8), 0);
     if (installed) {
-        int size = LearningIconSize();
+        int size = LearningIconSize(w);
         int top = rc.top + ((rc.bottom - rc.top) - size) / 2;
         RECT check{rc.left, top, rc.left + size, top + size};
         DrawGreenCheck(item->hDC, check, background);
@@ -2769,8 +2790,8 @@ static void DrawPackChoice(LearningWindow* w, DRAWITEMSTRUCT* item) {
     if (item->itemState & ODS_FOCUS) DrawFocusRect(item->hDC, &item->rcItem);
     SelectObject(item->hDC, font);
 }
-static int LearningIconSize() {
-    return std::max(GetAppFontSizeForDpi(DpiGet()), UiScalePx(std::clamp(gSettings->toolbarSize, 16, 64)));
+static int LearningIconSize(LearningWindow* w) {
+    return std::max(PlatformFontLineHeight(LearningFont(w)), UiScalePx(std::clamp(gSettings->toolbarSize, 16, 64)));
 }
 static bool HasLearningGlyph(int id) {
     return id == lcLookup || id == lcSave || id == lcPractice || id == lcGuideStart || id == lcOpenVocabulary ||
@@ -2856,11 +2877,11 @@ static void DrawLearningButton(DRAWITEMSTRUCT* item) {
     DeleteObject(pen);
     SetBkMode(item->hDC, TRANSPARENT);
     SetTextColor(item->hDC, ink);
-    HGDIOBJ oldFont = SelectObject(item->hDC, GetAppFontForDpi(DpiGet())->GetHFont());
+    HGDIOBJ oldFont = SelectObject(item->hDC, LearningControlFont(item->hwndItem)->GetHFont());
     RECT textRect = rc;
     InflateRect(&textRect, -UiScalePx(8), 0);
     if (HasLearningGlyph(item->CtlID)) {
-        int size = LearningIconSize();
+        int size = LearningIconSize(w);
         int left = LearningIconOnlyButton(item->CtlID) ? (rc.left + rc.right - size) / 2 : textRect.left;
         RECT icon{left, (rc.bottom + rc.top - size) / 2, left + size, (rc.bottom + rc.top + size) / 2};
         if (pressed) OffsetRect(&icon, 1, 1);
@@ -2962,9 +2983,9 @@ static void ShowLearningButtonTooltip(LearningWindow* w, HWND hwnd, bool keyboar
     DpiScope dpi(hwnd);
     if (!w->buttonTooltip) {
         w->buttonTooltip = new Tooltip();
-        w->buttonTooltip->Create({.parent = w->hwnd, .font = GetAppFontForDpi(DpiGet())});
+        w->buttonTooltip->Create({.parent = w->hwnd, .font = LearningFont(w)});
     }
-    w->buttonTooltip->SetFont(GetAppFontForDpi(DpiGet()));
+    w->buttonTooltip->SetFont(LearningFont(w));
     Rect bounds = HwndMapRectToWindow(HwndClientRect(hwnd), hwnd, w->hwnd);
     Str name = HwndGetTextTemp(hwnd);
     if (keyboard) {
@@ -3022,7 +3043,7 @@ static void DrawLearningPanel(LearningWindow* w, DRAWITEMSTRUCT* item) {
     DeleteObject(brush);
     DeleteObject(pen);
     if (title) {
-        int size = LearningIconSize();
+        int size = LearningIconSize(w);
         RECT icon{rc.left, rc.top, rc.left + size, rc.top + size};
         DrawLearningGlyph(item->hDC, w->dictionary ? lcGuideStart : lcPractice, icon, ThemeBrandColor());
         rc.left += size + UiScalePx(12);
@@ -3030,8 +3051,7 @@ static void DrawLearningPanel(LearningWindow* w, DRAWITEMSTRUCT* item) {
         InflateRect(&rc, -UiScalePx(16), -UiScalePx(16));
     SetBkMode(item->hDC, TRANSPARENT);
     SetTextColor(item->hDC, ThemeWindowTextColor());
-    HGDIOBJ font =
-        SelectObject(item->hDC, title && w->titleFont ? w->titleFont : GetAppFontForDpi(DpiGet())->GetHFont());
+    HGDIOBJ font = SelectObject(item->hDC, title && w->titleFont ? w->titleFont : LearningFont(w)->GetHFont());
     DrawTextW(item->hDC, CWStrTemp(Read(w, item->CtlID)), -1, &rc, DT_WORDBREAK | DT_NOPREFIX);
     SelectObject(item->hDC, font);
 }
@@ -3133,12 +3153,12 @@ static void DrawFeedback(LearningWindow* w, DRAWITEMSTRUCT* item) {
     DeleteObject(brush);
     SetBkMode(item->hDC, TRANSPARENT);
     SetTextColor(item->hDC, ink);
-    HGDIOBJ font = SelectObject(item->hDC, GetAppFontForDpi(DpiGet())->GetHFont());
+    HGDIOBJ font = SelectObject(item->hDC, LearningFont(w)->GetHFont());
     RECT rc = item->rcItem;
     InflateRect(&rc, -UiScalePx(12), -UiScalePx(6));
     Str message = Read(w, lcFeedback);
     if (w->feedbackKind > 0 && str::StartsWith(message, StrL("✔"))) {
-        int size = GetAppFontSizeForDpi(DpiGet());
+        int size = PlatformFontLineHeight(LearningFont(w));
         RECT check{rc.left, rc.top, rc.left + size, rc.top + size};
         DrawGreenCheck(item->hDC, check, bg);
         rc.left += size + UiScalePx(8);
@@ -3146,7 +3166,7 @@ static void DrawFeedback(LearningWindow* w, DRAWITEMSTRUCT* item) {
         str::TrimWSInPlace(message, str::TrimOpt::Left);
     }
     if (w->feedbackKind < 0 && str::StartsWith(message, StrL("✗"))) {
-        int size = GetAppFontSizeForDpi(DpiGet());
+        int size = PlatformFontLineHeight(LearningFont(w));
         RECT cross{rc.left, rc.top, rc.left + size, rc.top + size};
         auto* glyphFont = GetBoldPlatformFont(GetUserGuiFont(StrL("Segoe UI Symbol"), size));
         HGDIOBJ previous = SelectObject(item->hDC, glyphFont->GetHFont());
@@ -3174,7 +3194,7 @@ static void RefreshLearningStyle(LearningWindow* w) {
     SetLearningIcons(w);
     DeleteObject(w->titleFont);
     LOGFONTW title{};
-    GetObjectW(GetAppFontForDpi(DpiGet())->GetHFont(), sizeof(title), &title);
+    GetObjectW(LearningFont(w)->GetHFont(), sizeof(title), &title);
     title.lfWeight = FW_BOLD;
     title.lfHeight = title.lfHeight * 6 / 5;
     w->titleFont = CreateFontIndirectW(&title);
@@ -3185,8 +3205,7 @@ static void RefreshLearningStyle(LearningWindow* w) {
     for (HWND child : w->controls) {
         if (child) {
             SendMessageW(child, WM_SETFONT,
-                         (WPARAM)(child == Control(w, lcTitle) ? w->titleFont : GetAppFontForDpi(DpiGet())->GetHFont()),
-                         true);
+                         (WPARAM)(child == Control(w, lcTitle) ? w->titleFont : LearningFont(w)->GetHFont()), true);
             WCHAR klass[32]{};
             GetClassNameW(child, klass, dimof(klass));
             if (_wcsicmp(klass, L"EDIT") == 0) EditSetDefaultMargins(child);
@@ -3336,11 +3355,11 @@ static LRESULT CALLBACK LearningWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         case WM_MEASUREITEM: {
             auto* item = (MEASUREITEMSTRUCT*)lp;
             if (item->CtlType == ODT_COMBOBOX) {
-                item->itemHeight = LearningRowHeight();
+                item->itemHeight = LearningRowHeight(w);
                 return TRUE;
             }
             if (item->CtlType == ODT_LISTBOX) {
-                item->itemHeight = GetAppFontSizeForDpi(DpiGet()) + DpiScale(20);
+                item->itemHeight = PlatformFontLineHeight(LearningFont(w)) + DpiScale(20);
                 return TRUE;
             }
             break;
@@ -3593,7 +3612,7 @@ static HWND MakeControl(LearningWindow* w, int id, const WCHAR* klass, Str text,
     }
     if (_wcsicmp(klass, L"EDIT") == 0)
         SendMessageW(child, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(DpiScale(10), DpiScale(10)));
-    HFONT font = id == lcTitle && w->titleFont ? w->titleFont : GetAppFontForDpi(DpiGet())->GetHFont();
+    HFONT font = id == lcTitle && w->titleFont ? w->titleFont : LearningFont(w)->GetHFont();
     SendMessageW(child, WM_SETFONT, (WPARAM)font, false);
     if (_wcsicmp(klass, L"EDIT") == 0) EditSetDefaultMargins(child);
     if ((style & WS_VSCROLL) && _wcsicmp(klass, L"COMBOBOX") != 0) InstallAppScrollbar(child);
@@ -4217,7 +4236,7 @@ static void LearningRowTests(LearningWindow* w) {
             HWND combo = Control(w, w->dictionary ? lcVoice : lcDeck);
             HWND button = Control(w, w->dictionary ? lcPronounce : lcPractice);
             utassert(HwndWindowRect(combo).dy == HwndWindowRect(button).dy);
-            utassert(HwndWindowRect(combo).dy >= PlatformFontLineHeight(GetAppFontForDpi(DpiGet())));
+            utassert(HwndWindowRect(combo).dy >= PlatformFontLineHeight(LearningFont(w)));
             for (int id : {lcPronounce, lcStopVoice}) {
                 HWND audio = Control(w, id);
                 utassert(audio && HwndWindowRect(audio).dx == HwndWindowRect(audio).dy);
@@ -4231,11 +4250,11 @@ static void LearningRowTests(LearningWindow* w) {
                     format.cbSize = sizeof(format);
                     SendMessageW(child, EM_GETCHARFORMAT, SCF_DEFAULT, (LPARAM)&format);
                     LOGFONTW expected{};
-                    GetObjectW(GetAppFontForDpi(DpiGet())->GetHFont(), sizeof(expected), &expected);
+                    GetObjectW(LearningFont(w)->GetHFont(), sizeof(expected), &expected);
                     utassert(_wcsicmp(format.szFaceName, expected.lfFaceName) == 0);
                     utassert(format.yHeight == MulDiv(abs(expected.lfHeight), 1440, DpiGet()));
                 } else {
-                    utassert((HFONT)SendMessageW(child, WM_GETFONT, 0, 0) == GetAppFontForDpi(DpiGet())->GetHFont());
+                    utassert((HFONT)SendMessageW(child, WM_GETFONT, 0, 0) == LearningFont(w)->GetHFont());
                 }
             }
         }
@@ -4312,7 +4331,7 @@ static void LearningHiddenTests(LearningWindow* w) {
             HWND control = Control(w, lcOnlineFirst + slot);
             utassert(control && Selected(w, lcOnlineFirst + slot) == w->onlineOrder[slot]);
             utassert((GetWindowLongPtrW(control, GWL_STYLE) & (WS_VISIBLE | WS_TABSTOP)) == (WS_VISIBLE | WS_TABSTOP));
-            utassert((HFONT)SendMessageW(control, WM_GETFONT, 0, 0) == GetAppFontForDpi(DpiGet())->GetHFont());
+            utassert((HFONT)SendMessageW(control, WM_GETFONT, 0, 0) == LearningFont(w)->GetHFont());
         }
         utassert(GetNextDlgTabItem(w->hwnd, Control(w, lcLookupSource), false) == Control(w, lcSourcesToggle));
         utassert(GetNextDlgTabItem(w->hwnd, Control(w, lcSourcesToggle), false) == Control(w, lcOnlineFirst));
@@ -4384,6 +4403,44 @@ static LearningWindow* OpenLearningForTest(bool dictionary) {
         utassert(messages == 1);
     }
     return w;
+}
+
+static void LearningScaleTests(LearningWindow* w) {
+    float dictionaryScale = gSettings->dictionaryUI.fontScale;
+    float learningScale = gSettings->dictionaryUI.learningHubScale;
+    auto* globalFont = GetAppFontForDpi(DpiGet());
+    DetailBuilder sample(w);
+    sample.Add(StrL("Text scale sample"));
+    sample.Finish();
+    defer {
+        gSettings->dictionaryUI.fontScale = dictionaryScale;
+        gSettings->dictionaryUI.learningHubScale = learningScale;
+        RefreshLearningStyle(w);
+    };
+    float* scale = w->dictionary ? &gSettings->dictionaryUI.fontScale : &gSettings->dictionaryUI.learningHubScale;
+    for (float value : {50.f, 100.f, 137.5f, 200.f, 300.f, -1.f, 301.f}) {
+        *scale = value;
+        RefreshLearningStyle(w);
+        auto* font = LearningFont(w);
+        float expected = value >= 50 && value <= 300 ? value : 100;
+        utassert(fabsf(font->GetSize() - globalFont->GetSize() * expected / 100) < 0.01f);
+        utassert(GetAppFontForDpi(DpiGet()) == globalFont);
+        HWND query = Control(w, lcQuery);
+        if (query) utassert((HFONT)SendMessageW(query, WM_GETFONT, 0, 0) == font->GetHFont());
+        CHARRANGE selected{0, 1};
+        HWND details = Control(w, lcDetails);
+        if (!IsRichDetails(details)) {
+            utassert((HFONT)SendMessageW(details, WM_GETFONT, 0, 0) == font->GetHFont());
+            continue;
+        }
+        SendMessageW(details, EM_EXSETSEL, 0, (LPARAM)&selected);
+        CHARFORMAT2W format{};
+        format.cbSize = sizeof(format);
+        SendMessageW(details, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&format);
+        LOGFONTW logFont{};
+        GetObjectW(font->GetHFont(), sizeof(logFont), &logFont);
+        utassert(abs(format.yHeight - MulDiv(abs(logFont.lfHeight), 1440, DpiGet())) <= 1);
+    }
 }
 
 static void DictionaryAppearanceTests(LearningWindow* w) {
@@ -4471,6 +4528,7 @@ void VocabularyDialog_UnitTests() {
             utassert(HwndWindowRect(Control(learning, lcVoice)).dy ==
                      HwndWindowRect(Control(learning, lcPronounce)).dy);
             DictionaryAppearanceTests(learning);
+            LearningScaleTests(learning);
             LearningHiddenTests(learning);
             LearningRowTests(learning);
             HWND audio = Control(learning, lcPronounce);
@@ -4500,6 +4558,7 @@ void VocabularyDialog_UnitTests() {
             utassert(Control(hub, lcLibrary));
             utassert(HwndWindowRect(Control(hub, lcDeck)).dy == HwndWindowRect(Control(hub, lcPractice)).dy);
             LearningHiddenTests(hub);
+            LearningScaleTests(hub);
             LearningRowTests(hub);
             for (int id :
                  {lcAnswer, lcChoices, lcPairs, lcSplit, lcCheck, lcReveal, lcBack, lcAgain, lcHard, lcGood, lcEasy})

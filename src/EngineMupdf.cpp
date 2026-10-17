@@ -28,6 +28,7 @@ extern "C" {
 #include "EbookBase.h"
 #include "EbookDoc.h"
 #include "Settings.h"
+#include "MarkdownLayout.h"
 #include "EngineMupdf.h"
 
 // A5
@@ -4136,6 +4137,7 @@ bool EngineMupdf::Load(Str path, PasswordUI* pwdUI) {
 // is implemented in SumatraPDF.exe, PdfFilter and PdfPreview
 // TODO: allow setting per
 extern EBookUI* GetEBookUI();
+extern MarkdownUI* GetMarkdownUI();
 // per-document overrides (FileStates -> EBookUI), null unless the document has them
 extern FileEBookUI* GetFileEBookUI(Str filePath);
 
@@ -4528,6 +4530,17 @@ bool EngineMupdf::LoadFromStream(fz_stream* stm, Str nameHint, PasswordUI* pwdUI
             userCss = str::JoinTemp(userCss, s.customCSS);
         }
         usePublisherCss = s.ignoreDocumentCSS ? 0 : 1;
+    }
+    if (GuessFileTypeFromName(nameHint, true) == FileType::Markdown) {
+        auto* markdown = GetMarkdownUI();
+        if (markdown && ValidMarkdownLayout(markdown->readingWidth, markdown->leftMargin, markdown->rightMargin)) {
+            userCss =
+                str::JoinTemp(userCss, fmt("@page { margin-left: %gpt !important; margin-right: %gpt !important; }\n"
+                                           "body { margin-left: 0 !important; margin-right: 0 !important; "
+                                           "padding-left: 0 !important; padding-right: 0 !important; }\n",
+                                           DpiScale(ldx * markdown->leftMargin / 100, displayDPI),
+                                           DpiScale(ldx * markdown->rightMargin / 100, displayDPI)));
+        }
     }
     ebookUserCss = str::Dup(arena, userCss);
     ebookPublisherCss = usePublisherCss;
@@ -10850,3 +10863,58 @@ TempStr EngineMupdfGetPdfInfo(Str path) {
     fz_drop_context(ctx);
     return res;
 }
+
+#if IS_DEBUG
+bool EngineMupdf_UnitTestMarkdownLayout() {
+    auto* settings = GetMarkdownUI();
+    if (!settings) return false;
+    float savedWidth = settings->readingWidth, savedLeft = settings->leftMargin, savedRight = settings->rightMargin;
+    defer {
+        settings->readingWidth = savedWidth;
+        settings->leftMargin = savedLeft;
+        settings->rightMargin = savedRight;
+    };
+    WCHAR directory[MAX_PATH]{}, temporary[MAX_PATH]{};
+    if (!GetTempPathW(dimof(directory), directory) || !GetTempFileNameW(directory, L"sml", 0, temporary)) return false;
+    Str original = str::Dup(ToUtf8Temp(WStr(temporary)));
+    Str source = str::Dup(fmt("%s.md", original));
+    defer {
+        file::Delete(original);
+        file::Delete(source);
+        str::Free(original);
+        str::Free(source);
+    };
+    str::Builder paragraph;
+    for (int i = 0; i < 100; i++) paragraph.Append(StrL("Marker text for measuring horizontal page margins. "));
+    if (!file::WriteFile(source, ToStr(paragraph))) return false;
+    for (int dpi : {96, 144}) {
+        for (float left : {10.f, 20.f}) {
+            settings->readingWidth = 90 - left;
+            settings->leftMargin = left;
+            settings->rightMargin = 10;
+            EngineBase* engine = CreateEngineMupdfFromFile(source, FileType::Markdown, dpi);
+            defer {
+                if (engine) engine->Release();
+            };
+            if (!engine || engine->PageCount() < 1) return false;
+            int count = 0;
+            Rect* coordinates = nullptr;
+            Str text = engine->GetTextForPage(1, &count, &coordinates);
+            if (!len(text) || count < 1 || !coordinates) return false;
+            RectF page = engine->PageMediabox(1);
+            float expected = page.dx * left / 100;
+            if (std::abs(coordinates[0].x - expected) > 2.5f) {
+                logf("Markdown page margins: dpi=%d left=%g actual=%d expected=%g page=%g\n", dpi, left,
+                     coordinates[0].x, expected, page.dx);
+                return false;
+            }
+            int rightmost = 0;
+            for (int i = 0; i < count; i++) rightmost = std::max(rightmost, coordinates[i].x + coordinates[i].dx);
+            float rightEdge = page.dx * 0.9f;
+            float maxWrapSlack = 20.f * (float)dpi / 96.f + 2.f;
+            if (rightmost > rightEdge + 2.5f || rightmost < rightEdge - maxWrapSlack) return false;
+        }
+    }
+    return true;
+}
+#endif

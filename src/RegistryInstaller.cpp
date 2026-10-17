@@ -10,6 +10,13 @@
 #include "SumatraConfig.h"
 #include "Version.h"
 #include "AppTools.h"
+#include "Settings.h"
+#include "AppSettings.h"
+#include "SumatraPDF.h"
+#include "FileTypeIcons.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 #include "Installer.h"
 
 // All registry manipulation needed for installer / uninstaller
@@ -24,20 +31,7 @@ static SeqStrings gSupportedExts =
     ".jpg\0.jpeg\0.tga\0.gif\0.avif\0.heic\0.heif\0" \
     ".jfif\0.webp\0.jxl\0.bmp\0.ico\0.jxr\0.hdp\0.wdp\0";
 
-// Image extensions share icon resource id 7 (img-32bit.ico) — #5274
-static SeqStrings gImageExts =
-    ".tif\0.tiff\0.jp2\0.png\0.jpg\0.jpeg\0.tga\0.gif\0.avif\0.heic\0.heif\0" \
-    ".jfif\0.webp\0.jxl\0.bmp\0.ico\0.jxr\0.hdp\0.wdp\0";
 // clang-format on
-
-static bool ExtInList(SeqStrings list, Str ext) {
-    for (Str item = SeqStrFirst(list); len(item) > 0; item = SeqStrNext(item)) {
-        if (str::EqI(ext, item)) {
-            return true;
-        }
-    }
-    return false;
-}
 
 // notifies Shell that file associations changed.
 // Invalidates the icon and thumbnail cache.
@@ -214,30 +208,8 @@ static bool RegisterForOpenWith(HKEY hkey, Str installedExePath) {
         ok &= LoggedDeleteRegValue(hkey, progIDKey, {});
         // ok &= LoggedWriteRegStr(hkey, progIDKey, L"AppUserModelID", L"SumatraPDF Enhanced"); // ???
 
-        // Per https://docs.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-extracticona
-        // ",${n}" => n is 0-based index of the icon
-        // ",-${n}" => n is icon with resource id (see SumatraPDF.rc)
-        // 2=app, 3=epub, 4=cbx, 5=chm, 6=djvu, 7=img, 8=pdf, 9=mobi
-        TempStr iconPath;
-        if (str::EqI(ext, StrL(".epub"))) {
-            iconPath = str::JoinTemp(exePathQuoted, StrL(",-3"));
-        } else if (str::EqI(ext, StrL(".cbr")) || str::EqI(ext, StrL(".cbz")) || str::EqI(ext, StrL(".cbt")) ||
-                   str::EqI(ext, StrL(".cb7"))) {
-            iconPath = str::JoinTemp(exePathQuoted, StrL(",-4"));
-        } else if (str::EqI(ext, StrL(".chm"))) {
-            iconPath = str::JoinTemp(exePathQuoted, StrL(",-5"));
-        } else if (str::EqI(ext, StrL(".djvu"))) {
-            iconPath = str::JoinTemp(exePathQuoted, StrL(",-6"));
-        } else if (ExtInList(gImageExts, ext)) {
-            iconPath = str::JoinTemp(exePathQuoted, StrL(",-7"));
-        } else if (str::EqI(ext, StrL(".pdf"))) {
-            iconPath = str::JoinTemp(exePathQuoted, StrL(",-8"));
-        } else if (str::EqI(ext, StrL(".mobi")) || str::EqI(ext, StrL(".azw")) || str::EqI(ext, StrL(".azw3")) ||
-                   str::EqI(ext, StrL(".azw4")) || str::EqI(ext, StrL(".prc"))) {
-            iconPath = str::JoinTemp(exePathQuoted, StrL(",-9"));
-        } else {
-            iconPath = str::JoinTemp(exePathQuoted, StrL(",-2"));
-        }
+        int iconStyle = gSettings ? gSettings->fileTypeIconStyle : 3;
+        TempStr iconPath = FileTypeDefaultIcon(ext, installedExePath, iconStyle);
 
         key = str::JoinTemp(progIDKey, StrL("\\Application"));
         ok &= LoggedWriteRegStr(hkey, key, StrL("ApplicationCompany"), StrL("Krzysztof Kowalczyk"));
@@ -709,3 +681,91 @@ void LaunchDefaultAppDialogForExtension(HWND hwnd, Str extIn) {
     }
     ShellExecuteW(hwnd, L"open", CWStrTemp(uri), nullptr, nullptr, SW_SHOWNORMAL);
 }
+
+#if IS_DEBUG
+#if IS_DEBUG
+static bool ApplyFileTypeIconEntry(HKEY destination, HKEY source, Str ext, Str exePath, int style, Str cacheRoot) {
+    TempStr progIdKey = fmt("Software\\Classes\\SumatraPDFEnhanced%s", ext);
+    TempStr commandKey = str::JoinTemp(progIdKey, StrL("\\shell\\open\\command"));
+    TempStr command = ReadRegStrTemp(source, commandKey, {});
+    TempStr expected = fmt("\"%s\" \"%%1\"", exePath);
+    if (!str::EqI(command, expected)) return false;
+    TempStr key = str::JoinTemp(progIdKey, StrL("\\DefaultIcon"));
+    TempStr icon = FileTypeDefaultIcon(ext, exePath, style, cacheRoot);
+    if (!len(icon)) return false;
+    if (str::Eq(ReadRegStrTemp(destination, key, {}), icon)) return true;
+    return LoggedWriteRegStr(destination, key, {}, icon);
+}
+#endif
+
+#endif
+
+// Only our registered ProgID receives an icon; Windows keeps the user's default choice.
+bool ApplyFileTypeIcons(int style, Str cacheRoot) {
+    if (!ValidFileTypeIconStyle(style) || !HasPermission(Perm::RegistryAccess)) return false;
+    if (!IsOurExeInstalled()) return true;
+    TempStr exe = GetSelfExePathTemp();
+    StrVec keys, icons, previous;
+    Vec<bool> hadPrevious;
+    for (Str ext = SeqStrFirst(gSupportedExts); len(ext) > 0; ext = SeqStrNext(ext)) {
+        TempStr commandKey = fmt("Software\\Classes\\SumatraPDFEnhanced%s\\shell\\open\\command", ext);
+        TempStr command = ReadRegStrTemp(HKEY_CURRENT_USER, commandKey, {});
+        if (!len(command)) command = ReadRegStrTemp(HKEY_LOCAL_MACHINE, commandKey, {});
+        if (!len(command)) continue;
+        if (!str::EqI(command, fmt("\"%s\" \"%%1\"", exe))) return false;
+        TempStr key = fmt("Software\\Classes\\SumatraPDFEnhanced%s\\DefaultIcon", ext);
+        TempStr icon = FileTypeDefaultIcon(ext, exe, style, cacheRoot);
+        TempStr old = ReadRegStrTemp(HKEY_CURRENT_USER, key, {});
+        if (str::Eq(old, icon)) continue;
+        keys.Append(key);
+        icons.Append(icon);
+        previous.Append(old);
+        VecAppend(hadPrevious, HasRegistryValue(HKEY_CURRENT_USER, key, {}));
+    }
+    for (int i = 0; i < len(keys); i++) {
+        if (LoggedWriteRegStr(HKEY_CURRENT_USER, keys.At(i), {}, icons.At(i))) continue;
+        for (int j = i; j >= 0; j--) {
+            if (hadPrevious[j])
+                LoggedWriteRegStr(HKEY_CURRENT_USER, keys.At(j), {}, previous.At(j));
+            else
+                LoggedDeleteRegValue(HKEY_CURRENT_USER, keys.At(j), {});
+        }
+        ShellNotifyAssociationsChanged();
+        return false;
+    }
+    if (len(keys)) ShellNotifyAssociationsChanged();
+    return true;
+}
+
+#if IS_DEBUG
+void FileTypeIconRegistryTest() {
+    TempStr testKey = fmt("Software\\SumatraPDFEnhancedTests\\FileTypeIcons-%d-%llu", (int)GetCurrentProcessId(),
+                          (u64)GetTickCount64());
+    HKEY root = nullptr;
+    LSTATUS status =
+        RegCreateKeyExW(HKEY_CURRENT_USER, CWStrTemp(testKey), 0, nullptr, 0, KEY_ALL_ACCESS, nullptr, &root, nullptr);
+    utassert(status == ERROR_SUCCESS);
+    if (!root) return;
+    Str exe = StrL("C:\\Test Reader\\reader.exe");
+    Str commandKey = StrL("Software\\Classes\\SumatraPDFEnhanced.pdf\\shell\\open\\command");
+    Str iconKey = StrL("Software\\Classes\\SumatraPDFEnhanced.pdf\\DefaultIcon");
+    Str extensionKey = StrL("Software\\Classes\\.pdf");
+    Str otherIconKey = StrL("Software\\Classes\\OtherReader.pdf\\DefaultIcon");
+    Str userChoice = StrL("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.pdf\\UserChoice");
+    utassert(WriteRegStr(root, extensionKey, {}, StrL("OtherReader.pdf")));
+    utassert(WriteRegStr(root, otherIconKey, {}, StrL("other.exe,7")));
+    utassert(WriteRegStr(root, userChoice, StrL("ProgId"), StrL("OtherReader.pdf")));
+    utassert(!ApplyFileTypeIconEntry(root, root, StrL(".pdf"), exe, 3, {}));
+    utassert(!len(ReadRegStrTemp(root, iconKey, {})));
+    utassert(WriteRegStr(root, commandKey, {}, fmt("\"%s\" \"%%1\"", exe)));
+    utassert(ApplyFileTypeIconEntry(root, root, StrL(".pdf"), exe, 3, {}));
+    utassert(str::Eq(ReadRegStrTemp(root, iconKey, {}), fmt("\"%s\",-1000", exe)));
+    utassert(!ApplyFileTypeIconEntry(root, root, StrL(".pdf"), StrL("C:\\unrelated.exe"), 3, {}));
+    utassert(str::Eq(ReadRegStrTemp(root, extensionKey, {}), StrL("OtherReader.pdf")));
+    utassert(str::Eq(ReadRegStrTemp(root, otherIconKey, {}), StrL("other.exe,7")));
+    utassert(str::Eq(ReadRegStrTemp(root, userChoice, StrL("ProgId")), StrL("OtherReader.pdf")));
+    utassert(!ApplyFileTypeIconEntry(root, root, StrL(".unsupported"), exe, 3, {}));
+    RegCloseKey(root);
+    utassert(RegDeleteTreeW(HKEY_CURRENT_USER, CWStrTemp(testKey)) == ERROR_SUCCESS);
+}
+#endif

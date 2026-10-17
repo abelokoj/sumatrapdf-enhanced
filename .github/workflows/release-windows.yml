@@ -20,24 +20,29 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - id: version
         name: Check release version
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          version=$(tr -d '\r\n' < enhanced-version.txt)
-          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo 'Invalid enhanced-version.txt'; exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          release_tags=$(gh release list --limit 100 --json tagName,isDraft --jq '.[] | select(.isDraft == false) | .tagName')
-          if grep -Fxq "enhanced-$version" <<< "$release_tags"; then
-            echo 'Version already published. Update enhanced-version.txt for a new release.'
-            echo 'publish=false' >> "$GITHUB_OUTPUT"
-          else
-            echo 'publish=true' >> "$GITHUB_OUTPUT"
-          fi
+          $version = & bun cmd/gen-enhanced-version.ts --check
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid enhanced-version.txt' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          . ./cmd/helper/enhanced-version.ps1
+          $historyJson = & gh api --paginate --slurp "repos/$env:GH_REPO/releases?per_page=100"
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to verify complete release sequence' }
+          $historyPages = $historyJson | ConvertFrom-Json
+          $history = @($historyPages | ForEach-Object { $_ })
+          if (@($history | Where-Object { -not $_.draft -and $_.tag_name -eq "enhanced-$version" }).Count) {
+            Write-Output 'Version already published. Update enhanced-version.txt for a new release.'
+            'publish=false' >> $env:GITHUB_OUTPUT
+          } else {
+            Assert-EnhancedReleaseSequence $version $history
+            'publish=true' >> $env:GITHUB_OUTPUT
+          }
   build:
     needs: prepare
     if: needs.prepare.outputs.publish == 'true'

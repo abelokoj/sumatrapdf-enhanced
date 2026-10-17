@@ -2,6 +2,9 @@
 License: GPLv3 */
 
 #include "base/Base.h"
+#if IS_DEBUG
+#include "base/tests/UtAssert.h"
+#endif
 #include "base/File.h"
 #include "base/Pixmap.h"
 #include "base/UITask.h"
@@ -231,9 +234,8 @@ void FileHistoryPurge(bool alwaysUseDefaultState) {
 
     for (int j = len(*gStates); j > 0; j--) {
         FileState* state = (*gStates)[j - 1];
-        // never forget pinned documents, documents we've remembered a password for and
-        // documents for which there are favorites
-        if (state->isPinned || len(state->decryptionKey) > 0 || len(*state->favorites) > 0) {
+        // Keep completion, pins, passwords and favorites when ordinary history expires.
+        if (state->completed || state->isPinned || len(state->decryptionKey) > 0 || len(*state->favorites) > 0) {
             continue;
         }
         // NOLINTNEXTLINE(bugprone-branch-clone): each branch documents a different reason to forget
@@ -255,6 +257,47 @@ void FileHistoryPurge(bool alwaysUseDefaultState) {
         DeleteFileState(state);
     }
 }
+
+#if IS_DEBUG
+void FileHistoryCompleted_UnitTests() {
+    Vec<FileState*>* saved = gStates;
+    Settings* settings = NewSettings({});
+    Settings* reopened = nullptr;
+    defer {
+        gStates = saved;
+        DeleteSettings(settings);
+        DeleteSettings(reopened);
+    };
+    gStates = settings->fileStates;
+    for (int i = 0; i < kFileHistoryMaxFiles + 5; i++) {
+        auto* fs = NewFileState(fmt("C:\\CompletedHistoryTest\\doc-%d.pdf", i));
+        fs->openCount = 20;
+        VecAppend(*gStates, fs);
+    }
+    (*gStates)[0]->completed = true;
+    (*gStates)[0]->isMissing = true;
+    (*gStates)[1]->isMissing = true;
+    (*gStates)[11]->completed = true;
+    (*gStates)[11]->openCount = 0;
+    (*gStates)[12]->openCount = 0;
+    (*gStates)[kFileHistoryMaxFiles + 4]->completed = true;
+    FileHistoryPurge(true);
+    for (int index : {0, 11, kFileHistoryMaxFiles + 4})
+        utassert(FileHistoryFindByPath(fmt("C:\\CompletedHistoryTest\\doc-%d.pdf", index)) != nullptr);
+    for (int index : {1, 12, kFileHistoryMaxFiles + 3})
+        utassert(FileHistoryFindByPath(fmt("C:\\CompletedHistoryTest\\doc-%d.pdf", index)) == nullptr);
+
+    settings->rememberStatePerDocument = false;
+    Str data = SerializeSettings(settings, {});
+    reopened = NewSettings(data);
+    str::Free(data);
+    gStates = reopened->fileStates;
+    for (int index : {0, 11, kFileHistoryMaxFiles + 4}) {
+        FileState* fs = FileHistoryFindByPath(fmt("C:\\CompletedHistoryTest\\doc-%d.pdf", index));
+        utassert(fs && fs->completed);
+    }
+}
+#endif
 
 // list of recently closed documents, most recent at the end
 static StrVec gClosedDocuments;

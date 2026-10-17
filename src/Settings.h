@@ -335,6 +335,8 @@ struct FileState {
     // if true, the document is "pinned" to the Frequently Read list, so
     // that recently opened documents don't displace it
     bool isPinned;
+    // show this document in the home page Completed Documents section
+    bool completed;
     // if true, the document can no longer be found. State worth keeping is
     // still remembered, so the entry is hidden rather than removed
     bool isMissing;
@@ -713,6 +715,13 @@ struct FixedPageUI {
 
 // default values for annotations in PDF documents
 struct Annotations {
+    // last shape selected: 0 = line, 1 = polyline, 2 = rectangle, 3 =
+    // ellipse, 4 = polygon, 5 = arrow, 6 = dashed line, 7 = parabola, 8 =
+    // negative parabola, 9 = cubic, 10 = negative cubic, 11 = reciprocal,
+    // 12 = negative reciprocal, 13 = 2D axes, 14 = 3D axes
+    int shapeTool;
+    // rectangle corner radius in PDF points; 0 keeps square corners
+    float shapeCornerRadius;
     // saved settings for this pen type
     InkPenProfile inkBallpoint;
     // saved settings for this pen type
@@ -767,6 +776,9 @@ struct Annotations {
     ParsedColor lineColor;
     // fill color of newly created line annotations; unset means no fill
     ParsedColor lineInteriorColor;
+    // default border thickness for line annotations in points, from 0 to
+    // 64
+    float lineBorderWidth;
     // fill opacity of newly created line annotations, from 0 to 100
     // percent
     int lineInteriorOpacity;
@@ -776,6 +788,9 @@ struct Annotations {
     // fill color of newly created polyline annotations; unset means no
     // fill
     ParsedColor polyLineInteriorColor;
+    // default border thickness for polyline annotations in points, from 0
+    // to 64
+    float polyLineBorderWidth;
     // fill opacity of newly created polyline annotations, from 0 to 100
     // percent
     int polyLineInteriorOpacity;
@@ -784,6 +799,9 @@ struct Annotations {
     ParsedColor squareColor;
     // fill color of newly created square annotations; unset means no fill
     ParsedColor squareInteriorColor;
+    // default border thickness for square annotations in points, from 0 to
+    // 64
+    float squareBorderWidth;
     // fill opacity of newly created square annotations, from 0 to 100
     // percent
     int squareInteriorOpacity;
@@ -792,6 +810,9 @@ struct Annotations {
     ParsedColor circleColor;
     // fill color of newly created circle annotations; unset means no fill
     ParsedColor circleInteriorColor;
+    // default border thickness for circle annotations in points, from 0 to
+    // 64
+    float circleBorderWidth;
     // fill opacity of newly created circle annotations, from 0 to 100
     // percent
     int circleInteriorOpacity;
@@ -800,6 +821,9 @@ struct Annotations {
     ParsedColor polygonColor;
     // fill color of newly created polygon annotations; unset means no fill
     ParsedColor polygonInteriorColor;
+    // default border thickness for polygon annotations in points, from 0
+    // to 64
+    float polygonBorderWidth;
     // fill opacity of newly created polygon annotations, from 0 to 100
     // percent
     int polygonInteriorOpacity;
@@ -859,6 +883,15 @@ struct PinnedAnnotationTool {
     Str color;
     // pinned stroke width in PDF points
     float width;
+    // whether this preset includes the complete shape appearance
+    bool shapeStyle;
+    // pinned shape fill color; empty means no fill
+    Str fillColor;
+    // pinned shape fill opacity, 0 through 100; -1 means a legacy
+    // border-only preset
+    int fillOpacity;
+    // pinned rectangle corner radius in PDF points
+    float cornerRadius;
 };
 
 // customization options for Markdown UI. If UseFixedPageUI is true,
@@ -871,6 +904,15 @@ struct MarkdownUI {
     Str fontName;
     // Markdown MathML font; empty uses the companion of the text font
     Str mathFontName;
+    // browser Markdown reading width percentage; 0 preserves the supplied
+    // layout
+    float readingWidth;
+    // browser Markdown left margin percentage when a custom reading width
+    // is used
+    float leftMargin;
+    // browser Markdown right margin percentage; width plus margins must
+    // total 100
+    float rightMargin;
 };
 
 // dictionary reading appearance
@@ -880,6 +922,12 @@ struct DictionaryUI {
     Str fontName;
     // dictionary line-height multiplier; greater than 0 and at most 100
     float lineSpacing;
+    // dictionary text scale as a percentage of interface text, 50 through
+    // 300
+    float fontScale;
+    // Learning Hub text scale as a percentage of interface text, 50
+    // through 300
+    float learningHubScale;
 };
 
 // customization options for HTML UI. If UseFixedPageUI is true, MuPDF
@@ -958,6 +1006,13 @@ struct Settings {
     int homePageThumbnailSize;
     // maximum recent documents shown on the home page, from 1 to 200
     int homePageMaxRecentItems;
+    // keep the home page header visible while recent documents scroll
+    bool homePageFixedHeader;
+    // show whole document pages instead of cropped home page previews
+    bool homePageFullPageThumbnails;
+    // show framed cards and padding around home page thumbnails; false
+    // places previews and filenames directly on the home page
+    bool homePageThumbnailPadding;
     // maximum visible rows in the open-file tab list, from 1 to 50
     int tabListVisibleItems;
     // app scrollbar width in logical pixels, from 8 to 60
@@ -1136,15 +1191,63 @@ struct Settings {
     // visible, this is the height of the bookmarks (table of contents)
     // part, in screen pixels
     int tocDy;
+    // number of icon columns in the side toolbar in Annotation Mode (1-3)
+    int annotationToolbarColumns;
+    // layout of the vertical Annotation Mode toolbar with 2 or 3 columns:
+    // 1 = grouped (default), 2 = continuous rail. Does not change
+    // single-column or horizontal toolbars
+    int annotationToolbarStyle;
+    // Annotation Mode icon pen style: 1 = solid, 2 = fine tip
+    int annotationModeIconStyle;
+    // page number layout in the vertical Annotation Mode toolbar: 1 =
+    // short separator (default), 2 = one divided box, 3 = two stacked
+    // boxes. The current page is above the last page
+    int annotationPageNumberStyle;
+    // page number layout only in the three-column vertical Annotation Mode
+    // toolbar: 1 = current stacked layout (default), 2 = full-width
+    // horizontal page row, 3 = compact horizontal page field between
+    // Previous and Next. Other toolbar layouts are unchanged
+    int annotationThreeColumnPageStyle;
     // size of the toolbar icons in pixels at 100% display scaling (8-64);
     // the toolbar itself is a few pixels taller
     int toolbarSize;
     // pin icon design: 10 = soft outline (default), 3 = solid, 4 = round
     // head; all use the same diagonal angle
     int pinIconStyle;
+    // Windows file icons: 3 = outlined pages (included, default), 1 =
+    // folded pages, 2 = color covers. Alternatives download from GitHub
+    // after confirmation. Applies to this app's file associations; does
+    // not change default apps
+    int fileTypeIconStyle;
+    // preview appearance colors and icon styles while choosing them in
+    // settings; Cancel restores the saved appearance. Does not download
+    // assets or change Windows associations before saving
+    bool liveAppearancePreview;
+    // settings backups: automatic backs up changed saved preferences in
+    // the background and keeps the latest 20 copies; manual uses Back Up
+    // Now
+    Str settingsBackupMode;
+    // folder for settings backups; empty uses the Backups folder beside
+    // the settings file
+    Str settingsBackupDirectory;
     // color picker icon design: 8 = color tiles (default), 1 = classic
     // palette, 2 = soft palette, 6 = palette and dropper, 5 = color wheel
     int colorPickerIconStyle;
+    // drawing cursor design: 11 = rollerball, 12 = drafting pen, 9 =
+    // lacquer pen with conical tip
+    int penCursorStyle;
+    // drawing cursor size in logical pixels, from 0 to 100; 0 hides the
+    // drawing cursor; scales with monitor DPI, independently of interface
+    // and toolbar size
+    int penCursorSize;
+    // accent color of the drawing cursor; independent of annotation ink
+    // color
+    ParsedColor penCursorAccent;
+    // active tab design: 3 = outlined (default), 1 = solid color, 4 =
+    // inset
+    int activeTabStyle;
+    // active tab accent color; a file's Change Tab Color overrides it
+    ParsedColor activeTabAccent;
     // font size for bookmarks and favorites tree views, in pixels; 0 means
     // the Windows default. Not scaled by the display scaling
     int treeFontSize;
@@ -1407,7 +1510,7 @@ struct FieldInfo;
 struct StructInfo;
 extern const StructInfo gFavoriteInfo;
 extern const StructInfo gFileEBookUIInfo;
-extern const FieldInfo gFileStateFields[28];
+extern const FieldInfo gFileStateFields[29];
 extern StructInfo gFileStateInfo;
 extern const StructInfo gTabStateInfo;
 extern const StructInfo gSessionDataInfo;

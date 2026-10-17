@@ -10,6 +10,7 @@
 #include "gui/win/WinGui.h"
 #include "gui/PlatformFont.h"
 #include "gui/Gfx.h"
+#include "gui/GuiColors.h"
 #include "gui/VirtCtrl.h"
 
 #include "Settings.h"
@@ -44,6 +45,8 @@ struct ChangeThemeWnd : WindowBase {
 
     void KeepFocus();
     void OnSelectionChanged();
+    void DrawThemeItem(VirtListBox::DrawItemEvent*);
+    void DrawDocumentMode(DropDown::PreviewItemEvent*);
     void OnDocumentColorsFollowThemeChanged();
     void PreviewDocumentColors();
     void ApplyPreview();
@@ -187,6 +190,53 @@ void ChangeThemeWnd::OnTimer(WindowBase::TimerEvent* ev) {
     ApplyPreview();
 }
 
+static void DrawThemePalette(Gfx* gfx, Rect rc, Color foreground, Color background, Color accent) {
+    gfx->FillRoundedRect(rc, std::max(2, rc.dy / 5), background, AccentColor(background, 45));
+    int inset = std::max(2, rc.dy / 5);
+    Rect line{rc.x + inset, rc.y + inset, std::max(1, rc.dx - 2 * inset), std::max(1, rc.dy / 7)};
+    gfx->FillRect(line, foreground);
+    line.y = rc.Bottom() - inset - line.dy;
+    line.dx = std::max(1, line.dx * 2 / 3);
+    gfx->FillRect(line, accent);
+}
+
+void ChangeThemeWnd::DrawThemeItem(VirtListBox::DrawItemEvent* ev) {
+    auto* lb = ev->listBox;
+    Color background = lb->GetColor(kColListBg);
+    Color foreground = lb->GetColor(kColListText);
+    if (IsSpecialColor(background)) background = SysWindowBgColor();
+    if (IsSpecialColor(foreground)) foreground = SysWindowTextColor();
+    if (ev->selected) background = AccentColor(background, 30);
+    ev->gfx->FillRect(ev->itemRect, background);
+    int pad = DpiScale(4);
+    int height = std::max(8, ev->itemRect.dy - 2 * pad);
+    int width = height * 3 / 2;
+    Rect preview{ev->itemRect.x + pad, ev->itemRect.y + pad, width, height};
+    bool rtl = IsUIRtl();
+    if (rtl) preview.x = ev->itemRect.Right() - pad - width;
+    Color text, control, link;
+    if (ThemeGetPaletteAt(ev->itemIndex - 1, text, control, link)) {
+        DrawThemePalette(ev->gfx, preview, text, control, link);
+    }
+    Rect label = ev->itemRect;
+    label.SubLR(rtl ? pad : width + 2 * pad, rtl ? width + 2 * pad : pad);
+    u32 flags = gfxTextVCenter | gfxTextEllipsis;
+    if (rtl) flags |= gfxTextRight | gfxTextRtl;
+    ev->gfx->DrawText(model->Item(ev->itemIndex), label, flags, font, foreground);
+}
+
+void ChangeThemeWnd::DrawDocumentMode(DropDown::PreviewItemEvent* ev) {
+    Color foreground = kColBlack;
+    Color background = kColWhite;
+    Color accent = kColBlue;
+    if (ev->itemIndex != 0) {
+        foreground = ThemeWindowTextColor();
+        background = ThemeWindowBackgroundColor();
+        accent = ThemeWindowLinkColor();
+    }
+    DrawThemePalette(ev->gfx, ev->bounds, foreground, background, accent);
+}
+
 void ChangeThemeWnd::OnSelectionChanged() {
     SchedulePreview();
 }
@@ -267,6 +317,7 @@ bool ChangeThemeWnd::Create(MainWindow* mainWin) {
         for (int i = 0; i < nThemes; i++) {
             model->strings.Append(ThemeGetNameAt(i));
         }
+        c->onDrawItem = MkMethod1<ChangeThemeWnd, VirtListBox::DrawItemEvent*, &ChangeThemeWnd::DrawThemeItem>(this);
         c->onSelectionChanged = MkMethod0<ChangeThemeWnd, &ChangeThemeWnd::OnSelectionChanged>(this);
         c->SetModel(model);
         int currIdx = kFollowWindowsThemeListIndex;
@@ -293,7 +344,10 @@ bool ChangeThemeWnd::Create(MainWindow* mainWin) {
         args.parent = hwnd;
         args.font = GetFont();
         args.isRtl = isRtl;
+        args.previewItems = true;
         auto* c = new DropDown();
+        c->onPreviewItem =
+            MkMethod1<ChangeThemeWnd, DropDown::PreviewItemEvent*, &ChangeThemeWnd::DrawDocumentMode>(this);
         c->SetInsetsPt(4, 0, 0, 0);
         c->Create(args);
         c->SetItemsSeqStrings(gDocumentColorsFollowThemeNames);
@@ -322,7 +376,7 @@ bool ChangeThemeWnd::Create(MainWindow* mainWin) {
         vbox->AddChild(hbox);
     }
 
-    auto* padding = new Padding(vbox, DpiScaledInsets(4, 8));
+    auto* padding = PadWindowScroll(vbox, listBox, DpiScaledInsets(4, 8));
     layout = padding;
 
     int dx = DpiScale(280);
