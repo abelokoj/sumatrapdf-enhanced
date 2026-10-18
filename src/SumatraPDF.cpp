@@ -601,6 +601,9 @@ static WindowTab* CurrentTabForCache() {
 }
 
 static WindowTab* FindTabByFileInWindow(Str file, MainWindow* win) {
+    if (len(file) == 0 || !win) {
+        return nullptr;
+    }
     TempStr normFile = path::NormalizeTemp(file);
     for (WindowTab* tab : win->Tabs()) {
         if (tab->type != WindowTab::Type::Document) {
@@ -610,7 +613,14 @@ static WindowTab* FindTabByFileInWindow(Str file, MainWindow* win) {
         if (len(fp) == 0) {
             continue;
         }
-        if (path::IsSame(fp, normFile)) {
+        if (str::EqI(fp, file) || (normFile && str::EqI(fp, normFile))) {
+            return tab;
+        }
+        TempStr normTab = path::NormalizeTemp(fp);
+        if ((normTab && str::EqI(normTab, file)) || (normTab && normFile && str::EqI(normTab, normFile))) {
+            return tab;
+        }
+        if (path::IsSame(fp, file) || (normFile && path::IsSame(fp, normFile))) {
             return tab;
         }
     }
@@ -14037,6 +14047,22 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
             DebugCorruptMemory();
             break;
 #endif
+
+        case CmdAddBookmark:
+            if (CanEditPdfBookmarks(win)) {
+                AddBookmarkForCurrentPage(win);
+            } else {
+                AddFavoriteForCurrentPage(win);
+            }
+            break;
+
+        case CmdRenameBookmark:
+            RenameSelectedBookmark(win);
+            break;
+
+        case CmdDeleteBookmark:
+            DeleteSelectedBookmark(win);
+            break;
 
         case CmdFavoriteAdd:
             AddFavoriteForCurrentPage(win);

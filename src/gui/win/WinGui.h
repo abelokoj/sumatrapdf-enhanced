@@ -1086,11 +1086,21 @@ struct TreeView : ControlBase {
         LRESULT result = 0;
     };
 
+    struct LabelEditEvent {
+        TreeView* treeView = nullptr;
+        TreeItem treeItem = 0;
+        NMTVDISPINFOW* dispInfo = nullptr;
+        const WCHAR* newText = nullptr;
+        bool isBegin = false;
+        LRESULT result = 0;
+    };
+
     using KeyDownHandler = Func1<KeyDownEvent*>;
     using ClickHandler = Func1<ClickEvent*>;
     using CustomDrawHandler = Func1<CustomDrawEvent*>;
     using GetTooltipHandler = Func1<TreeView::GetTooltipEvent*>;
     using SelectionChangedHandler = Func1<SelectionChangedEvent*>;
+    using LabelEditHandler = Func1<LabelEditEvent*>;
 
     TreeView();
     ~TreeView() override;
@@ -1147,6 +1157,12 @@ struct TreeView : ControlBase {
 
     // for WM_NOITFY with TVN_KEYDOWN
     KeyDownHandler onKeyDown;
+
+    // for WM_NOTIFY with TVN_BEGINLABELEDIT
+    LabelEditHandler onBeginLabelEdit;
+
+    // for WM_NOTIFY with TVN_ENDLABELEDIT
+    LabelEditHandler onEndLabelEdit;
 
     // private
     TVITEMW item{};

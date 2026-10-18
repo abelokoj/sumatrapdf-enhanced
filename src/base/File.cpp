@@ -831,8 +831,15 @@ bool IsSame(Str path1, Str path2) {
     WCHAR* path2W = CWStrTemp(path2);
     bool isSame = false;
     bool needFallback = true;
-    HANDLE h1 = CreateFileW(path1W, 0, 0, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-    HANDLE h2 = CreateFileW(path2W, 0, 0, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    HANDLE h1 = CreateFileW(path1W, FILE_READ_ATTRIBUTES, share, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h1 == INVALID_HANDLE_VALUE) {
+        h1 = CreateFileW(path1W, 0, share, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    }
+    HANDLE h2 = CreateFileW(path2W, FILE_READ_ATTRIBUTES, share, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h2 == INVALID_HANDLE_VALUE) {
+        h2 = CreateFileW(path2W, 0, share, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    }
 
     if (h1 != INVALID_HANDLE_VALUE && h2 != INVALID_HANDLE_VALUE) {
         BY_HANDLE_FILE_INFORMATION fi1, fi2;
@@ -842,8 +849,12 @@ bool IsSame(Str path1, Str path2) {
         }
     }
 
-    CloseHandle(h1);
-    CloseHandle(h2);
+    if (h1 != INVALID_HANDLE_VALUE) {
+        CloseHandle(h1);
+    }
+    if (h2 != INVALID_HANDLE_VALUE) {
+        CloseHandle(h2);
+    }
 
     if (!needFallback) {
         return isSame;
@@ -851,7 +862,7 @@ bool IsSame(Str path1, Str path2) {
 
     TempStr npath1 = NormalizeTemp(path1);
     TempStr npath2 = NormalizeTemp(path2);
-    return npath1 && str::EqI(npath1, npath2);
+    return npath1 && npath2 && str::EqI(npath1, npath2);
 }
 
 bool HasVariableDriveLetter(Str path) {

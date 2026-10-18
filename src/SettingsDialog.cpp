@@ -2065,11 +2065,11 @@ void SettingsWnd::OnOk(VirtMouseEvent*) {
     gSettings->dictionaryUI.learningHubScale = (float)learningScale;
     if (dropDictionaryDesign) {
         int dSel = CbGetCurrentSelection(dropDictionaryDesign);
-        gSettings->dictionaryUI.dictionaryDesign = (dSel == 1) ? 2 : 1;
+        gSettings->dictionaryUI.dictionaryDesign = std::clamp(dSel, 0, 2);
     }
     if (dropLearningHubDesign) {
         int lSel = CbGetCurrentSelection(dropLearningHubDesign);
-        gSettings->dictionaryUI.learningHubDesign = (lSel == 1) ? 2 : 1;
+        gSettings->dictionaryUI.learningHubDesign = std::clamp(lSel, 0, 2);
     }
     str::ReplaceWithCopy(&gSettings->markdownUI.fontName, markdownFont);
     str::ReplaceWithCopy(&gSettings->markdownUI.mathFontName, markdownMath);
@@ -3236,16 +3236,18 @@ bool SettingsWnd::Create(MainWindow* mainWin, SettingsView view) {
         FillNumberChoices(dropLearningScale, StrL("75|100|125|150|200|300"), gSettings->dictionaryUI.learningHubScale);
         dropDictionaryDesign = MakeDropDown(this, font, isRtl, false);
         StrVec dictDesigns;
+        dictDesigns.Append(Tr("Design 0: Classic / Standard (SumatraPDF Traditional)"));
         dictDesigns.Append(Tr("Design 1: Curated Lexicon (Apple & Oxford Edition)"));
         dictDesigns.Append(Tr("Design 2: Deep-Work Inspector (Dual-Pane Academic & Dev)"));
         dropDictionaryDesign->SetItems(dictDesigns);
-        CbSetCurrentSelection(dropDictionaryDesign, gSettings->dictionaryUI.dictionaryDesign == 2 ? 1 : 0);
+        CbSetCurrentSelection(dropDictionaryDesign, std::clamp(gSettings->dictionaryUI.dictionaryDesign, 0, 2));
         dropLearningHubDesign = MakeDropDown(this, font, isRtl, false);
         StrVec hubDesigns;
+        hubDesigns.Append(Tr("Design 0: Classic / Standard (SumatraPDF Traditional)"));
         hubDesigns.Append(Tr("Design 1: Mastery Dashboard (Duolingo & Anki Pro)"));
         hubDesigns.Append(Tr("Design 2: Cognitive Knowledge Canvas (RemNote & SuperMemo)"));
         dropLearningHubDesign->SetItems(hubDesigns);
-        CbSetCurrentSelection(dropLearningHubDesign, gSettings->dictionaryUI.learningHubDesign == 2 ? 1 : 0);
+        CbSetCurrentSelection(dropLearningHubDesign, std::clamp(gSettings->dictionaryUI.learningHubDesign, 0, 2));
         DropDown* controls[] = {dropDictionaryFont, dropDictionarySpacing, dropDictionaryScale, dropLearningScale,
                                 dropDictionaryDesign, dropLearningHubDesign};
         Str labels[] = {Tr("Reading font:"), Tr("Line spacing:"), Tr("Dictionary text scale (%):"),

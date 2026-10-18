@@ -923,6 +923,10 @@ static void TocCollapseSameLevel(TreeView* tv, TreeItem ti) {
 
 // clang-format off
 static MenuDef menuDefContextToc[] = {
+    { TrN("Add Bookmark (Current Page)"), CmdAddBookmark },
+    { TrN("Rename Bookmark"), CmdRenameBookmark },
+    { TrN("Delete Bookmark"), CmdDeleteBookmark },
+    { StrL(kMenuSeparator), 0 },
     { TrN("Edit PDF bookmarks..."), CmdEditBookmarks },
     { StrL(kMenuSeparator), 0 },
     {
@@ -1008,7 +1012,15 @@ static void TocContextMenu(ContextMenuEvent* ev) {
 
     WindowTab* tab = win->CurrentTab();
     HMENU popup = BuildMenuFromDef(menuDefContextToc, CreatePopupMenu(), nullptr);
-    if (!CanEditPdfBookmarks(win)) MenuRemove(popup, CmdEditBookmarks);
+    if (!CanEditPdfBookmarks(win)) {
+        MenuRemove(popup, CmdAddBookmark);
+        MenuRemove(popup, CmdRenameBookmark);
+        MenuRemove(popup, CmdDeleteBookmark);
+        MenuRemove(popup, CmdEditBookmarks);
+    } else if (ti == TreeModel::kNullItem) {
+        MenuRemove(popup, CmdRenameBookmark);
+        MenuRemove(popup, CmdDeleteBookmark);
+    }
 
     Str path;
     Str fileName;
@@ -1087,6 +1099,15 @@ static void TocContextMenu(ContextMenuEvent* ev) {
     FreeMenuOwnerDrawInfoData(popup);
     DestroyMenu(popup);
     switch (cmd) {
+        case CmdAddBookmark:
+            AddBookmarkForCurrentPage(win);
+            break;
+        case CmdRenameBookmark:
+            RenameSelectedBookmark(win);
+            break;
+        case CmdDeleteBookmark:
+            DeleteSelectedBookmark(win);
+            break;
         case CmdEditBookmarks:
             ShowCpdfBookmarks(win);
             break;
@@ -1132,6 +1153,185 @@ static void TocContextMenu(ContextMenuEvent* ev) {
             OpenAttachment(tab, fileName, attachmentNo);
         }
     }
+}
+
+static int FindMaxTocId(TocItem* item) {
+    if (!item) return 0;
+    int maxId = item->id;
+    for (TocItem* curr = item; curr; curr = curr->next) {
+        if (curr->id > maxId) maxId = curr->id;
+        if (curr->child) {
+            int cId = FindMaxTocId(curr->child);
+            if (cId > maxId) maxId = cId;
+        }
+    }
+    return maxId;
+}
+
+static void TocOnBeginLabelEdit(TreeView::LabelEditEvent* ev) {
+    MainWindow* win = FindMainWindowByHwnd(ev->treeView->hwnd);
+    if (!win || !CanEditPdfBookmarks(win) || !ev->treeItem) {
+        ev->result = TRUE; // prevent edit
+        return;
+    }
+    ev->result = FALSE; // allow edit
+}
+
+static void TocOnEndLabelEdit(TreeView::LabelEditEvent* ev) {
+    MainWindow* win = FindMainWindowByHwnd(ev->treeView->hwnd);
+    if (!win || !ev->treeItem) {
+        ev->result = FALSE;
+        return;
+    }
+    if (ev->newText && len(ev->newText) > 0) {
+        TocItem* ti = (TocItem*)ev->treeItem;
+        str::ReplaceWithCopy(&ti->title, ToUtf8Temp(ev->newText));
+        ev->result = TRUE;
+        SaveBookmarksAsync(win);
+    }
+}
+
+void AddBookmarkForCurrentPage(MainWindow* win) {
+    if (!win || !win->IsDocLoaded() || !win->ctrl) {
+        return;
+    }
+    ShowSidebarView(win, SidebarView::Bookmarks);
+    if (!win->tocLoaded) {
+        LoadTocTree(win);
+    }
+    if (!win->tocTreeView) {
+        return;
+    }
+
+    int pageNo = win->ctrl->CurrentPageNo();
+    if (pageNo < 1) {
+        pageNo = 1;
+    }
+
+    TempStr defaultTitle = fmt(Tr("Page %d").s, pageNo);
+
+    WindowTab* tab = win->CurrentTab();
+    TocTree* tree = tab ? tab->currToc : nullptr;
+    if (!tree) {
+        TocItem* root = new TocItem();
+        root->id = 0;
+        root->title = str::Dup(StrL("Root"));
+        tree = new TocTree(root);
+        if (tab) {
+            tab->currToc = tree;
+        }
+        win->tocLoaded = true;
+        win->tocTreeView->SetTreeModel(tree);
+    }
+
+    TocItem* parentItem = tree->root;
+    TocItem* insertAfterItem = nullptr;
+
+    TreeItem sel = win->tocTreeView->GetSelection();
+    if (sel != TreeModel::kNullItem) {
+        TocItem* selToc = (TocItem*)sel;
+        if (selToc && selToc != tree->root) {
+            parentItem = selToc->parent ? selToc->parent : tree->root;
+            insertAfterItem = selToc;
+        }
+    }
+
+    TocItem* newItem = new TocItem();
+    newItem->id = FindMaxTocId(tree->root) + 1;
+    newItem->title = str::Dup(defaultTitle);
+    newItem->pageNo = pageNo;
+    newItem->isOpenDefault = true;
+    newItem->parent = parentItem;
+
+    if (insertAfterItem) {
+        newItem->next = insertAfterItem->next;
+        insertAfterItem->next = newItem;
+    } else {
+        if (!parentItem->child) {
+            parentItem->child = newItem;
+        } else {
+            TocItem* last = parentItem->child;
+            while (last->next) {
+                last = last->next;
+            }
+            last->next = newItem;
+        }
+    }
+
+    HTREEITEM hParent = (parentItem == tree->root) ? TVI_ROOT : win->tocTreeView->GetHandleByTreeItem((TreeItem)parentItem);
+    HTREEITEM hInsertAfter = insertAfterItem ? win->tocTreeView->GetHandleByTreeItem((TreeItem)insertAfterItem) : TVI_LAST;
+
+    TVINSERTSTRUCTW tis{};
+    tis.hParent = hParent;
+    tis.hInsertAfter = hInsertAfter;
+    tis.itemex.mask = TVIF_TEXT | TVIF_PARAM | TVIF_STATE;
+    tis.itemex.pszText = CWStrTemp(newItem->title);
+    tis.itemex.lParam = (LPARAM)newItem;
+    tis.itemex.state = TVIS_EXPANDED;
+    tis.itemex.stateMask = TVIS_EXPANDED;
+
+    HTREEITEM hNew = TreeView_InsertItem(win->tocTreeView->hwnd, &tis);
+    if (hNew) {
+        tree->SetUserData((TreeItem)newItem, (uintptr_t)hNew);
+        TreeView_EnsureVisible(win->tocTreeView->hwnd, hNew);
+        win->tocTreeView->SelectItem((TreeItem)newItem);
+        HWND hwndEdit = TreeView_EditLabel(win->tocTreeView->hwnd, hNew);
+        if (hwndEdit) {
+            SetFocus(hwndEdit);
+        }
+    }
+}
+
+void RenameSelectedBookmark(MainWindow* win) {
+    if (!win || !win->tocTreeView) {
+        return;
+    }
+    TreeItem sel = win->tocTreeView->GetSelection();
+    if (sel == TreeModel::kNullItem) {
+        return;
+    }
+    HTREEITEM hItem = win->tocTreeView->GetHandleByTreeItem(sel);
+    if (!hItem) {
+        return;
+    }
+    HWND hwndEdit = TreeView_EditLabel(win->tocTreeView->hwnd, hItem);
+    if (hwndEdit) {
+        SetFocus(hwndEdit);
+    }
+}
+
+void DeleteSelectedBookmark(MainWindow* win) {
+    if (!win || !win->tocTreeView) {
+        return;
+    }
+    TreeItem sel = win->tocTreeView->GetSelection();
+    if (sel == TreeModel::kNullItem) {
+        return;
+    }
+    TocItem* item = (TocItem*)sel;
+    if (!item) {
+        return;
+    }
+
+    TocItem* parent = item->parent;
+    if (parent) {
+        if (parent->child == item) {
+            parent->child = item->next;
+        } else {
+            for (TocItem* p = parent->child; p; p = p->next) {
+                if (p->next == item) {
+                    p->next = item->next;
+                    break;
+                }
+            }
+        }
+    }
+
+    HTREEITEM hItem = win->tocTreeView->GetHandleByTreeItem(sel);
+    if (hItem) {
+        TreeView_DeleteItem(win->tocTreeView->hwnd, hItem);
+    }
+    SaveBookmarksAsync(win);
 }
 
 static void OnTocCustomDraw(TreeView::CustomDrawEvent* /*ev*/);
@@ -1621,6 +1821,16 @@ static void TocTreeKeyDown(TreeView::KeyDownEvent* ev) {
             return;
         }
     }
+    if (ev->keyCode == VK_F2 && win && CanEditPdfBookmarks(win)) {
+        RenameSelectedBookmark(win);
+        ev->result = 1;
+        return;
+    }
+    if (ev->keyCode == VK_DELETE && win && CanEditPdfBookmarks(win)) {
+        DeleteSelectedBookmark(win);
+        ev->result = 1;
+        return;
+    }
     TocTreeKeyDown2(ev);
 }
 
@@ -1825,6 +2035,8 @@ void CreateToc(MainWindow* win) {
     treeView->onKeyDown = MkFunc1Void(TocTreeKeyDown);
     treeView->onGetTooltip = MkFunc1Void(TocCustomizeTooltip);
     treeView->onClick = MkFunc1Void(TocTreeClick);
+    treeView->onBeginLabelEdit = MkFunc1Void(TocOnBeginLabelEdit);
+    treeView->onEndLabelEdit = MkFunc1Void(TocOnEndLabelEdit);
 
     treeView->Create(args);
     ReportIf(!treeView->hwnd);

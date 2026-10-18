@@ -275,7 +275,7 @@ static const StructInfo gDictionaryUIInfo = {
     "dictionary reading font; empty follows the interface font; accepts any installed Windows font\0dictionary "
     "line-height multiplier; greater than 0 and at most 100\0dictionary text scale as a percentage of interface text, "
     "50 through 300\0Learning Hub text scale as a percentage of interface text, 50 through 300\0dictionary interface "
-    "design: 1 (Curated Lexicon) or 2 (Deep-Work Inspector)\0Learning Hub interface design: 1 (Mastery Dashboard) or 2 (Cognitive Canvas)",
+    "design: 0 (Classic / Standard), 1 (Curated Lexicon), 2 (Deep-Work Inspector)\0Learning Hub interface design: 0 (Classic / Standard), 1 (Mastery Dashboard), 2 (Cognitive Canvas)",
     false};
 
 static const FieldInfo gHtmlUIFields[] = {

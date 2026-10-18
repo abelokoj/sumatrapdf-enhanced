@@ -209,6 +209,9 @@ static UINT_PTR removeIfNoCopyPerms[] = {
 static UINT_PTR removeIfNoDiskAccessPerm[] = {
     CmdEditMarkdown,
     CmdEditBookmarks,
+    CmdAddBookmark,
+    CmdRenameBookmark,
+    CmdDeleteBookmark,
     CmdNewWindow,
     CmdOpenFile,
     CmdOpenFileNoHistory,
@@ -743,7 +746,8 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
         if (cmdId == CmdPdfShowInfo || cmdId == CmdPdfBake || cmdId == CmdPdfCompress || cmdId == CmdPdfDecompress ||
             cmdId == CmdPdfEncrypt || cmdId == CmdPdfDecrypt || cmdId == CmdPdfDeletePages ||
             cmdId == CmdPdfExtractPages || cmdId == CmdTogglePageBoxes || cmdId == CmdConvertPdfToImages ||
-            cmdId == CmdToggleEditPDF || cmdId == CmdEditBookmarks || cmdId == CmdMergePDF) {
+            cmdId == CmdToggleEditPDF || cmdId == CmdEditBookmarks || cmdId == CmdMergePDF ||
+            cmdId == CmdRenameBookmark || cmdId == CmdDeleteBookmark) {
             return CommandVisibility::Hide;
         }
     }

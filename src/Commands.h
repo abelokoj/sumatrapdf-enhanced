@@ -396,8 +396,11 @@ enum {
     CmdInvertColorWarmEspresso = 590,
     CmdInvertColorCustomLight = 591,
     CmdInvertColorCustomDark = 592,
+    CmdAddBookmark = 593,
+    CmdRenameBookmark = 594,
+    CmdDeleteBookmark = 595,
 
-    CmdLast = 592,
+    CmdLast = 595,
     CmdFirstCustom = CmdLast + 100,
 
     // aliases, at the end to not mess ordering

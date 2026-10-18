@@ -70,7 +70,7 @@ static ACCEL gBuiltInAccelerators[] = {
     //{FSHIFT | FCONTROL | FVIRTKEY, 'S', CmdCreateShortcutToFile},
 
     {FCONTROL | FVIRTKEY, 'A', CmdSelectAll},
-    {FCONTROL | FVIRTKEY, 'B', CmdFavoriteAdd},
+    {FCONTROL | FVIRTKEY, 'B', CmdAddBookmark},
     {FCONTROL | FVIRTKEY, 'C', CmdCopySelection},
     {FCONTROL | FVIRTKEY, VK_INSERT, CmdCopySelection},
     {FCONTROL | FVIRTKEY, 'V', CmdPasteClipboardImage},

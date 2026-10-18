@@ -401,6 +401,9 @@ static SeqStrings gCommandNames =
     "CmdInvertColorWarmEspresso\0"
     "CmdInvertColorCustomLight\0"
     "CmdInvertColorCustomDark\0"
+    "CmdAddBookmark\0"
+    "CmdRenameBookmark\0"
+    "CmdDeleteBookmark\0"
     "\0";
 
 static i32 gCommandIds[] = {
@@ -791,6 +794,9 @@ static i32 gCommandIds[] = {
     CmdInvertColorWarmEspresso,
     CmdInvertColorCustomLight,
     CmdInvertColorCustomDark,
+    CmdAddBookmark,
+    CmdRenameBookmark,
+    CmdDeleteBookmark,
 };
 
 SeqStrings gCommandDescriptions =
@@ -1181,6 +1187,9 @@ SeqStrings gCommandDescriptions =
     "Invert Background: Warm Espresso\0"
     "Invert Background: Custom Light...\0"
     "Invert Background: Custom Dark...\0"
+    "Add Bookmark (Current Page)\0"
+    "Rename Bookmark\0"
+    "Delete Bookmark\0"
     "\0";
 
 SeqStrings gCommandAltDescs =

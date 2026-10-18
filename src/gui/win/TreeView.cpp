@@ -44,7 +44,7 @@ HWND TreeView::Create(const CreateArgs& args) {
     cargs.font = args.font;
     cargs.style = WS_CHILD | WS_VISIBLE | WS_TABSTOP;
     cargs.style |= TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS;
-    cargs.style |= TVS_TRACKSELECT | TVS_NOHSCROLL | TVS_INFOTIP;
+    cargs.style |= TVS_TRACKSELECT | TVS_NOHSCROLL | TVS_INFOTIP | TVS_EDITLABELS;
     // nothing handles TVN_BEGINDRAG; without this the control runs a modal
     // drag-detect loop on every button-down, which never ends for a synthetic
     // (sent) click that has no button-up behind it
@@ -714,5 +714,39 @@ void TreeView::OnNotifyReflect(ControlBase::NotifyReflectEvent* rev) {
         onKeyDown.Call(&ev);
         // non-zero: prevent default tree handling (e.g. type-ahead) when requested
         rev->result = ev.result;
+        return;
+    }
+
+    if (code == TVN_BEGINLABELEDITW || code == TVN_BEGINLABELEDITA) {
+        if (!onBeginLabelEdit.IsValid()) {
+            rev->result = FALSE; // allow editing
+            return;
+        }
+        NMTVDISPINFOW* di = (NMTVDISPINFOW*)lp;
+        TreeView::LabelEditEvent ev{};
+        ev.treeView = w;
+        ev.treeItem = GetTreeItemByHandle(di->item.hItem);
+        ev.dispInfo = di;
+        ev.isBegin = true;
+        onBeginLabelEdit.Call(&ev);
+        rev->result = ev.result;
+        return;
+    }
+
+    if (code == TVN_ENDLABELEDITW || code == TVN_ENDLABELEDITA) {
+        if (!onEndLabelEdit.IsValid()) {
+            rev->result = TRUE; // accept change
+            return;
+        }
+        NMTVDISPINFOW* di = (NMTVDISPINFOW*)lp;
+        TreeView::LabelEditEvent ev{};
+        ev.treeView = w;
+        ev.treeItem = GetTreeItemByHandle(di->item.hItem);
+        ev.dispInfo = di;
+        ev.newText = di->item.pszText;
+        ev.isBegin = false;
+        onEndLabelEdit.Call(&ev);
+        rev->result = ev.result;
+        return;
     }
 }

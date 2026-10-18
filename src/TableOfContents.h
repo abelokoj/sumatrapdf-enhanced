@@ -27,6 +27,10 @@ extern bool gShowAllMatchingTOC;
 
 void GoToTocItem(MainWindow*, TocItem*);
 
+void AddBookmarkForCurrentPage(MainWindow*);
+void RenameSelectedBookmark(MainWindow*);
+void DeleteSelectedBookmark(MainWindow*);
+
 // shared with Favorites.cpp
 // void TocCustomizeTooltip(TreeItem::GetTooltipEvent*);
 // LRESULT TocTreeKeyDown2(TreeKeyDownEvent*);

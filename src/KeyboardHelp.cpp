@@ -126,7 +126,7 @@ static const struct {
     {CmdCreateAnnotHighlight, "A"}, {CmdCreateAnnotUnderline, "U"}, {CmdSaveAnnotations, "Ctrl + Shift + S"},
     {CmdDeleteAnnotation, "Ctrl + Delete"}, {CmdToggleBookmarks, "F12"}, {CmdToggleToolbar, "F8"},
     {CmdToggleMenuBar, "F9"}, {CmdToggleCursorPosition, "M"}, {CmdTogglePageInfo, "I"}, {CmdCommandPalette, "Ctrl + K"},
-    {CmdFavoriteAdd, "Ctrl + B"}, {CmdHelpOpenManual, "F1"}, {CmdToggleKeyboardHelp, "?"},
+    {CmdAddBookmark, "Ctrl + B"}, {CmdHelpOpenManual, "F1"}, {CmdToggleKeyboardHelp, "?"},
 };
 // clang-format on
 

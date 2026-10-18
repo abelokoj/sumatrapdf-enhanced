@@ -30,6 +30,9 @@
 #include "SumatraPDF.h"
 #include "Theme.h"
 #include "Translations.h"
+#include "WindowTab.h"
+#include "Notifications.h"
+#include "TableOfContents.h"
 #if IS_DEBUG
 #include "base/tests/UtAssert.h"
 #endif
@@ -1122,6 +1125,180 @@ static bool ChooseCpdf(HWND owner, BookmarkSession* session, bool& download) {
     if (!GetOpenFileNameW(&ofn)) return false;
     session->executable = str::Dup(ToUtf8Temp(WStr(filename)));
     return true;
+}
+
+static void FlattenTocItem(TocItem* item, int level, Vec<BookmarkRow*>& rows) {
+    for (TocItem* curr = item; curr != nullptr; curr = curr->next) {
+        auto* row = new BookmarkRow();
+        row->level = level;
+        row->page = curr->pageNo > 0 ? curr->pageNo : 1;
+        row->title = str::Dup(curr->title);
+        row->open = curr->isOpenDefault || curr->isOpenToggled;
+        row->hasTitle = true;
+        row->retarget = true;
+        VecAppend(rows, row);
+        if (curr->child) {
+            FlattenTocItem(curr->child, level + 1, rows);
+        }
+    }
+}
+
+struct BackgroundBookmarkJob {
+    Str filePath;
+    Str jsonText;
+    HWND hwndCanvas = nullptr;
+    WindowTab* tab = nullptr;
+    bool success = false;
+    Str error;
+    ~BackgroundBookmarkJob() {
+        str::Free(filePath);
+        str::Free(jsonText);
+        str::Free(error);
+    }
+};
+
+static void CompleteBackgroundBookmarkSave(BackgroundBookmarkJob* job) {
+    if (job->success) {
+        if (job->tab) {
+            job->tab->ignoreNextAutoReload = true;
+        }
+        if (job->hwndCanvas && IsWindow(job->hwndCanvas)) {
+            NotificationCreateArgs nargs;
+            nargs.hwndParent = job->hwndCanvas;
+            nargs.msg = Tr("Bookmark saved to PDF");
+            nargs.timeoutMs = 1500;
+            ShowNotification(nargs);
+        }
+    } else if (len(job->error) > 0 && job->hwndCanvas && IsWindow(job->hwndCanvas)) {
+        NotificationCreateArgs nargs;
+        nargs.hwndParent = job->hwndCanvas;
+        nargs.msg = job->error;
+        nargs.warning = true;
+        nargs.timeoutMs = 3000;
+        ShowNotification(nargs);
+    }
+    delete job;
+}
+
+static void ExecuteBackgroundBookmarkSave(BackgroundBookmarkJob* job) {
+    Str cpdfExe = CpdfCachePath();
+    if (!VerifyCpdf(cpdfExe)) {
+        auto session = new BookmarkSession();
+        session->executable = str::Dup(cpdfExe);
+        Str tempDir = GetTempFilePathTemp(StrL("cpdf_dl"));
+        session->snapshotDir = str::Dup(tempDir);
+        dir::Create(tempDir);
+        BookmarkJob dlJob;
+        dlJob.session = session;
+        InterlockedIncrement(&session->references);
+        bool downloaded = InstallCpdf(&dlJob);
+        dir::RemoveAll(tempDir);
+        ReleaseSession(session);
+        if (!downloaded) {
+            str::ReplaceWithCopy(&job->error, Tr("Unable to download cpdf tool."));
+            return;
+        }
+    }
+
+    if (!VerifyCpdf(cpdfExe)) {
+        str::ReplaceWithCopy(&job->error, Tr("cpdf tool is missing or unverified."));
+        return;
+    }
+
+    Str tempFolder = GetTempFilePathTemp(StrL("cpb_save"));
+    file::Delete(tempFolder);
+    if (!dir::Create(tempFolder)) {
+        str::ReplaceWithCopy(&job->error, Tr("Unable to prepare temp files for cpdf."));
+        return;
+    }
+    defer {
+        dir::RemoveAll(tempFolder);
+    };
+
+    Str jsonFile = path::JoinTemp(tempFolder, StrL("bookmarks.json"));
+    if (!file::WriteFile(jsonFile, job->jsonText)) {
+        str::ReplaceWithCopy(&job->error, Tr("Unable to write bookmark list."));
+        return;
+    }
+
+    Str snapshotPdf = path::JoinTemp(tempFolder, StrL("snapshot.pdf"));
+    if (!file::Copy(snapshotPdf, job->filePath, true)) {
+        str::ReplaceWithCopy(&job->error, Tr("Unable to read PDF for bookmark update."));
+        return;
+    }
+
+    Str outputPdf = path::JoinTemp(tempFolder, StrL("output.pdf"));
+
+    auto session = new BookmarkSession();
+    session->executable = str::Dup(cpdfExe);
+    session->snapshotDir = str::Dup(tempFolder);
+    BookmarkJob cpdfJob;
+    cpdfJob.session = session;
+    InterlockedIncrement(&session->references);
+
+    StrVec args;
+    args.Append(StrL("-add-bookmarks-json"));
+    args.Append(jsonFile);
+    args.Append(snapshotPdf);
+    args.Append(StrL("-o"));
+    args.Append(outputPdf);
+
+    Str runOutput;
+    bool ok = RunCpdf(&cpdfJob, args, runOutput);
+    str::Free(runOutput);
+    ReleaseSession(session);
+
+    if (!ok || !file::Exists(outputPdf) || file::GetSize(outputPdf) < 100 || !file::StartsWith(outputPdf, StrL("%PDF-"))) {
+        str::ReplaceWithCopy(&job->error, Tr("cpdf failed to update bookmarks. Original PDF is unchanged."));
+        return;
+    }
+
+    WCHAR destW[MAX_PATH]{};
+    wcscpy_s(destW, CWStrTemp(ToWStrTemp(job->filePath)));
+    WCHAR srcW[MAX_PATH]{};
+    wcscpy_s(srcW, CWStrTemp(ToWStrTemp(outputPdf)));
+
+    DWORD moveFlags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH | MOVEFILE_COPY_ALLOWED;
+    BOOL replaced = MoveFileExW(srcW, destW, moveFlags);
+    if (!replaced) {
+        replaced = file::Copy(job->filePath, outputPdf, false);
+    }
+
+    if (replaced) {
+        job->success = true;
+    } else {
+        str::ReplaceWithCopy(&job->error, Tr("Unable to replace PDF file with updated bookmarks."));
+    }
+}
+
+static void RunBackgroundBookmarkSaveJob(BackgroundBookmarkJob* job) {
+    ExecuteBackgroundBookmarkSave(job);
+    uitask::Post(MkFunc0(CompleteBackgroundBookmarkSave, job), "CompleteBackgroundBookmarkSave");
+}
+
+void SaveBookmarksAsync(MainWindow* win) {
+    if (!CanEditPdfBookmarks(win)) {
+        return;
+    }
+    WindowTab* tab = win->CurrentTab();
+    if (!tab || !tab->ctrl) {
+        return;
+    }
+    TocTree* tree = tab->currToc;
+    Vec<BookmarkRow*> rows;
+    if (tree && tree->root && tree->root->child) {
+        FlattenTocItem(tree->root->child, 0, rows);
+    }
+    TempStr jsonText = SerializeRows(rows);
+    DeleteRows(rows);
+
+    auto* job = new BackgroundBookmarkJob();
+    job->filePath = str::Dup(tab->ctrl->GetFilePath());
+    job->jsonText = str::Dup(jsonText);
+    job->hwndCanvas = win->hwndCanvas;
+    job->tab = tab;
+
+    RunAsync(MkFunc0(RunBackgroundBookmarkSaveJob, job), StrL("CpdfBookmarkSave"));
 }
 
 void ShowCpdfBookmarks(MainWindow* win) {

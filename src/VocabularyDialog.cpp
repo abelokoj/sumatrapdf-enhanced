@@ -520,7 +520,7 @@ struct DetailBuilder {
 };
 static void ShowMeanings(LearningWindow* w) {
     if (!len(w->meanings)) return;
-    int design = gSettings ? gSettings->dictionaryUI.dictionaryDesign : 1;
+    int design = gSettings ? gSettings->dictionaryUI.dictionaryDesign : 0;
     DetailBuilder text(w);
     text.Line(w->meanings[0].headword, DetailStyle::Heading);
     Str dictionary, part;
@@ -835,7 +835,7 @@ static void WordDetails(LearningWindow* w) {
              Tr("No saved words here yet. Select a word in a document and press Shift+D to look it up and save it."));
         return;
     }
-    int design = gSettings ? gSettings->dictionaryUI.learningHubDesign : 1;
+    int design = gSettings ? gSettings->dictionaryUI.learningHubDesign : 0;
     DetailBuilder text(w);
     text.Line(word->word, DetailStyle::Heading);
     text.Line({});
@@ -1015,9 +1015,201 @@ static void MeasureLearning(LearningWindow* w) {
         }
         if (found) y += height + gap;
     };
-    int title = WrappedHeight(Control(w, lcTitle), ToWStrTemp(Read(w, lcTitle)), width - LearningIconSize(w) - pad);
-    Place(w, lcTitle, pad, y, width, title);
-    y += title + gap;
+    int dictDesign = gSettings ? gSettings->dictionaryUI.dictionaryDesign : 0;
+    int hubDesign = gSettings ? gSettings->dictionaryUI.learningHubDesign : 0;
+
+    if (w->dictionary && dictDesign == 1) {
+        // Design 1: Curated Lexicon (Apple & Oxford Edition)
+        int pronounceW = row + UiScalePx(16);
+        int lookupW = LearningTextWidth(Control(w, lcLookup)) + pad * 2;
+        int queryW = std::max(row * 4, width - lookupW - pronounceW - gap * 2);
+        Place(w, lcQuery, pad, y, queryW, row);
+        Place(w, lcLookup, pad + queryW + gap, y, lookupW, row);
+        Place(w, lcPronounce, pad + queryW + gap + lookupW + gap, y, pronounceW, row);
+        y += row + gap * 2;
+
+        int footerHeight = row + pad;
+        int detailHeight = std::max(row * 4, (int)client.bottom - y - footerHeight);
+        Place(w, lcDetails, pad, y, width, detailHeight);
+        y += detailHeight + gap;
+
+        group({lcDeck, lcSave, lcLearned, lcOpenVocabulary});
+        w->contentHeight = y + pad;
+        return;
+    }
+
+    if (w->dictionary && dictDesign == 2) {
+        // Design 2: Deep-Work Inspector (Dual-Pane Academic & Dev)
+        int sideWidth = std::clamp(width * 32 / 100, row * 7, row * 12);
+        int rightX = pad + sideWidth + gap;
+        int rightW = width - sideWidth - gap;
+
+        // Left sidebar column
+        int leftY = pad;
+        int sideLookupW = LearningTextWidth(Control(w, lcLookup)) + UiScalePx(16);
+        int sideQueryW = sideWidth - sideLookupW - gap;
+        Place(w, lcQuery, pad, leftY, sideQueryW, row);
+        Place(w, lcLookup, pad + sideQueryW + gap, leftY, sideLookupW, row);
+        leftY += row + gap;
+
+        Place(w, lcSourceLabel, pad, leftY, sideWidth, row);
+        leftY += row;
+        Place(w, lcLookupSource, pad, leftY, sideWidth, row);
+        leftY += row + gap;
+
+        Place(w, lcManageToggle, pad, leftY, sideWidth, row);
+        leftY += row + gap;
+
+        if (w->managementVisible) {
+            if (Control(w, lcPack) && (GetWindowLongPtrW(Control(w, lcPack), GWL_STYLE) & WS_VISIBLE)) {
+                Place(w, lcPack, pad, leftY, sideWidth, row);
+                leftY += row + gap;
+            }
+            int halfW = (sideWidth - gap) / 2;
+            if (Control(w, lcImportPack) && (GetWindowLongPtrW(Control(w, lcImportPack), GWL_STYLE) & WS_VISIBLE))
+                Place(w, lcImportPack, pad, leftY, halfW, row);
+            if (Control(w, lcDownload) && (GetWindowLongPtrW(Control(w, lcDownload), GWL_STYLE) & WS_VISIBLE))
+                Place(w, lcDownload, pad + halfW + gap, leftY, halfW, row);
+            if (Control(w, lcImportPack) || Control(w, lcDownload)) leftY += row + gap;
+            if (Control(w, lcRemovePack) && (GetWindowLongPtrW(Control(w, lcRemovePack), GWL_STYLE) & WS_VISIBLE)) {
+                Place(w, lcRemovePack, pad, leftY, sideWidth, row);
+                leftY += row + gap;
+            }
+        }
+
+        Place(w, lcPronounce, pad, leftY, row + UiScalePx(20), row);
+        if (Control(w, lcVoice) && (GetWindowLongPtrW(Control(w, lcVoice), GWL_STYLE) & WS_VISIBLE)) {
+            Place(w, lcVoice, pad + row + UiScalePx(28), leftY, sideWidth - row - UiScalePx(28), row);
+        }
+        leftY += row + gap * 2;
+
+        Place(w, lcDeckLabel, pad, leftY, sideWidth, row);
+        leftY += row;
+        Place(w, lcDeck, pad, leftY, sideWidth, row);
+        leftY += row + gap;
+        Place(w, lcSave, pad, leftY, sideWidth, row);
+        leftY += row + gap;
+        Place(w, lcLearned, pad, leftY, sideWidth, row);
+        leftY += row + gap;
+
+        // Right inspector pane
+        int rightY = pad;
+        if (Control(w, lcTitle) && (GetWindowLongPtrW(Control(w, lcTitle), GWL_STYLE) & WS_VISIBLE)) {
+            int titleH = WrappedHeight(Control(w, lcTitle), ToWStrTemp(Read(w, lcTitle)), rightW);
+            Place(w, lcTitle, rightX, rightY, rightW, titleH);
+            rightY += titleH + gap;
+        }
+
+        int footerH = row + gap;
+        int detailH = std::max(row * 4, (int)client.bottom - rightY - footerH - pad);
+        Place(w, lcDetails, rightX, rightY, rightW, detailH);
+        rightY += detailH + gap;
+
+        int hubBtnW = LearningTextWidth(Control(w, lcOpenVocabulary)) + pad * 2;
+        Place(w, lcOpenVocabulary, rightX, rightY, hubBtnW, row);
+        Place(w, lcStatus, rightX + hubBtnW + gap, rightY, rightW - hubBtnW - gap, row);
+
+        w->contentHeight = std::max(leftY, rightY + row + pad);
+        return;
+    }
+
+    if (!w->dictionary && !w->practice && hubDesign == 1) {
+        // Learning Hub Design 1: Mastery Dashboard (Duolingo & Anki Pro)
+        if (Control(w, lcTitle) && (GetWindowLongPtrW(Control(w, lcTitle), GWL_STYLE) & WS_VISIBLE)) {
+            int titleH = WrappedHeight(Control(w, lcTitle), ToWStrTemp(Read(w, lcTitle)), width - pad);
+            Place(w, lcTitle, pad, y, width, titleH);
+            y += titleH + gap;
+        }
+        group({lcQuery, lcLookup, lcDeck, lcActivity, lcPractice, lcManageToggle});
+        if (w->managementVisible) {
+            group({lcInstallDeck, lcDeleteDeck, lcNewDeck, lcCreateDeck, lcExport, lcImport});
+        }
+        int footerHeight = row + pad;
+        int detailHeight = std::max(row * 4, (int)client.bottom - y - footerHeight);
+        int listWidth = width * 32 / 100;
+        Place(w, lcLibrary, pad, y, listWidth, detailHeight);
+        Place(w, lcDetails, pad + listWidth + gap, y, width - listWidth - gap, detailHeight);
+        y += detailHeight + gap;
+
+        group({lcPronounce, lcLearned, lcDeleteWord, lcUndo});
+        if (Control(w, lcStatus) && (GetWindowLongPtrW(Control(w, lcStatus), GWL_STYLE) & WS_VISIBLE)) {
+            int status = WrappedHeight(Control(w, lcStatus), ToWStrTemp(Read(w, lcStatus)), width);
+            Place(w, lcStatus, pad, y, width, status);
+            y += status + pad;
+        }
+        w->contentHeight = y;
+        return;
+    }
+
+    if (!w->dictionary && !w->practice && hubDesign == 2) {
+        // Learning Hub Design 2: Cognitive Knowledge Canvas (RemNote & SuperMemo)
+        int sideWidth = width * 38 / 100;
+        int rightX = pad + sideWidth + gap;
+        int rightW = width - sideWidth - gap;
+
+        // Left sidebar column
+        int leftY = pad;
+        int sideLookupW = LearningTextWidth(Control(w, lcLookup)) + UiScalePx(16);
+        int sideQueryW = sideWidth - sideLookupW - gap;
+        Place(w, lcQuery, pad, leftY, sideQueryW, row);
+        Place(w, lcLookup, pad + sideQueryW + gap, leftY, sideLookupW, row);
+        leftY += row + gap;
+
+        int thirdW = (sideWidth - gap * 2) / 3;
+        Place(w, lcDeck, pad, leftY, thirdW, row);
+        Place(w, lcActivity, pad + thirdW + gap, leftY, thirdW, row);
+        Place(w, lcScheduler, pad + thirdW * 2 + gap * 2, leftY, sideWidth - thirdW * 2 - gap * 2, row);
+        leftY += row + gap;
+
+        Place(w, lcManageToggle, pad, leftY, sideWidth, row);
+        leftY += row + gap;
+        if (w->managementVisible) {
+            int halfW = (sideWidth - gap) / 2;
+            Place(w, lcInstallDeck, pad, leftY, halfW, row);
+            Place(w, lcDeleteDeck, pad + halfW + gap, leftY, halfW, row);
+            leftY += row + gap;
+            Place(w, lcExport, pad, leftY, halfW, row);
+            Place(w, lcImport, pad + halfW + gap, leftY, halfW, row);
+            leftY += row + gap;
+        }
+
+        int sideListHeight = std::max(row * 4, (int)client.bottom - leftY - pad);
+        Place(w, lcLibrary, pad, leftY, sideWidth, sideListHeight);
+
+        // Right canvas column
+        int rightY = pad;
+        if (Control(w, lcTitle) && (GetWindowLongPtrW(Control(w, lcTitle), GWL_STYLE) & WS_VISIBLE)) {
+            int titleH = WrappedHeight(Control(w, lcTitle), ToWStrTemp(Read(w, lcTitle)), rightW);
+            Place(w, lcTitle, rightX, rightY, rightW, titleH);
+            rightY += titleH + gap;
+        }
+
+        int rightFooterH = row + gap;
+        int rightDetailH = std::max(row * 4, (int)client.bottom - rightY - rightFooterH - pad);
+        Place(w, lcDetails, rightX, rightY, rightW, rightDetailH);
+        rightY += rightDetailH + gap;
+
+        int px = rightX;
+        for (int id : {lcPractice, lcPronounce, lcLearned, lcDeleteWord, lcUndo}) {
+            HWND child = Control(w, id);
+            if (!child || !(GetWindowLongPtrW(child, GWL_STYLE) & WS_VISIBLE)) continue;
+            int btnW = LearningTextWidth(child) + pad * 2;
+            if (px + btnW <= rightX + rightW) {
+                Place(w, id, px, rightY, btnW, row);
+                px += btnW + gap;
+            }
+        }
+        rightY += row + gap;
+
+        w->contentHeight = std::max(leftY + sideListHeight + pad, rightY + pad);
+        return;
+    }
+
+    if (Control(w, lcTitle) && (GetWindowLongPtrW(Control(w, lcTitle), GWL_STYLE) & WS_VISIBLE)) {
+        int title = WrappedHeight(Control(w, lcTitle), ToWStrTemp(Read(w, lcTitle)), width - LearningIconSize(w) - pad);
+        Place(w, lcTitle, pad, y, width, title);
+        y += title + gap;
+    }
     group({lcGuideStart, lcQueryLabel, lcQuery, lcLookup});
     group({lcSessionInfo});
     if (w->guideVisible) {
@@ -1065,7 +1257,6 @@ static void MeasureLearning(LearningWindow* w) {
             y += row * 4 + gap;
             Place(w, lcDetails, pad, y, width, detailHeight);
         } else {
-            int hubDesign = gSettings ? gSettings->dictionaryUI.learningHubDesign : 1;
             int listWidth = (hubDesign == 2) ? (width * 38 / 100) : (width / 3);
             Place(w, lcLibrary, pad, y, listWidth, detailHeight);
             Place(w, lcDetails, pad + listWidth + gap, y, width - listWidth - gap, detailHeight);
@@ -1205,22 +1396,204 @@ static void RevealFocusedControl(LearningWindow* w, HWND child) {
 
 static void UpdateLearningChrome(LearningWindow* w) {
     bool setup = !w->practice;
-    if (w->managementVisible && (setup || w->dictionary)) EnsureLearningTools(w);
-    if (w->dictionary && w->managementVisible && w->sourcesVisible) EnsureOnlineControls(w);
-    for (int id : {lcQueryLabel, lcQuery, lcLookup, lcManageToggle}) Visible(w, id, setup);
+    int dictDesign = gSettings ? gSettings->dictionaryUI.dictionaryDesign : 0;
+    int hubDesign = gSettings ? gSettings->dictionaryUI.learningHubDesign : 0;
+
     if (w->dictionary) {
-        for (int id : {lcPack, lcImportPack, lcDownload, lcRemovePack, lcSourcesToggle})
-            Visible(w, id, w->managementVisible);
-        for (int id : {lcOnlineFirst, lcOnlineSecond, lcOnlineThird})
-            Visible(w, id, w->managementVisible && w->sourcesVisible);
-        Visible(w, lcPackInfo, w->managementVisible && len(Read(w, lcPackInfo)) > 0);
+        if (dictDesign == 0) {
+            // Design 0: Classic / Standard (SumatraPDF Traditional)
+            Visible(w, lcTitle, true);
+            Visible(w, lcGuideStart, true);
+            Visible(w, lcQueryLabel, true);
+            Visible(w, lcQuery, true);
+            Visible(w, lcLookup, true);
+            Visible(w, lcSourceLabel, true);
+            Visible(w, lcLookupSource, true);
+            Visible(w, lcManageToggle, true);
+            if (w->managementVisible) EnsureLearningTools(w);
+            if (w->managementVisible && w->sourcesVisible) EnsureOnlineControls(w);
+            for (int id : {lcPack, lcImportPack, lcDownload, lcRemovePack, lcSourcesToggle})
+                Visible(w, id, w->managementVisible);
+            for (int id : {lcOnlineFirst, lcOnlineSecond, lcOnlineThird})
+                Visible(w, id, w->managementVisible && w->sourcesVisible);
+            Visible(w, lcPackInfo, w->managementVisible && len(Read(w, lcPackInfo)) > 0);
+            Visible(w, lcVoiceLabel, true);
+            Visible(w, lcVoice, true);
+            Visible(w, lcPronounce, true);
+            Visible(w, lcStopVoice, true);
+            Visible(w, lcRecording, true);
+            Visible(w, lcRecordingUk, true);
+            Visible(w, lcSenseLabel, true);
+            Visible(w, lcSense, true);
+            Visible(w, lcDeckLabel, true);
+            Visible(w, lcDeck, true);
+            Visible(w, lcSave, true);
+            Visible(w, lcLearned, true);
+            Visible(w, lcOpenVocabulary, true);
+            Visible(w, lcStatus, true);
+            Text(w, lcTitle, Tr("Dictionary"));
+            Text(w, lcSave, Tr("Save word"));
+            Text(w, lcLearned, Tr("Mark learned"));
+            Text(w, lcOpenVocabulary, Tr("Open learning hub"));
+            SendMessageW(Control(w, lcQuery), EM_SETCUEBANNER, true, (LPARAM)L"Type a word…");
+        } else if (dictDesign == 1) {
+            // Design 1: Curated Lexicon (Apple & Oxford Edition)
+            Visible(w, lcTitle, false);
+            Visible(w, lcGuideStart, false);
+            Visible(w, lcQueryLabel, false);
+            Visible(w, lcQuery, true);
+            Visible(w, lcLookup, true);
+            Visible(w, lcSourceLabel, false);
+            Visible(w, lcLookupSource, false);
+            Visible(w, lcManageToggle, false);
+            for (int id : {lcPack, lcImportPack, lcDownload, lcRemovePack, lcSourcesToggle, lcOnlineFirst, lcOnlineSecond, lcOnlineThird, lcPackInfo})
+                Visible(w, id, false);
+            Visible(w, lcVoiceLabel, false);
+            Visible(w, lcVoice, false);
+            Visible(w, lcPronounce, true);
+            Visible(w, lcStopVoice, false);
+            Visible(w, lcRecording, false);
+            Visible(w, lcRecordingUk, false);
+            Visible(w, lcSenseLabel, false);
+            Visible(w, lcSense, false);
+            Visible(w, lcDeckLabel, false);
+            Visible(w, lcDeck, true);
+            Visible(w, lcSave, true);
+            Visible(w, lcLearned, true);
+            Visible(w, lcOpenVocabulary, true);
+            Visible(w, lcStatus, false);
+            Text(w, lcSave, Tr("+ Save to Deck"));
+            Text(w, lcLearned, Tr("✓ Learned"));
+            Text(w, lcOpenVocabulary, Tr("Learning Hub →"));
+            SendMessageW(Control(w, lcQuery), EM_SETCUEBANNER, true, (LPARAM)L"Look up word or phrase…");
+        } else {
+            // Design 2: Deep-Work Inspector (Dual-Pane Academic & Dev)
+            Visible(w, lcTitle, true);
+            Visible(w, lcGuideStart, false);
+            Visible(w, lcQueryLabel, false);
+            Visible(w, lcQuery, true);
+            Visible(w, lcLookup, true);
+            Visible(w, lcSourceLabel, true);
+            Visible(w, lcLookupSource, true);
+            Visible(w, lcManageToggle, true);
+            if (w->managementVisible) EnsureLearningTools(w);
+            if (w->managementVisible && w->sourcesVisible) EnsureOnlineControls(w);
+            for (int id : {lcPack, lcImportPack, lcDownload, lcRemovePack, lcSourcesToggle})
+                Visible(w, id, w->managementVisible);
+            for (int id : {lcOnlineFirst, lcOnlineSecond, lcOnlineThird})
+                Visible(w, id, w->managementVisible && w->sourcesVisible);
+            Visible(w, lcPackInfo, w->managementVisible && len(Read(w, lcPackInfo)) > 0);
+            Visible(w, lcVoiceLabel, true);
+            Visible(w, lcVoice, true);
+            Visible(w, lcPronounce, true);
+            Visible(w, lcStopVoice, false);
+            Visible(w, lcRecording, true);
+            Visible(w, lcRecordingUk, true);
+            Visible(w, lcSenseLabel, false);
+            Visible(w, lcSense, false);
+            Visible(w, lcDeckLabel, true);
+            Visible(w, lcDeck, true);
+            Visible(w, lcSave, true);
+            Visible(w, lcLearned, true);
+            Visible(w, lcOpenVocabulary, true);
+            Visible(w, lcStatus, true);
+            Text(w, lcTitle, Tr("Lexical Inspector"));
+            Text(w, lcSave, Tr("+ Add Card"));
+            Text(w, lcLearned, Tr("Mark Learned"));
+            Text(w, lcOpenVocabulary, Tr("Open Canvas →"));
+            SendMessageW(Control(w, lcQuery), EM_SETCUEBANNER, true, (LPARAM)L"Search academic index…");
+        }
     } else {
-        for (int id : {lcDeckLabel, lcDeck, lcActivityLabel, lcActivity, lcSchedulerLabel, lcScheduler, lcPractice,
-                       lcReviewHelp, lcLearnedHint})
-            Visible(w, id, setup);
-        for (int id : {lcInstallDeck, lcDeleteDeck, lcNewDeck, lcCreateDeck, lcExport, lcImport})
-            Visible(w, id, setup && w->managementVisible);
-        Visible(w, lcUndo, setup && VocabularyCanUndoRemove());
+        // Learning Hub
+        if (w->managementVisible && setup) EnsureLearningTools(w);
+        if (hubDesign == 0) {
+            // Design 0: Classic / Standard (SumatraPDF Traditional)
+            Visible(w, lcTitle, true);
+            Visible(w, lcGuideStart, setup);
+            Visible(w, lcQueryLabel, setup);
+            Visible(w, lcQuery, setup);
+            Visible(w, lcLookup, setup);
+            Visible(w, lcDeckLabel, setup);
+            Visible(w, lcDeck, setup);
+            Visible(w, lcManageToggle, setup);
+            for (int id : {lcInstallDeck, lcDeleteDeck, lcNewDeck, lcCreateDeck, lcExport, lcImport})
+                Visible(w, id, setup && w->managementVisible);
+            Visible(w, lcActivityLabel, setup);
+            Visible(w, lcActivity, setup);
+            Visible(w, lcSchedulerLabel, setup);
+            Visible(w, lcScheduler, setup);
+            Visible(w, lcPractice, setup);
+            Visible(w, lcReviewHelp, setup);
+            Visible(w, lcLearnedHint, setup);
+            Visible(w, lcVoiceLabel, setup);
+            Visible(w, lcVoice, setup);
+            Visible(w, lcPronounce, setup);
+            Visible(w, lcStopVoice, setup);
+            Visible(w, lcLearned, setup);
+            Visible(w, lcDeleteWord, setup);
+            Visible(w, lcUndo, setup && VocabularyCanUndoRemove());
+            Text(w, lcTitle, Tr("Learning hub"));
+            Text(w, lcPractice, Tr("Practice"));
+            SendMessageW(Control(w, lcQuery), EM_SETCUEBANNER, true, (LPARAM)L"Search your vocabulary…");
+        } else if (hubDesign == 1) {
+            // Design 1: Mastery Dashboard (Duolingo & Anki Pro)
+            Visible(w, lcTitle, true);
+            Visible(w, lcGuideStart, false);
+            Visible(w, lcQueryLabel, false);
+            Visible(w, lcQuery, setup);
+            Visible(w, lcLookup, setup);
+            Visible(w, lcDeckLabel, false);
+            Visible(w, lcDeck, setup);
+            Visible(w, lcManageToggle, setup);
+            for (int id : {lcInstallDeck, lcDeleteDeck, lcNewDeck, lcCreateDeck, lcExport, lcImport})
+                Visible(w, id, setup && w->managementVisible);
+            Visible(w, lcActivityLabel, false);
+            Visible(w, lcActivity, setup);
+            Visible(w, lcSchedulerLabel, false);
+            Visible(w, lcScheduler, false);
+            Visible(w, lcPractice, setup);
+            Visible(w, lcReviewHelp, false);
+            Visible(w, lcLearnedHint, false);
+            Visible(w, lcVoiceLabel, false);
+            Visible(w, lcVoice, false);
+            Visible(w, lcPronounce, setup);
+            Visible(w, lcStopVoice, false);
+            Visible(w, lcLearned, setup);
+            Visible(w, lcDeleteWord, setup);
+            Visible(w, lcUndo, setup && VocabularyCanUndoRemove());
+            Text(w, lcTitle, Tr("Mastery Dashboard"));
+            Text(w, lcPractice, Tr("⚡ Start Review"));
+            SendMessageW(Control(w, lcQuery), EM_SETCUEBANNER, true, (LPARAM)L"Search vocabulary & mastery cards…");
+        } else {
+            // Design 2: Cognitive Knowledge Canvas (RemNote & SuperMemo)
+            Visible(w, lcTitle, true);
+            Visible(w, lcGuideStart, false);
+            Visible(w, lcQueryLabel, false);
+            Visible(w, lcQuery, setup);
+            Visible(w, lcLookup, setup);
+            Visible(w, lcDeckLabel, setup);
+            Visible(w, lcDeck, setup);
+            Visible(w, lcManageToggle, setup);
+            for (int id : {lcInstallDeck, lcDeleteDeck, lcNewDeck, lcCreateDeck, lcExport, lcImport})
+                Visible(w, id, setup && w->managementVisible);
+            Visible(w, lcActivityLabel, setup);
+            Visible(w, lcActivity, setup);
+            Visible(w, lcSchedulerLabel, setup);
+            Visible(w, lcScheduler, setup);
+            Visible(w, lcPractice, setup);
+            Visible(w, lcReviewHelp, false);
+            Visible(w, lcLearnedHint, false);
+            Visible(w, lcVoiceLabel, false);
+            Visible(w, lcVoice, false);
+            Visible(w, lcPronounce, setup);
+            Visible(w, lcStopVoice, false);
+            Visible(w, lcLearned, setup);
+            Visible(w, lcDeleteWord, setup);
+            Visible(w, lcUndo, setup && VocabularyCanUndoRemove());
+            Text(w, lcTitle, Tr("Cognitive Knowledge Canvas"));
+            Text(w, lcPractice, Tr("Execute Review"));
+            SendMessageW(Control(w, lcQuery), EM_SETCUEBANNER, true, (LPARAM)L"Query knowledge index…");
+        }
         Visible(w, lcSessionInfo, w->practice);
         if (w->practice) Text(w, lcSessionInfo, fmt("%s (%s)", Read(w, lcActivity), Read(w, lcScheduler)));
     }
@@ -3243,6 +3616,12 @@ static void RefreshLearningStyle(LearningWindow* w) {
     }
     ZeroMemory(w->boundsValid, sizeof(w->boundsValid));
     FitPackDropdown(w);
+    UpdateLearningChrome(w);
+    if (w->dictionary) {
+        ShowMeanings(w);
+    } else if (!w->practice) {
+        WordDetails(w);
+    }
     FormatDetails(w);
     WindowApplyScaledCaption(w->hwnd);
     LayoutLearning(w, true);
@@ -3823,7 +4202,7 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary, bo
     AddChoice(w, lcVoice, Tr("System default voice"));
     SendMessageW(Control(w, lcVoice), CB_SETCURSEL, 0, 0);
     EnableWindow(Control(w, lcStopVoice), false);
-    if (activate) w->speech = new DictionarySpeech(hwnd, kSpeechMessage);
+    // Speech is initialized on demand to ensure sub-second startup
     if (dictionary) {
         MakeControl(w, lcSourceLabel, L"STATIC", Tr("&Source"), SS_CENTERIMAGE);
         MakeControl(w, lcLookupSource, L"COMBOBOX", {}, CBS_DROPDOWNLIST | WS_VSCROLL);
@@ -3881,8 +4260,6 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary, bo
         PracticeControls(w);
         RefreshLibrary(w);
     }
-    SendMessageW(Control(w, lcQuery), EM_SETCUEBANNER, true,
-                 (LPARAM)(dictionary ? L"Type a word…" : L"Search your vocabulary…"));
     FormatDetails(w);
     // The hidden window stays unlaid out until its controls, data and visibility are final.
     w->ready = true;
@@ -4530,6 +4907,8 @@ void VocabularyDialog_UnitTests() {
         return;
     }
     GreenCheckGlyphTests();
+    fixture->dictionaryUI.dictionaryDesign = 0;
+    fixture->dictionaryUI.learningHubDesign = 0;
     gSettings = fixture;
     if (!ThemeGetCount()) CreateThemeCommands();
     SetCurrentThemeFromSettings();
@@ -4610,6 +4989,56 @@ void VocabularyDialog_UnitTests() {
             utassert(str::Eq(Read(hub, lcAnswer), StrL("Retained answer")));
             DestroyWindow(hub->hwnd);
         }
+
+        // Test Design 1 (Curated Lexicon / Mastery Dashboard)
+        gSettings->dictionaryUI.dictionaryDesign = 1;
+        gSettings->dictionaryUI.learningHubDesign = 1;
+        auto* dictD1 = OpenLearningForTest(true);
+        utassert(dictD1 != nullptr);
+        if (dictD1) {
+            utassert(!IsWindowVisible(Control(dictD1, lcGuideStart)));
+            utassert(!IsWindowVisible(Control(dictD1, lcQueryLabel)));
+            utassert(IsWindowVisible(Control(dictD1, lcQuery)));
+            utassert(IsWindowVisible(Control(dictD1, lcPronounce)));
+            utassert(IsWindowVisible(Control(dictD1, lcSave)));
+            utassert(!IsWindowVisible(Control(dictD1, lcSenseLabel)));
+            DestroyWindow(dictD1->hwnd);
+        }
+        auto* hubD1 = OpenLearningForTest(false);
+        utassert(hubD1 != nullptr);
+        if (hubD1) {
+            utassert(!IsWindowVisible(Control(hubD1, lcGuideStart)));
+            utassert(!IsWindowVisible(Control(hubD1, lcReviewHelp)));
+            utassert(IsWindowVisible(Control(hubD1, lcPractice)));
+            utassert(IsWindowVisible(Control(hubD1, lcLibrary)));
+            DestroyWindow(hubD1->hwnd);
+        }
+
+        // Test Design 2 (Deep-Work Inspector / Cognitive Canvas)
+        gSettings->dictionaryUI.dictionaryDesign = 2;
+        gSettings->dictionaryUI.learningHubDesign = 2;
+        auto* dictD2 = OpenLearningForTest(true);
+        utassert(dictD2 != nullptr);
+        if (dictD2) {
+            utassert(IsWindowVisible(Control(dictD2, lcTitle)));
+            utassert(!IsWindowVisible(Control(dictD2, lcGuideStart)));
+            utassert(IsWindowVisible(Control(dictD2, lcQuery)));
+            utassert(IsWindowVisible(Control(dictD2, lcLookupSource)));
+            utassert(IsWindowVisible(Control(dictD2, lcManageToggle)));
+            DestroyWindow(dictD2->hwnd);
+        }
+        auto* hubD2 = OpenLearningForTest(false);
+        utassert(hubD2 != nullptr);
+        if (hubD2) {
+            utassert(IsWindowVisible(Control(hubD2, lcTitle)));
+            utassert(IsWindowVisible(Control(hubD2, lcDeckLabel)));
+            utassert(IsWindowVisible(Control(hubD2, lcActivityLabel)));
+            utassert(IsWindowVisible(Control(hubD2, lcSchedulerLabel)));
+            utassert(IsWindowVisible(Control(hubD2, lcLibrary)));
+            DestroyWindow(hubD2->hwnd);
+        }
+        gSettings->dictionaryUI.dictionaryDesign = 0;
+        gSettings->dictionaryUI.learningHubDesign = 0;
     }
     utassert(str::Eq(DictionarySize(3335559018LL), StrL("3.34 GB")));
     utassert(str::Eq(DictionarySize(4719269), StrL("4.72 MB")));

@@ -4442,6 +4442,21 @@ static void BuildLassoHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     ev->layout = NewToolbarHoverMenu(win, items);
 }
 
+static TempStr InvertColorBoxSvgTemp(Color col) {
+    u8 r = GetRValue(col), g = GetGValue(col), b = GetBValue(col);
+    return str::FormatTemp(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><rect x="4" y="4" width="16" height="16" rx="1.5" fill="#%02x%02x%02x" stroke="currentColor"/></svg>)svg",
+        r, g, b);
+}
+
+static TempStr InvertCustomColorBoxSvgTemp(Color col) {
+    u8 r = GetRValue(col), g = GetGValue(col), b = GetBValue(col);
+    Str iconCol = IsLightColor(col) ? StrL("#141414") : StrL("#ffffff");
+    return str::FormatTemp(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z"/><rect x="4" y="4" width="16" height="16" rx="1.5" fill="#%02x%02x%02x" stroke="currentColor"/><g transform="translate(12 12) scale(0.6) translate(-12 -12)" stroke="%s" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 7l6 6"/><path d="M4 16l11.7-11.7a1 1 0 0 1 1.4 0l2.6 2.6a1 1 0 0 1 0 1.4L8 20H4v-4z"/></g></svg>)svg",
+        r, g, b, iconCol);
+}
+
 static void BuildInvertHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     Vec<ToolbarHoverMenuItem> items;
     bool inverted = GetInvertPageColors();
@@ -4450,16 +4465,16 @@ static void BuildInvertHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
     VecAppend(items, {Str(kEnhancedIconInvert), Tr("Invert Document Colors"), CmdInvertColors, true, inverted});
 
     // 3 White / Light tints
-    VecAppend(items, {Str(gIconAnnotSquare), Tr("Pure White (Light)"), CmdInvertColorPureWhite, true, inverted && currentPreset == 0});
-    VecAppend(items, {Str(gIconAnnotSquare), Tr("Warm Sepia (Light)"), CmdInvertColorWarmSepia, true, inverted && currentPreset == 1});
-    VecAppend(items, {Str(gIconAnnotSquare), Tr("Soft Paper Gray (Light)"), CmdInvertColorSoftGray, true, inverted && currentPreset == 2});
-    VecAppend(items, {Str(gIconAnnotSquare), Tr("Custom Light Background..."), CmdInvertColorCustomLight, true, inverted && currentPreset == 6});
+    VecAppend(items, {InvertColorBoxSvgTemp(GetInvertPresetColor(0)), Tr("Pure White (Light)"), CmdInvertColorPureWhite, true, inverted && currentPreset == 0});
+    VecAppend(items, {InvertColorBoxSvgTemp(GetInvertPresetColor(1)), Tr("Warm Sepia (Light)"), CmdInvertColorWarmSepia, true, inverted && currentPreset == 1});
+    VecAppend(items, {InvertColorBoxSvgTemp(GetInvertPresetColor(2)), Tr("Soft Paper Gray (Light)"), CmdInvertColorSoftGray, true, inverted && currentPreset == 2});
+    VecAppend(items, {InvertCustomColorBoxSvgTemp(GetInvertCustomColor(false)), Tr("Custom Light Background..."), CmdInvertColorCustomLight, true, inverted && currentPreset == 6});
 
     // 3 Dark tints
-    VecAppend(items, {Str(gIconAnnotSquare), Tr("Pure Black (Dark)"), CmdInvertColorPureBlack, true, inverted && currentPreset == 3});
-    VecAppend(items, {Str(gIconAnnotSquare), Tr("Midnight Charcoal (Dark)"), CmdInvertColorCharcoal, true, inverted && currentPreset == 4});
-    VecAppend(items, {Str(gIconAnnotSquare), Tr("Warm Espresso (Dark)"), CmdInvertColorWarmEspresso, true, inverted && currentPreset == 5});
-    VecAppend(items, {Str(gIconAnnotSquare), Tr("Custom Dark Background..."), CmdInvertColorCustomDark, true, inverted && currentPreset == 7});
+    VecAppend(items, {InvertColorBoxSvgTemp(GetInvertPresetColor(3)), Tr("Pure Black (Dark)"), CmdInvertColorPureBlack, true, inverted && currentPreset == 3});
+    VecAppend(items, {InvertColorBoxSvgTemp(GetInvertPresetColor(4)), Tr("Midnight Charcoal (Dark)"), CmdInvertColorCharcoal, true, inverted && currentPreset == 4});
+    VecAppend(items, {InvertColorBoxSvgTemp(GetInvertPresetColor(5)), Tr("Warm Espresso (Dark)"), CmdInvertColorWarmEspresso, true, inverted && currentPreset == 5});
+    VecAppend(items, {InvertCustomColorBoxSvgTemp(GetInvertCustomColor(true)), Tr("Custom Dark Background..."), CmdInvertColorCustomDark, true, inverted && currentPreset == 7});
 
     ev->layout = NewToolbarHoverMenu(win, items);
     ev->centerOnButton = true;
