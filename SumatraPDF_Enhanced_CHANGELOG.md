@@ -1,5 +1,12 @@
 # SumatraPDF Enhanced changelog
 
+## Pen tools icon selection - 2026-10-18
+
+- Replace the Pen tools button with approved option 6 (Restrained monochrome): silver nib, neutral fitting, small blue/cyan collar accent, and short rounded point. Use separate light/dark SVG artwork and refresh it when the toolbar theme changes.
+- Fix faint native rendering by replacing unsupported SVG gradient references with explicit silver fills and a cyan/blue collar accent. Native MuPDF rendering reproduced the black body before the change and passed the silver-fill check afterward.
+- Retain all seven theme pairs, earlier comparison sheets, selection notes, and scalable option 6 assets in [the design reference folder](docs/design/pen-tools-options-2026-10-18/SELECTION.md).
+
+
 ## Implemented Features, UI Smoothness & Markdown Enhancements — 2026-10-17
 
 - **Command Palette Header & Draggable Frame**: Added a standard captioned title bar with dark-mode styling and a close button to the Command Palette window (`CommandPalette.cpp`), enabling users to drag, reposition, and close the palette easily.

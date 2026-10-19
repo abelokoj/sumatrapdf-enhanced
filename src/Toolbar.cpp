@@ -67,6 +67,7 @@
 static VirtCtrl* ToolbarItemForCmd(MainWindow* win, int cmdId);
 #include "ReadAloud.h"
 #include "RenderCache.h"
+#include "PenToolsIcon.h"
 #include "Toolbar.h"
 
 // https://docs.microsoft.com/en-us/windows/win32/controls/toolbar-control-reference
@@ -3008,6 +3009,10 @@ static void ApplyToolbarItemColors(VirtCtrl* w) {
     }
 }
 
+static const char* PenToolsIcon() {
+    return IsLightColor(TbBgColor()) ? kPenToolsLightIcon : kPenToolsDarkIcon;
+}
+
 static void RefreshToolbarIcons(MainWindow* win) {
     ToolbarVirt* tb = win->toolbarVirt;
     if (!tb) {
@@ -3027,7 +3032,10 @@ static void RefreshToolbarIcons(MainWindow* win) {
         if (!HasToolbarButtonContent(bi)) {
             continue;
         }
-        Str svg = bi.svgIcon ? bi.svgIcon : Str(bi.cmdId == CmdAnnotationShapes ? ShapeToolIcon() : bi.icon);
+        Str svg = bi.svgIcon ? bi.svgIcon
+                             : Str(bi.cmdId == CmdAnnotationShapes
+                                       ? ShapeToolIcon()
+                                       : (bi.cmdId == CmdCreateAnnotInk ? PenToolsIcon() : bi.icon));
         ib->pixmap =
             len(bi.svgIcon) == 0 && bi.cmdId == CmdAnnotationMode ? AnnotationModeIconPixmap(sz, fg)
             : bi.cmdId == CmdAnnotationShapes
@@ -3048,7 +3056,8 @@ static void RefreshToolbarIcons(MainWindow* win) {
         if (!HasToolbarButtonContent(bi)) {
             continue;
         }
-        const char* icon = bi.cmdId == CmdAnnotationLasso ? LassoToolIcon(win) : bi.icon;
+        const char* icon = bi.cmdId == CmdAnnotationLasso ? LassoToolIcon(win)
+                                                          : (bi.cmdId == CmdCreateAnnotInk ? PenToolsIcon() : bi.icon);
         ib->pixmap = bi.cmdId == CmdAnnotationShapes ? ShapeToolPixmap(sz, fg)
                                                      : GetCachedPixmapForSvg(Str(icon), sz, sz, fg, TbBgColor());
         ib->pixmapDisabled = bi.cmdId == CmdAnnotationShapes
@@ -7572,12 +7581,18 @@ static void BuildToolbarLayout(MainWindow* win) {
         } else {
             auto* ib = new VirtIconButton();
             ib->padding = {cyPad, iconPad, cyPad, iconPad};
-            ib->hasDropdown = (bi.cmdId == CmdToggleReadAloud || bi.cmdId == CmdAnnotationShapes || bi.cmdId == CmdAnnotationLasso || bi.cmdId == CmdInvertColors);
+            ib->hasDropdown = (bi.cmdId == CmdToggleReadAloud || bi.cmdId == CmdAnnotationShapes ||
+                               bi.cmdId == CmdAnnotationLasso || bi.cmdId == CmdInvertColors);
             if (bi.cmdId == CmdOpenFile) {
                 ib->label = Tr("Open");
                 ib->labelFont = tb->platformFont;
             }
-            Str svg = bi.svgIcon ? bi.svgIcon : Str(bi.cmdId == CmdAnnotationShapes ? ShapeToolIcon() : (bi.cmdId == CmdAnnotationLasso ? LassoToolIcon(win) : bi.icon));
+            Str svg = bi.svgIcon ? bi.svgIcon
+                                 : Str(bi.cmdId == CmdAnnotationShapes
+                                           ? ShapeToolIcon()
+                                           : (bi.cmdId == CmdAnnotationLasso
+                                                  ? LassoToolIcon(win)
+                                                  : (bi.cmdId == CmdCreateAnnotInk ? PenToolsIcon() : bi.icon)));
             ib->pixmap = len(bi.svgIcon) == 0 && bi.cmdId == CmdAnnotationMode
                              ? AnnotationModeIconPixmap(tb->iconSize, fg)
                          : bi.cmdId == CmdAnnotationShapes
@@ -7677,8 +7692,13 @@ static void BuildToolbarLayout(MainWindow* win) {
         } else {
             auto* ib = new VirtIconButton();
             ib->padding = {cyPad, iconPad, cyPad, iconPad};
-            ib->hasDropdown = (bi.cmdId == CmdAnnotationShapes || bi.cmdId == CmdAnnotationLasso || bi.cmdId == CmdInvertColors);
-            Str svg(bi.cmdId == CmdAnnotationShapes ? ShapeToolIcon() : (bi.cmdId == CmdAnnotationLasso ? LassoToolIcon(win) : bi.icon));
+            ib->hasDropdown =
+                (bi.cmdId == CmdAnnotationShapes || bi.cmdId == CmdAnnotationLasso || bi.cmdId == CmdInvertColors);
+            Str svg(bi.cmdId == CmdAnnotationShapes
+                        ? ShapeToolIcon()
+                        : (bi.cmdId == CmdAnnotationLasso
+                               ? LassoToolIcon(win)
+                               : (bi.cmdId == CmdCreateAnnotInk ? PenToolsIcon() : bi.icon)));
             ib->pixmap = bi.cmdId == CmdAnnotationShapes
                              ? ShapeToolPixmap(tb->iconSize, fg)
                              : GetCachedPixmapForSvg(svg, tb->iconSize, tb->iconSize, fg, TbBgColor());
