@@ -1004,6 +1004,11 @@ int RunAppUnitTests(bool forAi) {
         RefHoverPopup_UnitTests();
         return utassert_print_results();
     }
+    WCHAR highlightPresetsOnly[2]{};
+    if (GetEnvironmentVariableW(L"SUMATRA_HIGHLIGHT_PRESETS_ONLY", highlightPresetsOnly, dimof(highlightPresetsOnly))) {
+        SelectionToolbar_UnitTests();
+        return utassert_print_results();
+    }
     WCHAR popupsOnly[2]{};
     if (GetEnvironmentVariableW(L"SUMATRA_TOOLBAR_POPUPS_ONLY", popupsOnly, dimof(popupsOnly))) {
         VirtCtrl_UnitTests();

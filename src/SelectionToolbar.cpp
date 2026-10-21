@@ -25,6 +25,7 @@
 #include "TextSelection.h"
 #include "Annotation.h"
 #include "SumatraPDF.h"
+#include "SumatraDialogs.h"
 #include "MainWindow.h"
 #include "WindowTab.h"
 #include "Canvas.h"
@@ -64,6 +65,7 @@ struct SelectionToolbarButton {
     Pixmap* icon = nullptr; // svgIcon rendered at the current size; not owned
     Pixmap* iconDisabled = nullptr;
     bool enabled = true;
+    Color highlightColor = kColorUnset;
 };
 
 static Str ButtonLabel(const SelectionToolbarButton& b) {
@@ -95,9 +97,53 @@ struct SelectionToolbar {
     bool dismissed = false;
     bool lassoMode = false;
     Rect colorAnchor;
+    int highlightEditIndex = -1;
+    WindowTab* highlightColorTab = nullptr;
     Vec<SelectionToolbarButton> buttons;
     Func1List<MainWindow*> onWindowMoved;
 };
+
+constexpr int kHighlightPresetFirst = CmdLast + 80;
+constexpr int kHighlightPresetCount = 6;
+constexpr int kHighlightPaletteId = CmdLast + 86;
+
+static bool IsHighlightPreset(int cmdId) {
+    return cmdId >= kHighlightPresetFirst && cmdId < kHighlightPresetFirst + kHighlightPresetCount;
+}
+
+static Str HighlightColorLabel(Color color) {
+    switch (color & 0xffffff) {
+        case 0x00ffff:
+            return TrN("Yellow highlight (right-click to change)");
+        case 0x5df08b:
+            return TrN("Green highlight (right-click to change)");
+        case 0xfade99:
+            return TrN("Cyan highlight (right-click to change)");
+        case 0xd299f1:
+            return TrN("Pink highlight (right-click to change)");
+        case 0x409aff:
+            return TrN("Orange highlight (right-click to change)");
+        case 0xff80c6:
+            return TrN("Purple highlight (right-click to change)");
+        case 0x4547e2:
+            return TrN("Red highlight (right-click to change)");
+        default:
+            return TrN("Custom highlight color (right-click to change)");
+    }
+}
+
+static void HighlightPresetColors(Vec<Color>& colors) {
+    ParseColorList(gSettings->annotations.presetColors, colors, 0);
+}
+
+static bool ReplaceHighlightPreset(int index, Color color) {
+    Vec<Color> colors;
+    HighlightPresetColors(colors);
+    if (index < 0 || index >= len(colors) || color == kColorUnset) return false;
+    colors[index] = color;
+    str::ReplaceWithCopy(&gSettings->annotations.presetColors, SerializeColorList(colors));
+    return true;
+}
 
 constexpr int kLassoMoreId = CmdLast + 72;
 constexpr int kLassoPatternId = CmdLast + 73;
@@ -269,6 +315,27 @@ static void InitButtons(SelectionToolbar* tb, MainWindow* win) {
     }
     Vec<int> ids;
     CollectBuiltInSelectionToolbarCmds(ids);
+    CommandVisibility highlight = GetCommandVisibility(CmdCreateAnnotHighlight, ctx, CommandSurface::Toolbar);
+    if (!CommandShouldRemove(highlight) && VecFind(ids, (int)CmdCreateAnnotHighlight) >= 0) {
+        Vec<Color> colors;
+        HighlightPresetColors(colors);
+        for (int i = 0; i < std::min(len(colors), kHighlightPresetCount); i++) {
+            SelectionToolbarButton swatch;
+            swatch.cmdId = kHighlightPresetFirst + i;
+            swatch.label = HighlightColorLabel(colors[i]);
+            swatch.enabled = !CommandShouldDisable(highlight);
+            swatch.highlightColor = colors[i];
+            VecAppend(tb->buttons, swatch);
+        }
+        VecAppend(tb->buttons, SelectionToolbarButton{kHighlightPaletteId,
+                                                      TrN("Highlight colors: choose or edit presets"),
+                                                      {},
+                                                      Str(GetColorPickerIconSvg()),
+                                                      nullptr,
+                                                      nullptr,
+                                                      !CommandShouldDisable(highlight)});
+        VecAppend(tb->buttons, {});
+    }
     for (int i = 0; i < len(ids); i++) {
         if (ids[i] == 0) {
             VecAppend(tb->buttons, {});
@@ -395,6 +462,7 @@ struct SelToolbarTextButton : VirtButton {
 
 struct SelToolbarIconButton : VirtIconButton {
     int nativeIcon = 0;
+    Color highlightColor = kColorUnset;
     SelToolbarIconButton() {
         SetColor(kColIconBtnBgHover, kColorTransparent);
         SetColor(kColIconBtnBgSelected, kColorTransparent);
@@ -405,6 +473,22 @@ struct SelToolbarIconButton : VirtIconButton {
             ctx.gfx->FillRoundedRect(ctx.bounds, radius, hoverBg);
         }
         VirtIconButton::Paint(ctx);
+        if (highlightColor != kColorUnset) {
+            int diameter = std::max(4, ToolbarIconSize() * 3 / 4);
+            Rect circle{ctx.bounds.x + (ctx.bounds.dx - diameter) / 2, ctx.bounds.y + (ctx.bounds.dy - diameter) / 2,
+                        diameter, diameter};
+            if (HasFlag(vwfFocused)) {
+                Rect ring = circle;
+                ring.Inflate(DpiScale(3), DpiScale(3));
+                ctx.gfx->FillEllipse(ring, SelBarTextColor());
+                ring.Inflate(-DpiScale(1), -DpiScale(1));
+                ctx.gfx->FillEllipse(ring, SelBarBg());
+            }
+            ctx.gfx->FillEllipse(circle, SelBarMutedTextColor());
+            circle.Inflate(-std::max(1, DpiScale(1)), -std::max(1, DpiScale(1)));
+            ctx.gfx->FillEllipse(circle, IsEnabled() ? highlightColor : SelBarMutedTextColor());
+            return;
+        }
         if (!nativeIcon) return;
         Color color = IsEnabled() ? SelBarTextColor() : SelBarMutedTextColor();
         int size = ToolbarIconSize();
@@ -534,6 +618,53 @@ static void ShowLassoPattern(SelectionToolbar* tb) {
 // The toolbar has done its job once an action is picked, so hide it until the
 // selection changes. Sticky-note placement records the selection end first,
 // because the command drops the selection.
+static void InvokeSelectionToolbarCommand(SelectionToolbar*, int);
+
+static void HighlightColorsPicked(MainWindow* win, ChangeColorsArgs* args) {
+    if (!IsMainWindowValidAndNotClosing(win) || !win->selectionToolbar) return;
+    SelectionToolbar* tb = win->selectionToolbar;
+    int index = tb->highlightEditIndex;
+    bool sameTab = tb->highlightColorTab == win->CurrentTab();
+    tb->highlightColorTab = nullptr;
+    if (args->colorsChanged) {
+        str::ReplaceWithCopy(&gSettings->annotations.presetColors, SerializeColorList(args->colors));
+        ScheduleSaveSettings();
+    }
+    if (!args->didSelect || args->color == kColorUnset) return;
+    if (index >= 0) {
+        if (ReplaceHighlightPreset(index, args->color)) ScheduleSaveSettings();
+        if (sameTab) ShowSelectionToolbar(win, SelToolbarShow::Now);
+        return;
+    }
+    if (!sameTab || !win->CurrentTab()->selectionOnPage) return;
+    SetColorText(gSettings->annotations.highlightColor, SerializeColorTemp(args->color));
+    ScheduleSaveSettings();
+    InvokeSelectionToolbarCommand(tb, CmdCreateAnnotHighlight);
+}
+
+static void OpenHighlightColors(MainWindow* win) {
+    if (!IsMainWindowValidAndNotClosing(win) || !win->selectionToolbar) return;
+    SelectionToolbar* tb = win->selectionToolbar;
+    if (tb->highlightColorTab != win->CurrentTab()) return;
+    auto* args = new ChangeColorsArgs();
+    args->win = win;
+    args->title = tb->highlightEditIndex >= 0 ? Tr("Change highlight preset") : Tr("Highlight colors");
+    HighlightPresetColors(args->colors);
+    args->color = tb->highlightEditIndex >= 0 && tb->highlightEditIndex < len(args->colors)
+                      ? args->colors[tb->highlightEditIndex]
+                      : GetParsedColor(gSettings->annotations.highlightColor, MkRgb(255, 255, 0));
+    args->withOpacity = true;
+    args->onClose = MkFunc1(HighlightColorsPicked, win);
+    ShowChangeColorsDialog(args);
+}
+
+static void QueueHighlightColors(SelectionToolbar* tb, int index) {
+    tb->highlightEditIndex = index;
+    tb->highlightColorTab = tb->win->CurrentTab();
+    HideSelectionToolbar(tb->win);
+    uitask::Post(MkFunc0(OpenHighlightColors, tb->win), "Selection highlight colors");
+}
+
 static void InvokeSelectionToolbarCommand(SelectionToolbar* tb, int cmdId) {
     if (!tb || !cmdId) {
         return;
@@ -556,6 +687,19 @@ static void InvokeSelectionToolbarCommand(SelectionToolbar* tb, int cmdId) {
             HwndPostCommand(win->hwndFrame, cmdId);
         }
         return;
+    }
+    if (cmdId == kHighlightPaletteId) {
+        QueueHighlightColors(tb, -1);
+        return;
+    }
+    if (IsHighlightPreset(cmdId)) {
+        Vec<Color> colors;
+        HighlightPresetColors(colors);
+        int index = cmdId - kHighlightPresetFirst;
+        if (index >= len(colors)) return;
+        SetColorText(gSettings->annotations.highlightColor, SerializeColorTemp(colors[index]));
+        ScheduleSaveSettings();
+        cmdId = CmdCreateAnnotHighlight;
     }
     LPARAM commandPoint = 0;
     if (cmdId == CmdCreateAnnotText) {
@@ -595,6 +739,30 @@ static void OnSelToolbarButtonClicked(SelectionToolbar* tb, VirtMouseEvent* ev) 
     InvokeSelectionToolbarCommand(tb, cmdId);
 }
 
+static void OnHighlightPresetEdit(SelectionToolbar* tb, VirtMouseEvent* ev) {
+    if (!ev->target || !IsHighlightPreset(ev->target->id)) return;
+    ev->didHandle = true;
+    QueueHighlightColors(tb, ev->target->id - kHighlightPresetFirst);
+}
+
+static void OnSelectionToolbarKey(SelectionToolbar* tb, VirtKeyEvent* ev) {
+    if (ev->vkey == VK_ESCAPE) {
+        HideSelectionToolbar(tb->win);
+        SetFocus(tb->win->hwndCanvas);
+        ev->didHandle = true;
+        return;
+    }
+    if (!ev->target) return;
+    bool edit = IsHighlightPreset(ev->target->id) && (ev->vkey == VK_APPS || (ev->vkey == VK_F10 && ev->isShift));
+    if (edit)
+        QueueHighlightColors(tb, ev->target->id - kHighlightPresetFirst);
+    else if (ev->vkey == VK_RETURN || ev->vkey == VK_SPACE)
+        InvokeSelectionToolbarCommand(tb, ev->target->id);
+    else
+        return;
+    ev->didHandle = true;
+}
+
 // Build the layout tree for the current buttons and measure it into tb->size
 // (the window region is applied after SetWindowPos).
 static void LayoutToolbar(SelectionToolbar* tb) {
@@ -618,15 +786,16 @@ static void LayoutToolbar(SelectionToolbar* tb) {
     auto* box = new HBox();
     box->alignCross = CrossAxisAlign::Stretch;
     int maxColumns = len(tb->buttons);
-    if (tb->lassoMode) {
-        Rect work = PlatformWindowWorkArea(tb->win->hwndFrame);
-        int available = std::max(1, std::min(tb->win->canvasRc.dx, work.dx) - 2 * margin);
+    {
+        Rect work = PlatformWindowWorkArea(tb->win ? tb->win->hwndFrame : nullptr);
+        int canvasWidth = tb->win ? tb->win->canvasRc.dx : work.dx;
+        int available = std::max(1, std::min(canvasWidth, work.dx) - 2 * margin);
         maxColumns = std::max(1, available / (rowDy + gap));
     }
     int column = 0;
     bool isFirst = true;
     for (SelectionToolbarButton& b : tb->buttons) {
-        if (tb->lassoMode && column == maxColumns) {
+        if (column == maxColumns) {
             rows->AddChild(box);
             box = new HBox();
             box->alignCross = CrossAxisAlign::Stretch;
@@ -636,13 +805,14 @@ static void LayoutToolbar(SelectionToolbar* tb) {
         VirtCtrl* w;
         if (b.cmdId == 0) {
             w = MakeSelectionToolbarSeparator(rowDy);
-        } else if (b.svgIcon || tb->lassoMode) {
+        } else if (b.svgIcon || tb->lassoMode || b.highlightColor != kColorUnset) {
             auto* ib = new SelToolbarIconButton();
+            ib->highlightColor = b.highlightColor;
             ib->pixmap = b.icon;
             ib->pixmapDisabled = b.iconDisabled;
             ib->sideLen = rowDy;
             ib->hoverBg = hoverBg;
-            if (len(b.svgIcon) == 0) ib->nativeIcon = b.cmdId;
+            if (len(b.svgIcon) == 0 && b.highlightColor == kColorUnset) ib->nativeIcon = b.cmdId;
             ib->SetTooltip(ButtonLabel(b));
             ib->onClick = MkFunc1(OnSelToolbarButtonClicked, tb);
             w = ib;
@@ -657,6 +827,11 @@ static void LayoutToolbar(SelectionToolbar* tb) {
             w = tbtn;
         }
         w->id = b.cmdId;
+        if (b.cmdId) {
+            w->SetFlag(vwfFocusable, true);
+            w->onKeyDown = MkFunc1(OnSelectionToolbarKey, tb);
+            if (IsHighlightPreset(b.cmdId)) w->onContextMenu = MkFunc1(OnHighlightPresetEdit, tb);
+        }
         if (b.cmdId != 0) {
             w->SetIsEnabled(b.enabled);
         }
@@ -674,7 +849,7 @@ static void LayoutToolbar(SelectionToolbar* tb) {
     tb->layoutFont = tb->font;
     tb->layoutIconSize = iconSize;
     tb->layoutDpi = DpiGet();
-    tb->layoutWidth = tb->lassoMode ? tb->win->canvasRc.dx : 0;
+    tb->layoutWidth = tb->win ? tb->win->canvasRc.dx : 0;
     tb->layoutBackground = bgCol;
     tb->layoutForeground = textCol;
     tb->layoutMuted = mutedCol;
@@ -687,13 +862,14 @@ static bool RefreshToolbarButtons(SelectionToolbar* tb, MainWindow* win) {
     InitButtons(&next, win);
     bool same = tb->host->layout && tb->lassoMode == next.lassoMode && len(tb->buttons) == len(next.buttons) &&
                 tb->layoutFont == tb->font && tb->layoutIconSize == ToolbarIconSize() && tb->layoutDpi == DpiGet() &&
-                tb->layoutWidth == (next.lassoMode ? win->canvasRc.dx : 0) && tb->layoutBackground == SelBarBg() &&
+                tb->layoutWidth == (win ? win->canvasRc.dx : 0) && tb->layoutBackground == SelBarBg() &&
                 tb->layoutForeground == SelBarTextColor() && tb->layoutMuted == SelBarMutedTextColor() &&
                 tb->layoutHover == SelBarHoverBg(SelBarBg());
     for (int i = 0; same && i < len(next.buttons); i++) {
         const auto& old = tb->buttons[i];
         const auto& current = next.buttons[i];
-        same = old.cmdId == current.cmdId && old.enabled == current.enabled && str::Eq(old.label, current.label) &&
+        same = old.cmdId == current.cmdId && old.highlightColor == current.highlightColor &&
+               old.enabled == current.enabled && str::Eq(old.label, current.label) &&
                str::Eq(old.userLabel, current.userLabel) && str::Eq(old.svgIcon, current.svgIcon);
     }
     if (same) return false;
@@ -883,6 +1059,9 @@ TempStr SelectionToolbarLayoutDumpTemp() {
         return ToStrTemp(out);
     }
     RefreshToolbarButtons(tb, win);
+    int highlightPresets = 0;
+    for (const auto& button : tb->buttons) highlightPresets += IsHighlightPreset(button.cmdId);
+    out.Append(fmt("highlightPresets=%d\n", highlightPresets));
     int nSeparators = 0;
     for (const SelectionToolbarButton& b : tb->buttons) {
         if (b.cmdId == 0) {
@@ -893,7 +1072,12 @@ TempStr SelectionToolbarLayoutDumpTemp() {
                    tb->size.dx, tb->size.dy, ToolbarIconSize()));
     for (int i = 0; i < len(tb->buttons); i++) {
         const SelectionToolbarButton& b = tb->buttons[i];
-        Str kind = b.cmdId == 0 ? StrL("separator") : ((b.svgIcon || tb->lassoMode) ? StrL("icon") : StrL("text"));
+        Str kind = b.highlightColor != kColorUnset ? StrL("swatch")
+                   : b.cmdId == 0                  ? StrL("separator")
+                                                   : ((b.svgIcon || tb->lassoMode) ? StrL("icon") : StrL("text"));
+        if (b.highlightColor != kColorUnset)
+            out.Append(fmt("highlightPreset=%d color=%s\n", b.cmdId - kHighlightPresetFirst + 1,
+                           SerializeColorTemp(b.highlightColor)));
         int iconDx = b.icon ? b.icon->width : 0;
         int iconDy = b.icon ? b.icon->height : 0;
         out.Append(
@@ -913,11 +1097,18 @@ TempStr SelectionToolbarClickTemp(Str cmdName, int* exitCodeOut) {
         return ToStrTemp(out);
     };
     MainWindow* win = len(gWindows) > 0 ? gWindows[0] : nullptr;
+    if (str::Eq(cmdName, StrL("Show")) && win) {
+        ShowSelectionToolbar(win, SelToolbarShow::Now);
+        return finish(StrL("OK\n"), 0);
+    }
     SelectionToolbar* tb = win ? win->selectionToolbar : nullptr;
     if (!tb || !tb->host || !tb->host->IsVisible()) {
         return finish(StrL("ERROR toolbar-not-visible\n"), 1);
     }
     int cmdId = str::Eq(cmdName, StrL("Smooth")) ? kLassoSmoothId : GetCommandIdByName(cmdName);
+    for (int i = 0; i < kHighlightPresetCount; i++)
+        if (str::Eq(cmdName, fmt("HighlightPreset%d", i + 1))) cmdId = kHighlightPresetFirst + i;
+    if (str::Eq(cmdName, StrL("HighlightColors"))) cmdId = kHighlightPaletteId;
     if (str::Eq(cmdName, StrL("Solid")) || str::Eq(cmdName, StrL("Dashed")) || str::Eq(cmdName, StrL("Dotted"))) {
         AnnotationLinePattern pattern = str::Eq(cmdName, StrL("Solid"))    ? AnnotationLinePattern::Solid
                                         : str::Eq(cmdName, StrL("Dashed")) ? AnnotationLinePattern::Dashed
@@ -1182,6 +1373,31 @@ void SelectionToolbar_UnitTests() {
         if (gSettings) SetCurrentThemeFromSettings();
         RefreshUiFonts();
     };
+    Vec<Color> defaults;
+    HighlightPresetColors(defaults);
+    utassert(len(defaults) >= kHighlightPresetCount);
+    utassert((defaults[4] & 0xffffff) == MkRgb(255, 154, 64));
+    utassert((defaults[5] & 0xffffff) == MkRgb(198, 128, 255));
+    Str savedPalette = str::Dup(gSettings->annotations.presetColors);
+    defer {
+        str::Free(savedPalette);
+    };
+    Color custom = MkRgba(20, 90, 160, 180);
+    utassert(ReplaceHighlightPreset(1, custom));
+    Vec<Color> changed;
+    HighlightPresetColors(changed);
+    utassert(changed[0] == defaults[0] && changed[1] == custom && changed[2] == defaults[2]);
+    utassert(!ReplaceHighlightPreset(-1, custom));
+    utassert(!ReplaceHighlightPreset(len(changed), custom));
+    Str encoded = SerializeSettings(gSettings, {});
+    Settings* reopened = NewSettings(encoded);
+    Vec<Color> persisted;
+    ParseColorList(reopened->annotations.presetColors, persisted, 0);
+    utassert(len(persisted) == len(changed) && persisted[1] == custom);
+    DeleteSettings(reopened);
+    str::Free(encoded);
+    str::ReplaceWithCopy(&gSettings->annotations.presetColors, savedPalette);
+
     VirtHost::CreateArgs args;
     args.className = WStrL(L"SumatraSelectionRefreshTest");
     args.isPopup = true;

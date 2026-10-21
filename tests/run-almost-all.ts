@@ -34,6 +34,7 @@ import { testit as markdownFontDownloads } from "./markdown-font-downloads.ts";
 import { testit as markdownSystemFonts } from "./markdown-system-fonts.ts";
 import { testit as markdownReadingLayout } from "./markdown-reading-layout.ts";
 import { testit as markdownZoomControls } from "./markdown-zoom-controls.ts";
+import { testit as highlightPresets } from "./highlight-presets.ts";
 import { testit as markdownMath } from "./markdown-math.ts";
 import { testit as tocFilterLayout } from "./toc-filter-layout.ts";
 import { testit as tocSidebarState } from "./toc-sidebar-state.ts";
@@ -651,6 +652,7 @@ export const tests: NamedTest[] = [
   ["markdown-system-fonts", markdownSystemFonts],
   ["markdown-reading-layout", markdownReadingLayout],
   ["markdown-zoom-controls", markdownZoomControls],
+  ["highlight-presets", highlightPresets],
   ["markdown-math", markdownMath],
   ["toc-filter-layout", tocFilterLayout],
   ["toc-sidebar-state", tocSidebarState],
