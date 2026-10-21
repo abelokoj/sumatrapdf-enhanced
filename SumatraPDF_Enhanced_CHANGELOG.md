@@ -1,5 +1,13 @@
 # SumatraPDF Enhanced changelog
 
+## Testing release 2026-10-21.5
+
+- Fix Markdown content-only zoom and synchronize wheel, toolbar, default and remembered zoom.
+- Add editable selection highlight presets for PDFs and fixed-page documents.
+- Add all-downloaded-and-online dictionary aggregation with source labels, cancellation and persisted selection.
+- See [release notes](docs/releases/2026-10-21.5.md) for the full changes since 2026-10-11.4 and validation limits.
+
+
 ## Pen tools icon selection - 2026-10-18
 
 - Replace the Pen tools button with approved option 6 (Restrained monochrome): silver nib, neutral fitting, small blue/cyan collar accent, and short rounded point. Use separate light/dark SVG artwork and refresh it when the toolbar theme changes.
