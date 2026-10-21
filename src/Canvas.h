@@ -4,6 +4,7 @@
 enum class LaserPointerMode;
 
 void UpdateDeltaPerLine();
+void ZoomByMouseWheel(MainWindow*, WPARAM);
 
 LRESULT CALLBACK WndProcCanvas(HWND, UINT, WPARAM, LPARAM);
 LRESULT WndProcCanvasAbout(MainWindow*, HWND, UINT, WPARAM, LPARAM);

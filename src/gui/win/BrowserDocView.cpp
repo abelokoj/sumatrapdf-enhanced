@@ -19,6 +19,26 @@
 constexpr const char* kChmVirtualHost = "https://sumatrapdf.chm/";
 constexpr const WCHAR* kChmVirtualHostW = L"https://sumatrapdf.chm/";
 
+// Browser chrome remains at 100%; wheel requests use the app zoom policy.
+constexpr const char* kContentZoomWheelJs = R"JS((function(){
+  if (window.__sumatraContentZoomWheel) return;
+  window.__sumatraContentZoomWheel = true;
+  var remainder = 0;
+  window.addEventListener('wheel', function(e) {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    var step = e.deltaMode === 1 ? 40 : (e.deltaMode === 2 ? innerHeight : 1);
+    var raw = Number.isFinite(e.wheelDeltaY) && e.wheelDeltaY !== 0 ? e.wheelDeltaY : -e.deltaY * step;
+    if (!Number.isFinite(raw)) return;
+    remainder += raw;
+    var delta = remainder < 0 ? Math.ceil(remainder) : Math.floor(remainder);
+    if (!delta) return;
+    remainder -= delta;
+    var wv = window.chrome && window.chrome.webview;
+    if (wv) wv.postMessage(JSON.stringify({__sumatraNotify:1,method:'zoomWheel',params:JSON.stringify([delta])}));
+  }, {passive:false,capture:true});
+})();)JS";
+
 // Reports the document scroll position back to the host so GetScrollPos() can
 // answer synchronously (WebView2 script eval is async and can't return a value).
 // Posted through chrome.webview, not __sumatra__.notify: AddScriptToExecuteOnDocumentCreated
@@ -302,6 +322,10 @@ void BrowserWebviewWnd::OnJsNotifyCb(void* ctx, Str method, Str paramsJson) {
     if (!self->cb) {
         return;
     }
+    if (str::Eq(method, StrL("zoomWheel")) && self->contentZoom) {
+        self->cb->OnZoomWheel(st.Int(0));
+        return;
+    }
     if (str::Eq(method, StrL("findResult"))) {
         self->cb->OnFindResult(st.Int(0), st.Int(1), st.Int(2));
         return;
@@ -374,6 +398,10 @@ void BrowserDocView::NavigationCompleted(void* ctx, Str url, bool success) {
         view->wv->RegisterForwardingDropTarget();
     }
     view->cb->OnDocumentComplete(url);
+    if (view->contentZoom && view->wv) {
+        view->wv->Eval(Str(kContentZoomWheelJs));
+        view->SetZoomPercent(view->zoomPercent);
+    }
     // after zoom / restore have applied: init scripts may have missed this
     // document, and hash navigation often never fires a 'scroll' event
     if (view->wv) {
@@ -548,6 +576,7 @@ bool BrowserDocView::CreateWebView2() {
     // forward app accelerators (Ctrl+W close tab, Ctrl+K command palette, etc.)
     // to the main window so they work while the WebView2 has keyboard focus
     wv->forwardAppAccelerators = true;
+    wv->allowUserZoom = !contentZoom;
     // let file drops fall through to the canvas (to open the dropped file)
     // instead of being swallowed by the WebView2 control
     wv->allowExternalDrop = false;
@@ -568,6 +597,7 @@ bool BrowserDocView::CreateWebView2() {
     }
 
     wv->Init(Str(kReportScrollJs));
+    if (contentZoom) wv->Init(Str(kContentZoomWheelJs));
     wv->Init(Str(kFindInPageJs));
 
     backend = Backend::WebView2;
@@ -592,6 +622,7 @@ BrowserDocView* BrowserDocView::Create(HWND hwndParent, HtmlWindowCallback* cb, 
     if (virtualHostPrefix) {
         view->virtualHost = str::Dup(virtualHostPrefix);
         view->virtualHostW = wstr::Dup(ToWStrTemp(virtualHostPrefix));
+        view->contentZoom = str::Eq(virtualHostPrefix, StrL("https://sumatrapdf.markdown/"));
     } else {
         view->virtualHost = str::Dup(Str(kChmVirtualHost));
         view->virtualHostW = wstr::Dup(kChmVirtualHostW);
@@ -665,6 +696,14 @@ void BrowserDocView::GoForward() {
 void BrowserDocView::SetZoomPercent(int zoom) {
     zoomPercent = zoom;
     if (backend == Backend::WebView2 && wv) {
+        if (contentZoom) {
+            wv->SetZoomPercent(100);
+            wv->Eval(
+                fmt("(function(){var m=document.getElementById('enhanced-markdown-content')||document.body;"
+                    "if(m)m.style.zoom='%g';})()",
+                    (double)zoom / 100.0));
+            return;
+        }
         wv->SetZoomPercent(zoom);
         zoomPercent = wv->GetZoomPercent();
         return;
@@ -676,6 +715,7 @@ void BrowserDocView::SetZoomPercent(int zoom) {
 }
 
 int BrowserDocView::GetZoomPercent() const {
+    if (contentZoom && backend == Backend::WebView2) return zoomPercent;
     if (backend == Backend::WebView2 && wv) {
         return wv->GetZoomPercent();
     }
@@ -868,6 +908,8 @@ LRESULT BrowserDocView::SendMsg(UINT msg, WPARAM wp, LPARAM lp) {
             // (focused) or canvas parent gets the wheel, handle zoom or scroll (#6142).
             if ((LOWORD(wp) & MK_CONTROL) || IsCtrlPressed()) {
                 short delta = GET_WHEEL_DELTA_WPARAM(wp);
+                if (!delta) return 0;
+                if (contentZoom && cb && cb->OnZoomWheel(delta)) return 0;
                 int currentZoom = GetZoomPercent();
                 if (currentZoom <= 0) currentZoom = 100;
                 int step = (delta > 0) ? 10 : -10;

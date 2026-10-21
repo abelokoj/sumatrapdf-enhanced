@@ -1163,6 +1163,7 @@ struct ControllerCallbackHandler : DocControllerCallback {
     void Repaint() override { ScheduleRepaint(win, 0); }
     void PageNoChanged(DocController* ctrl, int pageNo) override;
     void ZoomChanged(DocController* ctrl, float zoomVirtual) override;
+    void ZoomByMouseWheel(DocController* ctrl, int delta) override;
     void UpdateScrollbars(DisplayModel* dm, Size canvas) override;
     void RequestRendering(DisplayModel* dm, int pageNo) override;
     void RequestPredictiveRendering(DisplayModel* dm, int originPageNo, const int* pages, int nPages) override;
@@ -2118,6 +2119,12 @@ static void TogglePageInfoHelper(MainWindow* win) {
     }
     win->pageInfoWanted = true;
     ShowPageInfoIfWanted(win);
+}
+
+void ControllerCallbackHandler::ZoomByMouseWheel(DocController* ctrl, int delta) {
+    if (win->ctrl == ctrl && delta) {
+        ::ZoomByMouseWheel(win, MAKEWPARAM(MK_CONTROL, (short)limitValue(delta, -32767, 32767)));
+    }
 }
 
 void ControllerCallbackHandler::ZoomChanged(DocController* ctrl, float /*zoomVirtual*/) {

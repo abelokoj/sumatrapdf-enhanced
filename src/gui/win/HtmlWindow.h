@@ -35,6 +35,7 @@ struct HtmlWindowCallback {
     // all-pages find result (BrowserDocView WebView2 backend only): raw
     // 'mdfindall' payload ("<gen> <total> <records>")
     virtual void OnFindAllResult(Str) {}
+    virtual bool OnZoomWheel(int) { return false; }
 
     virtual ~HtmlWindowCallback() = default;
 };

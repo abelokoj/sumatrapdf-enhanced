@@ -69,6 +69,7 @@ struct MarkdownModel : DocController {
     bool OnBeforeNavigate(Str url, bool newWindow);
     void OnDocumentComplete(Str url);
     void OnLButtonDown();
+    bool OnZoomWheel(int delta);
     Str GetDataForUrl(Str url);
     void DownloadData(Str url, Str data);
     void UpdateTheme();

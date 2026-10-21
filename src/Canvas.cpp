@@ -2875,8 +2875,7 @@ static void PaintAnnotationLasso(MainWindow* win, HDC hdc) {
             Gdiplus::PointF arrowPts[3] = {
                 {tipX - arrowLen * cosf(tangent - 0.5f), tipY - arrowLen * sinf(tangent - 0.5f)},
                 {tipX, tipY},
-                {tipX - arrowLen * cosf(tangent + 0.5f), tipY - arrowLen * sinf(tangent + 0.5f)}
-            };
+                {tipX - arrowLen * cosf(tangent + 0.5f), tipY - arrowLen * sinf(tangent + 0.5f)}};
             gfx.DrawLines(&arrowPen, arrowPts, 3);
 
             if (lasso.rotating) {
@@ -2884,7 +2883,8 @@ static void PaintAnnotationLasso(MainWindow* win, HDC hdc) {
                 swprintf_s(label, L"%.1f\x00b0", lasso.rotation);
                 SetTextColor(hdc, rgb);
                 SetBkMode(hdc, TRANSPARENT);
-                TextOutW(hdc, handle.x + rotateSize / 2 + DpiScale(4), handle.y - DpiScale(8), label, (int)wcslen(label));
+                TextOutW(hdc, handle.x + rotateSize / 2 + DpiScale(4), handle.y - DpiScale(8), label,
+                         (int)wcslen(label));
             }
         }
     }
@@ -5674,7 +5674,8 @@ static bool IsFirstWheelMsg(LARGE_INTEGER& lastTime) {
 }
 
 // this does zooming via mouse wheel (with ctrl or right mouse buttone)
-static void ZoomByMouseWheel(MainWindow* win, WPARAM wp) {
+void ZoomByMouseWheel(MainWindow* win, WPARAM wp) {
+    if (!GET_WHEEL_DELTA_WPARAM(wp)) return;
     // don't show the context menu when zooming with the right mouse-button down
     win->dragStartPending = false;
     // Stop smooth scroll when zooming — y offsets are no longer meaningful.

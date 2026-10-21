@@ -69,6 +69,7 @@ class BrowserDocView {
     struct WebviewWnd* wv = nullptr;
     UINT_PTR subclassId = 0;
     int zoomPercent = 100;
+    bool contentZoom = false;
     // last scroll position reported by the WebView2 content (in CSS pixels);
     // (-1, -1) means "not known yet". The IE backend reads scroll state
     // synchronously instead and doesn't use this.

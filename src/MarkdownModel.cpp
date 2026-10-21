@@ -210,6 +210,7 @@ class MarkdownHtmlWindowHandler : public HtmlWindowCallback {
     bool OnBeforeNavigate(Str url, bool newWindow) override { return mm->OnBeforeNavigate(url, newWindow); }
     void OnDocumentComplete(Str url) override { mm->OnDocumentComplete(url); }
     void OnLButtonDown() override { mm->OnLButtonDown(); }
+    bool OnZoomWheel(int delta) override { return mm->OnZoomWheel(delta); }
     Str GetDataForUrl(Str url) override { return mm->GetDataForUrl(url); }
     void DownloadData(Str url, Str data) override { mm->DownloadData(url, data); }
     void OnFindResult(int gen, int current, int total) override { mm->OnFindResult(gen, current, total); }
@@ -465,6 +466,12 @@ void MarkdownModel::CopySelection() const {
 
 static bool gSendingMarkdownHtmlWindowMsg = false;
 
+bool MarkdownModel::OnZoomWheel(int delta) {
+    if (!cb) return false;
+    cb->ZoomByMouseWheel(this, delta);
+    return true;
+}
+
 LRESULT MarkdownModel::PassUIMsg(UINT msg, WPARAM wp, LPARAM lp) const {
     if (!docView || gSendingMarkdownHtmlWindowMsg) {
         return 0;
@@ -654,11 +661,11 @@ void MarkdownModel::SetZoomVirtual(float zoom, Point* /*fixPt*/) {
     if (zoom > 0) {
         zoom = limitValue(zoom, kZoomMin, kZoomMax);
     }
-    if (zoom <= 0 || !IsValidZoom(zoom)) {
+    if (!IsValidZoom(zoom)) {
         zoom = 100.0f;
     }
-    ZoomTo(zoom);
     zoomVirtual = zoom;
+    ZoomTo(zoom);
     initZoom = zoom;
 }
 
@@ -736,15 +743,12 @@ void MarkdownModel::RestoreHtmlScrollPos() {
 
 void MarkdownModel::ZoomTo(float zoomLevel) const {
     if (docView) {
-        docView->SetZoomPercent((int)zoomLevel);
+        docView->SetZoomPercent(zoomLevel > 0 ? (int)roundf(zoomLevel) : 100);
     }
 }
 
-float MarkdownModel::GetZoomVirtual(bool /*absolute*/) const {
-    if (!docView) {
-        return 100;
-    }
-    return (float)docView->GetZoomPercent();
+float MarkdownModel::GetZoomVirtual(bool absolute) const {
+    return absolute && zoomVirtual <= 0 ? 100.0f : zoomVirtual;
 }
 
 float MarkdownModel::GetNextZoomStep(float towardsLevel) const {

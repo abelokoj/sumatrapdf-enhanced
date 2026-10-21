@@ -172,6 +172,7 @@ struct WebviewWnd : WindowBase {
     WebViewResourceProvider resourceProvider;
     WebViewEvents events;
     bool forwardAppAccelerators = true;
+    bool allowUserZoom = true;
     bool allowClipboardRead = false;
     Color defaultBackgroundColor = kColorTransparent;
     // when false, WebView2 won't claim external (file) drops, so they fall
