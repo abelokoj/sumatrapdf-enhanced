@@ -140,6 +140,7 @@ struct LearningWindow {
     int promptShare = 30, splitHeight = 0;
     int splitPointerY = 0, splitPromptHeight = 0, splitStartShare = 30;
     int onlineOrder[3]{1, 2, 3};
+    int lookupSource = 0;
     Vec<bool> deckInstalled;
     Vec<DetailRun> detailRuns;
     DictionarySpeech* speech = nullptr;
@@ -154,7 +155,7 @@ struct LearningWindow {
     int serial = 0, ticket = 0, page = 0, position = 0, correct = 0;
     HWND controls[lcLast]{};
     HBRUSH background = nullptr, fieldBackground = nullptr;
-    Str context, source;
+    Str context, source, lookupNotice;
     Vec<OfflineDictPack> packs;
     Vec<OfflineMeaning> meanings;
     StrVec wordIds, deckIds, session, pairWords, pairDefinitions;
@@ -163,6 +164,7 @@ struct LearningWindow {
         if (cancelDownload) SetEvent(cancelDownload);
         str::Free(context);
         str::Free(source);
+        str::Free(lookupNotice);
         FreeOfflineMeanings(meanings);
         FreeDictionaryCatalog(packs);
         delete question;
@@ -334,21 +336,22 @@ static void LoadLearningPrefs(LearningWindow* w) {
     defer {
         str::Free(bytes);
     };
-    int share, first, second, third;
+    int share, first, second, third, source = 0;
     if (len(bytes) > 0 && len(bytes) <= 64 &&
-        sscanf_s(CStrTemp(bytes), "%d %d %d %d", &share, &first, &second, &third) == 4 && share >= 10 && share <= 80 &&
-        first >= 0 && first <= 3 && second >= 0 && second <= 3 && third >= 0 && third <= 3) {
+        sscanf_s(CStrTemp(bytes), "%d %d %d %d %d", &share, &first, &second, &third, &source) >= 4 && share >= 10 &&
+        share <= 80 && first >= 0 && first <= 3 && second >= 0 && second <= 3 && third >= 0 && third <= 3) {
         w->promptShare = share;
         w->onlineOrder[0] = first;
         w->onlineOrder[1] = second;
         w->onlineOrder[2] = third;
+        w->lookupSource = source >= 0 && source <= 5 ? source : 0;
     }
 }
 static void SaveLearningPrefs(LearningWindow* w) {
     if (!HasPermission(Perm::SavePreferences) || !CanAccessDisk() || gDontSaveSettings) return;
     TempStr pending = fmt("%s.tmp", LearningPrefsPath());
-    if (file::WriteFile(pending,
-                        fmt("%d %d %d %d", w->promptShare, w->onlineOrder[0], w->onlineOrder[1], w->onlineOrder[2]))) {
+    if (file::WriteFile(pending, fmt("%d %d %d %d %d", w->promptShare, w->onlineOrder[0], w->onlineOrder[1],
+                                     w->onlineOrder[2], w->lookupSource))) {
         if (!MoveFileExW(CWStrTemp(pending), CWStrTemp(LearningPrefsPath()),
                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
             DeleteFileW(CWStrTemp(pending));
@@ -528,7 +531,8 @@ static void ShowMeanings(LearningWindow* w) {
     for (const auto& meaning : w->meanings) {
         if (!str::Eq(dictionary, meaning.dictionaryId)) {
             text.Line({});
-            text.Line(design == 2 ? fmt("DICTIONARY PACK: %s", meaning.dictionary) : meaning.dictionary, DetailStyle::Section);
+            text.Line(design == 2 ? fmt("DICTIONARY PACK: %s", meaning.dictionary) : meaning.dictionary,
+                      DetailStyle::Section);
             if (len(meaning.phonetic)) text.Line(fmt("/%s/", meaning.phonetic), DetailStyle::IPA);
             if (len(meaning.phoneticUk) && !str::Eq(meaning.phoneticUk, meaning.phonetic))
                 text.Line(fmt("UK: /%s/", meaning.phoneticUk), DetailStyle::IPA);
@@ -553,6 +557,7 @@ static void ShowMeanings(LearningWindow* w) {
         text.Links(Tr("Antonyms"), meaning.antonyms);
         text.Line({});
     }
+    if (len(w->lookupNotice)) text.Line(w->lookupNotice, DetailStyle::Muted);
     if (len(w->context) || len(w->source)) {
         text.Line(design == 2 ? Tr("CAPTURED FROM PDF READING SESSION:") : Tr("PDF context:"), DetailStyle::Accent);
         if (len(w->source)) {
@@ -844,7 +849,8 @@ static void WordDetails(LearningWindow* w) {
         text.Line({});
         text.Line(design == 2 ? Tr("SOURCE & READING CONTEXT:") : Tr("PDF context:"), DetailStyle::Accent);
         if (len(word->sourcePath)) {
-            text.Line(fmt("  %s: %s  •  %s %d", Tr("Document"), word->sourcePath, Tr("page"), word->page), DetailStyle::Muted);
+            text.Line(fmt("  %s: %s  •  %s %d", Tr("Document"), word->sourcePath, Tr("page"), word->page),
+                      DetailStyle::Muted);
         }
         if (len(word->context)) {
             text.Line(fmt("  \"%s\"", word->context), DetailStyle::Example);
@@ -852,7 +858,9 @@ static void WordDetails(LearningWindow* w) {
     }
     text.Line({});
     if (design == 2) {
-        text.Line(fmt("MASTERY METRICS: Reviews: %d  •  Lapses: %d  •  Interval: %d days", word->reviews, word->lapses, word->intervalDays), DetailStyle::Accent);
+        text.Line(fmt("MASTERY METRICS: Reviews: %d  •  Lapses: %d  •  Interval: %d days", word->reviews, word->lapses,
+                      word->intervalDays),
+                  DetailStyle::Accent);
     } else {
         text.Line(fmt("Reviews: %d · lapses: %d · interval: %d days", word->reviews, word->lapses, word->intervalDays),
                   DetailStyle::Muted);
@@ -1446,7 +1454,8 @@ static void UpdateLearningChrome(LearningWindow* w) {
             Visible(w, lcSourceLabel, false);
             Visible(w, lcLookupSource, false);
             Visible(w, lcManageToggle, false);
-            for (int id : {lcPack, lcImportPack, lcDownload, lcRemovePack, lcSourcesToggle, lcOnlineFirst, lcOnlineSecond, lcOnlineThird, lcPackInfo})
+            for (int id : {lcPack, lcImportPack, lcDownload, lcRemovePack, lcSourcesToggle, lcOnlineFirst,
+                           lcOnlineSecond, lcOnlineThird, lcPackInfo})
                 Visible(w, id, false);
             Visible(w, lcVoiceLabel, false);
             Visible(w, lcVoice, false);
@@ -1811,6 +1820,8 @@ static TempStr ChooseLearningFile(HWND owner, bool save, bool dictionary) {
     return picked ? ToUtf8Temp(path) : TempStr{};
 }
 
+constexpr int kAllDictionarySources = 5;
+
 enum class DictionaryJobKind {
     Lookup,
     DownloadInfo,
@@ -1828,7 +1839,8 @@ struct DictionaryJob {
     i64 downloadBytes = 0;
     HANDLE cancel = nullptr;
     ULONGLONG lastProgress = 0;
-    DictionarySource sources[3]{DictionarySource::Offline};
+    DictionarySource sources[4]{DictionarySource::Offline};
+    bool aggregate = false;
     int sourceCount = 1;
     Vec<OfflineMeaning> meanings;
     ~DictionaryJob() {
@@ -1838,6 +1850,71 @@ struct DictionaryJob {
         FreeOfflineMeanings(meanings);
     }
 };
+static Str DictionarySourceTitle(DictionarySource source) {
+    switch (source) {
+        case DictionarySource::Offline:
+            return Tr("Downloaded dictionaries");
+        case DictionarySource::Wiktionary:
+            return Tr("Wiktionary (Kaikki)");
+        case DictionarySource::WiktionaryRest:
+            return Tr("Wiktionary REST");
+        case DictionarySource::FreeDictionary:
+            return Tr("Free Dictionary API");
+        default:
+            return Tr("Dictionary");
+    }
+}
+static void AppendLookupNotice(DictionaryJob* job, Str notice) {
+    if (!len(notice)) return;
+    str::ReplaceWithCopy(&job->error, len(job->error) ? fmt("%s\r\n%s", job->error, notice) : notice);
+}
+static void ConfigureLookupSources(DictionaryJob* job, int selected, const int* order, bool internet) {
+    job->aggregate = selected == kAllDictionarySources;
+    job->sourceCount = 0;
+    if (selected <= 0 || job->aggregate) job->sources[job->sourceCount++] = DictionarySource::Offline;
+    if (selected <= 0) return;
+    if (!internet) {
+        if (job->aggregate) AppendLookupNotice(job, Tr("Online sources skipped: internet access is unavailable."));
+        return;
+    }
+    if (selected != 1 && !job->aggregate) {
+        if (selected >= 2 && selected <= 4) job->sources[job->sourceCount++] = (DictionarySource)(selected - 1);
+        return;
+    }
+    bool enabled[4]{};
+    for (int slot = 0; slot < 3; slot++) {
+        int source = order[slot];
+        if (source <= 0 || source > 3 || enabled[source]) continue;
+        enabled[source] = true;
+        job->sources[job->sourceCount++] = (DictionarySource)source;
+    }
+    if (job->aggregate && job->sourceCount == 1)
+        AppendLookupNotice(job, Tr("Online sources are disabled; downloaded dictionaries were searched."));
+}
+using DictionaryLookupFn = bool (*)(Str, DictionarySource, Vec<OfflineMeaning>&, Str*);
+static void RunLookupSources(DictionaryJob* job, DictionaryLookupFn lookup = LookupDictionaryWord) {
+    for (int i = 0; i < job->sourceCount; i++) {
+        if (job->cancel && WaitForSingleObject(job->cancel, 0) == WAIT_OBJECT_0) {
+            AppendLookupNotice(job, Tr("Lookup cancelled. Results already received are kept."));
+            break;
+        }
+        Vec<OfflineMeaning> found;
+        Str error;
+        bool ok = lookup(job->value, job->sources[i], found, &error);
+        job->ok |= ok || len(found) > 0;
+        // Each provider clears its output. Transfer only this source's results.
+        for (OfflineMeaning& meaning : found) VecAppend(job->meanings, meaning);
+        VecReset(found);
+        FreeOfflineMeanings(found);
+        if (len(error)) AppendLookupNotice(job, fmt("%s: %s", DictionarySourceTitle(job->sources[i]), error));
+        str::Free(error);
+        if (!job->aggregate && len(job->meanings)) {
+            str::Free(job->error);
+            job->error = {};
+            break;
+        }
+    }
+}
 static void StartDictionaryJob(LearningWindow* w, DictionaryJobKind kind, Str value, i64 approvedBytes = 0);
 struct DictionaryProgressMessage {
     HWND hwnd;
@@ -1891,6 +1968,8 @@ static void CompleteDictionaryJob(DictionaryJob* job) {
     w->cancelDownload = nullptr;
     Visible(w, lcCancelDownload, false);
     EnableWindow(Control(w, lcPack), true);
+    EnableWindow(Control(w, lcLookupSource), true);
+    Text(w, lcLookup, w->dictionary ? Tr("Look up") : Tr("Search"));
     int actions[] = {lcLookup, lcImportPack, lcDownload, lcRemovePack, lcInstallDeck};
     for (int id : actions) {
         EnableWindow(Control(w, id), true);
@@ -1914,6 +1993,11 @@ static void CompleteDictionaryJob(DictionaryJob* job) {
             }
         }
     } else if (job->kind == DictionaryJobKind::Lookup) {
+        if (!str::EqI(Read(w, lcQuery), job->value)) {
+            FreeOfflineMeanings(job->meanings);
+            str::ReplaceWithCopy(&job->error, Tr("The word changed. Choose Look up to search the new word."));
+        }
+        str::ReplaceWithCopy(&w->lookupNotice, job->error);
         FreeOfflineMeanings(w->meanings);
         for (OfflineMeaning& meaning : job->meanings) {
             VecAppend(w->meanings, meaning);
@@ -1922,7 +2006,7 @@ static void CompleteDictionaryJob(DictionaryJob* job) {
         SendMessageW(Control(w, lcSense), CB_RESETCONTENT, 0, 0);
         for (int i = 0; i < len(w->meanings); i++) {
             const auto& meaning = w->meanings[i];
-            AddChoice(w, lcSense, fmt("%d. %s", i + 1, meaning.definition));
+            AddChoice(w, lcSense, fmt("%d. %s — %s", i + 1, meaning.dictionary, meaning.definition));
         }
         SendMessageW(Control(w, lcSense), CB_SETCURSEL, 0, 0);
         if (!len(w->meanings)) {
@@ -1942,7 +2026,8 @@ static void CompleteDictionaryJob(DictionaryJob* job) {
         EnableWindow(Control(w, lcSense), len(w->meanings) > 0);
         EnableWindow(Control(w, lcSave), len(w->meanings) > 0);
         EnableWindow(Control(w, lcLearned), len(w->meanings) > 0);
-        Status(w, len(w->meanings) ? fmt("%d meanings · choose a meaning to save", len(w->meanings))
+        Status(w, len(w->meanings) ? (len(job->error) ? fmt("%d meanings · %s", len(w->meanings), job->error)
+                                                      : fmt("%d meanings · choose a meaning to save", len(w->meanings)))
                   : job->error     ? job->error
                                    : Tr("No definition found. Try another spelling or dictionary source."));
     } else if (job->kind == DictionaryJobKind::WarmDeck && job->ok) {
@@ -1973,10 +2058,7 @@ static void CompleteDictionaryJob(DictionaryJob* job) {
 static void RunDictionaryJob(DictionaryJob* job) {
     switch (job->kind) {
         case DictionaryJobKind::Lookup:
-            for (int i = 0; i < job->sourceCount; i++) {
-                job->ok = LookupDictionaryWord(job->value, job->sources[i], job->meanings, &job->error);
-                if (job->ok && len(job->meanings)) break;
-            }
+            RunLookupSources(job);
             break;
         case DictionaryJobKind::DownloadInfo:
             job->ok = GetDictionaryDownloadSize(job->value, job->downloadBytes, &job->error);
@@ -2022,41 +2104,32 @@ static void StartDictionaryJob(LearningWindow* w, DictionaryJobKind kind, Str va
     job->kind = kind;
     job->value = str::Dup(value);
     job->downloadBytes = approvedBytes;
-    if (kind == DictionaryJobKind::Lookup && Selected(w, lcLookupSource) > 0) {
-        if (!HasPermission(Perm::InternetAccess)) {
+    if (kind == DictionaryJobKind::Lookup) {
+        int selected = Selected(w, lcLookupSource);
+        bool online = HasPermission(Perm::InternetAccess);
+        if (selected > 0 && selected != kAllDictionarySources && !online) {
             delete job;
             Status(
                 w,
                 Tr("Online lookup is unavailable in restricted mode. Choose Offline to use installed dictionaries."));
             return;
         }
-        int selected = Selected(w, lcLookupSource);
-        if (selected == 1) {
-            job->sourceCount = 0;
-            bool enabled[4]{};
-            for (int source : w->onlineOrder) {
-                if (source <= 0 || source > 3 || enabled[source]) continue;
-                enabled[source] = true;
-                job->sources[job->sourceCount++] = (DictionarySource)source;
-            }
-        } else {
-            job->sources[0] = (DictionarySource)(selected - 1);
-        }
+        ConfigureLookupSources(job, selected, w->onlineOrder, online);
         if (!job->sourceCount) {
             delete job;
             Status(w, Tr("All online sources are disabled. Choose Sources to enable one, or use Offline."));
             return;
         }
     }
-    if (kind == DictionaryJobKind::Download && FindKaikkiPack(value)) {
+    if (kind == DictionaryJobKind::Lookup || (kind == DictionaryJobKind::Download && FindKaikkiPack(value))) {
         job->cancel = CreateEventW(nullptr, true, false, nullptr);
         if (!job->cancel) {
             delete job;
-            Status(w, Tr("Could not prepare the dictionary download. Try again."));
+            Status(w, Tr("Could not prepare the dictionary action. Try again."));
             return;
         }
         w->cancelDownload = job->cancel;
-        Visible(w, lcCancelDownload, true);
+        Visible(w, lcCancelDownload, kind == DictionaryJobKind::Download);
         EnableWindow(Control(w, lcCancelDownload), true);
     }
     w->busy = true;
@@ -2067,6 +2140,10 @@ static void StartDictionaryJob(LearningWindow* w, DictionaryJobKind kind, Str va
         EnableWindow(Control(w, id), false);
     }
     if (kind == DictionaryJobKind::Lookup) {
+        EnableWindow(Control(w, lcLookup), true);
+        Text(w, lcLookup, Tr("Cancel lookup"));
+        EnableWindow(Control(w, lcLookupSource), false);
+        str::ReplaceWithCopy(&w->lookupNotice, {});
         EnableWindow(Control(w, lcSave), false);
         EnableWindow(Control(w, lcLearned), false);
     }
@@ -2075,13 +2152,21 @@ static void StartDictionaryJob(LearningWindow* w, DictionaryJobKind kind, Str va
               : kind == DictionaryJobKind::Download
                   ? Tr("Downloading and verifying dictionary pack… You can keep reading.")
               : kind == DictionaryJobKind::Lookup
-                  ? job->sources[0] == DictionarySource::Offline
+                  ? job->aggregate
+                        ? Tr("Searching downloaded dictionaries and enabled online sources… Only this word is sent.")
+                    : job->sources[0] == DictionarySource::Offline
                         ? Tr("Looking up this word in installed offline dictionaries…")
                         : Tr("Looking up this word online… Only this word is sent to the selected provider.")
                   : Tr("Updating offline resources…"));
     RunAsync(MkFunc0(RunDictionaryJob, job), StrL("OfflineDictionaryAction"));
 }
 static void LookupWord(LearningWindow* w) {
+    if (w->lookupBusy && w->cancelDownload) {
+        SetEvent(w->cancelDownload);
+        EnableWindow(Control(w, lcLookup), false);
+        Status(w, Tr("Cancelling lookup… Waiting for the current source to finish."));
+        return;
+    }
     Str query = Read(w, lcQuery);
     if (!len(query)) {
         Status(w, Tr("Type a word or select one in the document first."));
@@ -2143,7 +2228,12 @@ static void LearningAction(LearningWindow* w, int id, int notification) {
         return;
     }
     if (id == lcLookupSource && notification == CBN_SELCHANGE) {
-        Status(w, Selected(w, lcLookupSource) <= 0
+        w->lookupSource = Selected(w, lcLookupSource);
+        SaveLearningPrefs(w);
+        Status(w, w->lookupSource == kAllDictionarySources
+                      ? Tr("Searches all downloaded dictionaries and enabled online sources when you choose Look up. "
+                           "Only the word is sent; nothing is downloaded.")
+                  : w->lookupSource <= 0
                       ? Tr("Offline lookup uses installed dictionaries. No network request is made.")
                       : Tr("Online lookup sends only the typed word when you choose Look up. PDF context stays on this "
                            "device."));
@@ -4206,11 +4296,11 @@ static LearningWindow* OpenLearningWindow(MainWindow* owner, bool dictionary, bo
     if (dictionary) {
         MakeControl(w, lcSourceLabel, L"STATIC", Tr("&Source"), SS_CENTERIMAGE);
         MakeControl(w, lcLookupSource, L"COMBOBOX", {}, CBS_DROPDOWNLIST | WS_VSCROLL);
-        for (Str source :
-             {Tr("Offline · installed dictionaries"), Tr("Online · chosen source order"),
-              Tr("Online · Wiktionary (Kaikki)"), Tr("Online · Wiktionary REST"), Tr("Online · Free Dictionary API")})
+        for (Str source : {Tr("Offline · installed dictionaries"), Tr("Online · chosen source order"),
+                           Tr("Online · Wiktionary (Kaikki)"), Tr("Online · Wiktionary REST"),
+                           Tr("Online · Free Dictionary API"), Tr("All dictionaries · downloaded + online")})
             AddChoice(w, lcLookupSource, source);
-        SendMessageW(Control(w, lcLookupSource), CB_SETCURSEL, 0, 0);
+        SendMessageW(Control(w, lcLookupSource), CB_SETCURSEL, w->lookupSource, 0);
         MakeControl(w, lcSenseLabel, L"STATIC", Tr("&Meaning"), SS_CENTERIMAGE);
         MakeControl(w, lcSense, L"COMBOBOX", {}, CBS_DROPDOWNLIST | WS_VSCROLL);
         AddChoice(w, lcSense, Tr("Meaning to save"));
@@ -4283,6 +4373,8 @@ void ShowDictionaryDialog(MainWindow* owner, Str word, Str context, Str source, 
             Status(w, Tr("Please wait for the pack update before looking up another word."));
             return;
         }
+        if (w->cancelDownload) SetEvent(w->cancelDownload);
+        w->cancelDownload = nullptr;
         w->ticket++;
         w->busy = false;
     }
@@ -4891,6 +4983,85 @@ static void DictionaryAppearanceTests(LearningWindow* w) {
     }
 }
 
+static Vec<int> gLookupSourcesTestCalls;
+static HANDLE gLookupSourcesTestCancel = nullptr;
+static bool LookupSourcesTestProvider(Str word, DictionarySource source, Vec<OfflineMeaning>& out, Str* error) {
+    VecAppend(gLookupSourcesTestCalls, (int)source);
+    if (str::Eq(word, StrL("partial")) && source == DictionarySource::Wiktionary) {
+        *error = str::Dup(StrL("Fixture provider unavailable"));
+        return false;
+    }
+    int count = source == DictionarySource::Offline ? 2 : 1;
+    for (int i = 0; i < count; i++) {
+        OfflineMeaning meaning;
+        meaning.headword = str::Dup(word);
+        meaning.definition = str::Dup(fmt("Definition %d from %d", i, (int)source));
+        meaning.dictionaryId = str::Dup(fmt("source-%d-pack-%d", (int)source, i));
+        meaning.dictionary = str::Dup(meaning.dictionaryId);
+        VecAppend(out, meaning);
+    }
+    if (gLookupSourcesTestCancel) SetEvent(gLookupSourcesTestCancel);
+    return true;
+}
+static void DictionarySourcesTests() {
+    int order[] = {3, 0, 3};
+    {
+        DictionaryJob job;
+        ConfigureLookupSources(&job, kAllDictionarySources, order, true);
+        utassert(job.aggregate && job.sourceCount == 2);
+        utassert(job.sources[0] == DictionarySource::Offline && job.sources[1] == DictionarySource::FreeDictionary);
+        job.value = str::Dup(StrL("fixture"));
+        VecReset(gLookupSourcesTestCalls);
+        RunLookupSources(&job, LookupSourcesTestProvider);
+        utassert(len(gLookupSourcesTestCalls) == 2 && len(job.meanings) == 3);
+        utassert(str::Eq(job.meanings[0].dictionaryId, StrL("source-0-pack-0")));
+        utassert(str::Eq(job.meanings[1].dictionaryId, StrL("source-0-pack-1")));
+        utassert(str::Eq(job.meanings[2].dictionaryId, StrL("source-3-pack-0")));
+    }
+    {
+        int all[] = {1, 2, 3};
+        DictionaryJob job;
+        ConfigureLookupSources(&job, kAllDictionarySources, all, true);
+        job.value = str::Dup(StrL("partial"));
+        VecReset(gLookupSourcesTestCalls);
+        RunLookupSources(&job, LookupSourcesTestProvider);
+        utassert(job.ok && len(job.meanings) == 4 && len(gLookupSourcesTestCalls) == 4);
+        utassert(str::Contains(job.error, StrL("Fixture provider unavailable")));
+    }
+    {
+        DictionaryJob job;
+        ConfigureLookupSources(&job, 1, order, true);
+        job.value = str::Dup(StrL("fixture"));
+        VecReset(gLookupSourcesTestCalls);
+        RunLookupSources(&job, LookupSourcesTestProvider);
+        utassert(!job.aggregate && len(job.meanings) == 1 && len(gLookupSourcesTestCalls) == 1);
+    }
+    {
+        DictionaryJob job;
+        ConfigureLookupSources(&job, kAllDictionarySources, order, false);
+        job.value = str::Dup(StrL("fixture"));
+        VecReset(gLookupSourcesTestCalls);
+        RunLookupSources(&job, LookupSourcesTestProvider);
+        utassert(job.sourceCount == 1 && len(job.meanings) == 2 && len(gLookupSourcesTestCalls) == 1);
+        utassert(str::Contains(job.error, StrL("skipped")));
+    }
+    {
+        DictionaryJob job;
+        ConfigureLookupSources(&job, kAllDictionarySources, order, true);
+        job.value = str::Dup(StrL("fixture"));
+        job.cancel = CreateEventW(nullptr, true, false, nullptr);
+        utassert(job.cancel != nullptr);
+        if (job.cancel) {
+            VecReset(gLookupSourcesTestCalls);
+            gLookupSourcesTestCancel = job.cancel;
+            RunLookupSources(&job, LookupSourcesTestProvider);
+            gLookupSourcesTestCancel = nullptr;
+            utassert(len(gLookupSourcesTestCalls) == 1 && len(job.meanings) == 2);
+            utassert(str::Contains(job.error, StrL("cancelled")));
+        }
+    }
+    VecClear(gLookupSourcesTestCalls);
+}
 void VocabularyDialog_UnitTests() {
     RenderCache* originalCache = gRenderCache;
     if (!originalCache) gRenderCache = new RenderCache();
@@ -4906,6 +5077,7 @@ void VocabularyDialog_UnitTests() {
     if (!fixture) {
         return;
     }
+    DictionarySourcesTests();
     GreenCheckGlyphTests();
     fixture->dictionaryUI.dictionaryDesign = 0;
     fixture->dictionaryUI.learningHubDesign = 0;
