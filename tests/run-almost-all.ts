@@ -29,6 +29,7 @@ import { testit as annotationTransfer } from "./annotation-transfer.ts";
 import { testit as dictionaryAppearance } from "./dictionary-appearance.ts";
 import { testit as penCursorSettings } from "./pen-cursor-settings.ts";
 import { testit as fileTypeIcons } from "./file-type-icons.ts";
+import { testit as openDocumentSearch } from "./open-document-search.ts";
 import { testit as activeTabStyles } from "./active-tab-styles.ts";
 import { testit as markdownFontDownloads } from "./markdown-font-downloads.ts";
 import { testit as markdownSystemFonts } from "./markdown-system-fonts.ts";
@@ -664,6 +665,7 @@ export const tests: NamedTest[] = [
   ["pen-cursor-settings", penCursorSettings],
   ["file-type-icons", fileTypeIcons],
   ["active-tab-styles", activeTabStyles],
+  ["open-document-search", openDocumentSearch],
   ["annotation-transfer", annotationTransfer],
   ["markdown-font-packaging", markdownFontPackaging],
   ["favorites-menu", favoritesMenu],

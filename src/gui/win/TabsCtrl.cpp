@@ -17,6 +17,7 @@
 #if IS_DEBUG
 #include "base/tests/UtAssert.h"
 #endif
+#include "Translations.h"
 #include "gui/win/TabsCtrl.h"
 #include "gui/win/ScrollableMenu.h"
 
@@ -836,9 +837,10 @@ void TabsCtrl::ShowTabList() {
     tabListPopup = &popup;
     Rect rect = HwndClientRect(host);
     Point anchor = HwndMapWindowPoint(host, nullptr, {rect.Right(), rect.Bottom()});
-    int chosen =
-        TrackScrollMenu(host, menu, anchor, popup.font, tabListVisibleItems, ScaleMetric(480), popup.background,
-                        popup.textColor, AccentColor(popup.selectedBackground, 18), popup.isRtl, true);
+    ScrollMenuSearch search{Tr("Search:"), Tr("Open document name..."), Tr("No open documents match.")};
+    int chosen = TrackScrollMenu(host, menu, anchor, popup.font, tabListVisibleItems, ScaleMetric(480),
+                                 popup.background, popup.textColor, AccentColor(popup.selectedBackground, 18),
+                                 popup.isRtl, true, nullptr, &search);
     DestroyMenu(menu);
     if (!IsWindow(host) || (TabsCtrl*)GetWindowLongPtrW(host, GWLP_USERDATA) != this) {
         return;
@@ -1738,6 +1740,41 @@ void TabsCtrl_UnitTests() {
     SendMessageW(picker.list, WM_KEYDOWN, VK_RETURN, 0);
     utassert(picker.done && picker.picked == 24);
     DestroyMenu(pickerMenu);
+
+    ScrollMenuSearch search{StrL("Search:"), StrL("Open document name..."), StrL("No open documents match.")};
+    ScrollMenu filtered;
+    filtered.font = popup.font;
+    filtered.background = popup.background;
+    filtered.foreground = popup.textColor;
+    filtered.searchText = &search;
+    tc.SetTextAndTooltip(1, StrL("Résumé.pdf"), {});
+    TabListPopup searchData;
+    HMENU searchMenu = BuildTabListMenu(&tc, searchData);
+    MeasureScrollMenu(filtered, parent, searchMenu, 10, tc.ScaleMetric(480));
+    utassert(filtered.searchDy > 0);
+    utassert(CreateScrollMenu(filtered, parent, {-10000, -10000, filtered.width, filtered.height}));
+    utassert(filtered.search && SendMessageW(filtered.list, LB_GETCOUNT, 0, 0) == 25);
+    SetWindowTextW(filtered.search, L"DOCUMENT 25");
+    utassert(SendMessageW(filtered.list, LB_GETCOUNT, 0, 0) == 1);
+    utassert(ScrollMenuItemIndex(filtered, 0) == 24);
+    SendMessageW(filtered.search, WM_KEYDOWN, VK_RETURN, 0);
+    utassert(filtered.done && filtered.picked == 24 && filtered.items[filtered.picked].command == 25);
+    filtered.done = false;
+    filtered.picked = -1;
+    SetWindowTextW(filtered.search, L"RÉSUMÉ");
+    utassert(SendMessageW(filtered.list, LB_GETCOUNT, 0, 0) == 1);
+    utassert(ScrollMenuItemIndex(filtered, 0) == 1);
+    SetWindowTextW(filtered.search, L"no-such-document");
+    utassert(SendMessageW(filtered.list, LB_GETCOUNT, 0, 0) == 0);
+    utassert((GetWindowLongPtrW(filtered.empty, GWL_STYLE) & WS_VISIBLE) != 0);
+    utassert((GetWindowLongPtrW(filtered.list, GWL_STYLE) & WS_VISIBLE) == 0);
+    SendMessageW(filtered.search, WM_KEYDOWN, VK_RETURN, 0);
+    utassert(!filtered.done && filtered.picked == -1);
+    SetWindowTextW(filtered.search, L"");
+    utassert(SendMessageW(filtered.list, LB_GETCOUNT, 0, 0) == 25);
+    SendMessageW(filtered.search, WM_KEYDOWN, VK_ESCAPE, 0);
+    utassert(filtered.done && filtered.picked == -1);
+    DestroyMenu(searchMenu);
 
     HDC dc = GetDC(parent);
     HDC memory = CreateCompatibleDC(dc);

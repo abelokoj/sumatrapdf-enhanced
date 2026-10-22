@@ -41,9 +41,20 @@ enum class ScrollMenuPick {
     Action
 };
 
+struct ScrollMenuSearch {
+    Str label;
+    Str hint;
+    Str empty;
+};
+
 struct ScrollMenu {
     HWND hwnd = nullptr;
     HWND list = nullptr;
+    HWND search = nullptr;
+    HWND empty = nullptr;
+    const ScrollMenuSearch* searchText = nullptr;
+    Vec<int> visibleItems;
+    int searchDy = 0;
     PlatformFont* font = nullptr;
     Vec<ScrollMenuItem> items;
     Color background = 0;
@@ -87,6 +98,34 @@ struct ScrollMenu {
 };
 
 static ScrollMenu* gActiveScrollMenu = nullptr;
+
+static int ScrollMenuItemIndex(const ScrollMenu& popup, int row) {
+    if (!popup.searchText) return row;
+    return row >= 0 && row < len(popup.visibleItems) ? popup.visibleItems[row] : -1;
+}
+
+static void FilterScrollMenu(ScrollMenu& popup) {
+    if (!popup.search) return;
+    TempStr query = HwndGetTextTemp(popup.search);
+    SendMessageW(popup.list, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(popup.list, LB_RESETCONTENT, 0, 0);
+    VecClear(popup.visibleItems);
+    popup.hoveredAction = popup.pressedAction = -1;
+    popup.actionFocused = false;
+    if (popup.tip) popup.tip->Delete();
+    for (int i = 0; i < len(popup.items); i++) {
+        auto& item = popup.items[i];
+        if (len(query) && !str::ContainsI(ToUtf8Temp(item.label), query)) continue;
+        VecAppend(popup.visibleItems, i);
+        WStr name = len(item.accessibleLabel) ? item.accessibleLabel : item.label;
+        SendMessageW(popup.list, LB_ADDSTRING, 0, (LPARAM)name.s);
+    }
+    SendMessageW(popup.list, LB_SETCURSEL, len(popup.visibleItems) ? 0 : -1, 0);
+    SendMessageW(popup.list, WM_SETREDRAW, TRUE, 0);
+    ShowWindow(popup.empty, len(popup.visibleItems) ? SW_HIDE : SW_SHOW);
+    ShowWindow(popup.list, len(popup.visibleItems) ? SW_SHOW : SW_HIDE);
+    HwndInvalidate(popup.list);
+}
 
 static int ScrollMenuLeadingDx(const ScrollMenu& popup, const ScrollMenuItem& item) {
     int swatch = std::max(8, popup.rowDy * 2 / 5);
@@ -196,7 +235,9 @@ static void MeasureScrollMenu(ScrollMenu& popup, HWND owner, HMENU menu, int vis
     int rows = std::min(len(popup.items), std::clamp(visibleRows, 1, 50));
     popup.width = std::min(maxWidth, longest + popup.rowDy + popup.padding * 2 + scrollbarDx + 4);
     popup.width = std::max(popup.width, popup.rowDy * 4);
-    popup.height = rows * popup.rowDy + 4;
+    popup.searchDy = popup.searchText ? popup.rowDy + popup.padding * 2 : 0;
+    if (popup.searchText) popup.width = std::max(popup.width, std::min(maxWidth, popup.rowDy * 8));
+    popup.height = rows * popup.rowDy + popup.searchDy + 4;
 }
 
 static Color ScrollMenuBlend(Color color, Color background) {
@@ -222,8 +263,9 @@ static void PaintScrollMenuSwatch(GfxHdc& gfx, Rect rect, Color color, Color bac
 }
 
 static void PaintScrollMenuItem(ScrollMenu& popup, DRAWITEMSTRUCT* draw) {
-    if (draw->itemID >= (UINT)len(popup.items)) return;
-    auto& item = popup.items[draw->itemID];
+    int index = ScrollMenuItemIndex(popup, (int)draw->itemID);
+    if (index < 0 || index >= len(popup.items)) return;
+    auto& item = popup.items[index];
     bool hot = item.enabled && (draw->itemState & ODS_SELECTED);
     Color bg = hot ? popup.hotBackground : popup.background;
     HdcFillRect(draw->hDC, ToRect(draw->rcItem), bg);
@@ -269,7 +311,7 @@ static void PaintScrollMenuItem(ScrollMenu& popup, DRAWITEMSTRUCT* draw) {
     if (item.actionCommand) {
         Rect action = ScrollMenuActionRect(popup, ToRect(draw->rcItem));
         bool focus = hot && popup.actionFocused;
-        bool hover = popup.hoveredAction == (int)draw->itemID;
+        bool hover = popup.hoveredAction == index;
         Rect button = action;
         button.Inflate(-popup.padding / 2, -popup.padding / 2);
         GfxHdc gfx(dc);
@@ -300,8 +342,12 @@ static void PaintScrollMenuItem(ScrollMenu& popup, DRAWITEMSTRUCT* draw) {
 static LRESULT CALLBACK ScrollMenuListProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR data) {
     auto* popup = (ScrollMenu*)data;
     if (msg == WM_KEYDOWN) {
-        int selected = (int)SendMessageW(hwnd, LB_GETCURSEL, 0, 0);
+        int selected = ScrollMenuItemIndex(*popup, (int)SendMessageW(hwnd, LB_GETCURSEL, 0, 0));
         bool actionAvailable = selected >= 0 && selected < len(popup->items) && popup->items[selected].actionCommand;
+        if (popup->search && wp == VK_TAB) {
+            SetFocus(popup->search);
+            return 0;
+        }
         if (wp == VK_TAB && actionAvailable) {
             popup->actionFocused = !popup->actionFocused;
             HwndInvalidate(hwnd);
@@ -339,11 +385,11 @@ static LRESULT CALLBACK ScrollMenuListProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
     }
     if (msg == WM_MOUSEMOVE || msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP) {
         DWORD hit = (DWORD)SendMessageW(hwnd, LB_ITEMFROMPOINT, 0, lp);
-        int index = !HIWORD(hit) && LOWORD(hit) < len(popup->items) ? LOWORD(hit) : -1;
+        int index = !HIWORD(hit) ? ScrollMenuItemIndex(*popup, LOWORD(hit)) : -1;
         Rect row;
         if (index >= 0) {
             RECT nativeRow{};
-            SendMessageW(hwnd, LB_GETITEMRECT, index, (LPARAM)&nativeRow);
+            SendMessageW(hwnd, LB_GETITEMRECT, LOWORD(hit), (LPARAM)&nativeRow);
             row = ToRect(nativeRow);
         }
         Point point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
@@ -383,9 +429,30 @@ static LRESULT CALLBACK ScrollMenuListProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
     LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
     if (msg == WM_LBUTTONUP) {
         DWORD hit = (DWORD)SendMessageW(hwnd, LB_ITEMFROMPOINT, 0, lp);
-        if (!HIWORD(hit)) popup->Pick(LOWORD(hit));
+        if (!HIWORD(hit)) popup->Pick(ScrollMenuItemIndex(*popup, LOWORD(hit)));
     }
     return result;
+}
+
+static LRESULT CALLBACK ScrollMenuSearchProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR data) {
+    auto* popup = (ScrollMenu*)data;
+    if (msg == WM_KEYDOWN) {
+        if (wp == VK_ESCAPE) {
+            popup->done = true;
+            return 0;
+        }
+        if (wp == VK_RETURN) {
+            popup->Pick(ScrollMenuItemIndex(*popup, (int)SendMessageW(popup->list, LB_GETCURSEL, 0, 0)));
+            return 0;
+        }
+        if ((wp == VK_DOWN || wp == VK_UP || wp == VK_TAB) && len(popup->visibleItems)) {
+            SetFocus(popup->list);
+            if (wp == VK_UP) SendMessageW(popup->list, LB_SETCURSEL, len(popup->visibleItems) - 1, 0);
+            return 0;
+        }
+    }
+    if (msg == WM_CHAR && (wp == VK_RETURN || wp == VK_ESCAPE || wp == VK_TAB)) return 0;
+    return DefSubclassProc(hwnd, msg, wp, lp);
 }
 
 static LRESULT CALLBACK ScrollMenuProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -399,7 +466,13 @@ static LRESULT CALLBACK ScrollMenuProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         case WM_DRAWITEM:
             PaintScrollMenuItem(*popup, (DRAWITEMSTRUCT*)lp);
             return TRUE;
+        case WM_COMMAND:
+            if ((HWND)lp == popup->search && HIWORD(wp) == EN_CHANGE) FilterScrollMenu(*popup);
+            break;
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLOREDIT:
         case WM_CTLCOLORLISTBOX:
+            SetTextColor((HDC)wp, popup->foreground);
             SetBkColor((HDC)wp, popup->background);
             return (LRESULT)popup->brush;
         case WM_ERASEBKGND:
@@ -433,8 +506,39 @@ static bool CreateScrollMenu(ScrollMenu& popup, HWND owner, Rect bounds) {
     if (!popup.hwnd) return false;
     DWORD style =
         WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT;
-    popup.list = CreateWindowExW(popup.rtl ? WS_EX_RTLREADING : 0, L"LISTBOX", L"", style, 2, 2, bounds.dx - 4,
-                                 bounds.dy - 4, popup.hwnd, (HMENU)1, GetInstance(), nullptr);
+    int listY = 2 + popup.searchDy;
+    if (popup.searchText) {
+        int pad = popup.padding;
+        HDC dc = GetDC(popup.hwnd);
+        HGDIOBJ oldFont = SelectObject(dc, popup.font->GetHFont());
+        WStr label = ToWStrTemp(popup.searchText->label);
+        SIZE size{};
+        GetTextExtentPoint32W(dc, label.s, len(label), &size);
+        SelectObject(dc, oldFont);
+        ReleaseDC(popup.hwnd, dc);
+        int labelDx = std::min((int)size.cx + pad, bounds.dx / 2);
+        int editDx = bounds.dx - labelDx - pad * 3;
+        int labelX = popup.rtl ? bounds.dx - pad - labelDx : pad;
+        int editX = popup.rtl ? pad : pad * 2 + labelDx;
+        HWND caption = CreateWindowExW(popup.rtl ? WS_EX_RTLREADING : 0, WC_STATICW, CWStrTemp(label),
+                                       WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, labelX, pad + 2, labelDx, popup.rowDy,
+                                       popup.hwnd, (HMENU)3, GetInstance(), nullptr);
+        popup.search = CreateWindowExW(popup.rtl ? WS_EX_RTLREADING : 0, WC_EDITW, L"",
+                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL, editX, pad + 2,
+                                       editDx, popup.rowDy, popup.hwnd, (HMENU)2, GetInstance(), nullptr);
+        if (!caption || !popup.search) return false;
+        SendMessageW(caption, WM_SETFONT, (WPARAM)popup.font->GetHFont(), FALSE);
+        SendMessageW(popup.search, WM_SETFONT, (WPARAM)popup.font->GetHFont(), FALSE);
+        SendMessageW(popup.search, EM_SETCUEBANNER, TRUE, (LPARAM)CWStrTemp(popup.searchText->hint));
+        SetWindowSubclass(popup.search, ScrollMenuSearchProc, 1, (DWORD_PTR)&popup);
+        popup.empty = CreateWindowExW(popup.rtl ? WS_EX_RTLREADING : 0, WC_STATICW, CWStrTemp(popup.searchText->empty),
+                                      WS_CHILD | SS_CENTER | SS_CENTERIMAGE, pad, listY, bounds.dx - pad * 2,
+                                      popup.rowDy, popup.hwnd, (HMENU)4, GetInstance(), nullptr);
+        if (!popup.empty) return false;
+        SendMessageW(popup.empty, WM_SETFONT, (WPARAM)popup.font->GetHFont(), FALSE);
+    }
+    popup.list = CreateWindowExW(popup.rtl ? WS_EX_RTLREADING : 0, L"LISTBOX", L"", style, 2, listY, bounds.dx - 4,
+                                 bounds.dy - listY - 2, popup.hwnd, (HMENU)1, GetInstance(), nullptr);
     if (!popup.list) return false;
     SendMessageW(popup.list, WM_SETFONT, (WPARAM)popup.font->GetHFont(), FALSE);
     SendMessageW(popup.list, LB_SETITEMHEIGHT, 0, popup.rowDy);
@@ -464,6 +568,7 @@ static bool CreateScrollMenu(ScrollMenu& popup, HWND owner, Rect bounds) {
             break;
         }
     }
+    if (popup.search) FilterScrollMenu(popup);
     return true;
 }
 
@@ -477,13 +582,15 @@ static bool ScrollMenuContainsWindow(HWND popup, HWND target) {
 
 static UINT TrackScrollMenu(HWND owner, HMENU menu, Point anchor, PlatformFont* font, int visibleRows, int maxWidth,
                             Color background, Color foreground, Color hotBackground, bool rtl, bool rightAlign = false,
-                            const Vec<ScrollMenuDecoration>* decorations = nullptr) {
+                            const Vec<ScrollMenuDecoration>* decorations = nullptr,
+                            const ScrollMenuSearch* searchText = nullptr) {
     ScrollMenu popup;
     ScrollMenu* previous = gActiveScrollMenu;
     gActiveScrollMenu = &popup;
     defer {
         gActiveScrollMenu = previous;
     };
+    popup.searchText = searchText;
     popup.font = font;
     popup.background = background;
     popup.foreground = foreground;
@@ -494,8 +601,8 @@ static UINT TrackScrollMenu(HWND owner, HMENU menu, Point anchor, PlatformFont* 
     MONITORINFO monitor{sizeof(monitor)};
     GetMonitorInfoW(MonitorFromPoint({anchor.x, anchor.y}, MONITOR_DEFAULTTONEAREST), &monitor);
     RECT work = monitor.rcWork;
-    int rows = std::max(1, ((int)(work.bottom - work.top) - 4) / popup.rowDy);
-    popup.height = std::min(popup.height, rows * popup.rowDy + 4);
+    int rows = std::max(1, ((int)(work.bottom - work.top) - popup.searchDy - 4) / popup.rowDy);
+    popup.height = std::min(popup.height, rows * popup.rowDy + popup.searchDy + 4);
     popup.width = std::min(popup.width, (int)(work.right - work.left));
     int x = rightAlign ? anchor.x - popup.width : anchor.x;
     x = std::clamp(x, (int)work.left, (int)work.right - popup.width);
@@ -503,7 +610,7 @@ static UINT TrackScrollMenu(HWND owner, HMENU menu, Point anchor, PlatformFont* 
     if (!CreateScrollMenu(popup, owner, {x, y, popup.width, popup.height})) return 0;
     HWND oldFocus = GetFocus();
     ShowWindow(popup.hwnd, SW_SHOW);
-    SetFocus(popup.list);
+    SetFocus(popup.search ? popup.search : popup.list);
     MSG message{};
     bool quit = false;
     while (!popup.done && IsWindow(owner)) {
@@ -521,7 +628,8 @@ static UINT TrackScrollMenu(HWND owner, HMENU menu, Point anchor, PlatformFont* 
     POINT nextAnchor{x + popup.width, y};
     if (popup.picked >= 0) {
         RECT row{};
-        SendMessageW(popup.list, LB_GETITEMRECT, popup.picked, (LPARAM)&row);
+        int pickedRow = popup.searchText ? VecFind(popup.visibleItems, popup.picked) : popup.picked;
+        SendMessageW(popup.list, LB_GETITEMRECT, pickedRow, (LPARAM)&row);
         nextAnchor.y += row.top;
     }
     delete popup.tip;
