@@ -1,5 +1,11 @@
 # SumatraPDF Enhanced changelog
 
+## Testing release 2026-10-22.6
+
+- Add filename search to the open-document dropdown, with live case-insensitive filtering, keyboard/mouse selection, and a no-matches state.
+- Preserve the existing tab order, scrolling, fonts, scaling and theme colors.
+- See [release notes](docs/releases/2026-10-22.6.md) for behavior and validation limits.
+
 ## Testing release 2026-10-21.5
 
 - Fix Markdown content-only zoom and synchronize wheel, toolbar, default and remembered zoom.
