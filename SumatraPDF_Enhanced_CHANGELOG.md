@@ -1,5 +1,30 @@
 # SumatraPDF Enhanced changelog
 
+## Testing release 2026-10-23.7
+
+- Restore reliable reference and document contents-page hover previews in reading and hand-tool modes.
+- Keep the hover deadline and rendering request while moving inside one reference, and retain known references through temporary rendering hit-test misses.
+- Restore the thin red outline in light/dark themes and avoid competing one-line internal-link tooltips.
+- Publish Windows x64 installer and portable ZIP packages. See [release notes](docs/releases/2026-10-23.7.md) for validation and limitations.
+
+## Local test build 2026-10-23.1
+
+- Keep one hover deadline and render request while the pointer moves within the same reference or contents-page link; leaving or changing the reference still cancels/replaces it.
+- Add a continuous-movement regression alongside the existing color, hand-tool and red-outline checks.
+
+## Local test build 2026-10-22.8
+
+- Give black and colored internal paper/equation references the same hover-preview path, including cursor-only discovery after a missed initial mouse hit.
+- Suppress the competing one-line reference-description tooltip when a preview is available; retain descriptions for external links and when previews are disabled.
+- Cover black linked papers/equations, colored papers and unlinked black citations, plus the original thesis references supplied for diagnosis.
+
+## Local test build 2026-10-22.7
+
+- Restore reference previews while the hand tool is idle; keep dragging and panning behavior unchanged.
+- Keep valid previews alive when rendering temporarily locks link detection, while retaining normal dismissal outside the source reference.
+- Restore a 0.6 pt red outline around reference previews in light and dark themes, scaled for display DPI. High-contrast mode retains the system edge color.
+- Add a native mouse/timer regression for reading and hand tools, destination selection and the red outline.
+
 ## Testing release 2026-10-22.6
 
 - Add filename search to the open-document dropdown, with live case-insensitive filtering, keyboard/mouse selection, and a no-matches state.
