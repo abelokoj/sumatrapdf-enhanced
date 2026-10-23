@@ -33,7 +33,7 @@ const user32 = dlopen("user32.dll", {
     returns: FFIType.bool,
   },
   SetWindowPos: {
-    args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.u32],
+    args: [FFIType.ptr, FFIType.i64, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.u32],
     returns: FFIType.bool,
   },
   GetWindowLongW: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
@@ -781,8 +781,9 @@ export function setWindowPos(
   w: number,
   h: number,
   flags = SWP_NOZORDER | SWP_NOACTIVATE,
+  insertAfter = 0,
 ): boolean {
-  return user32.symbols.SetWindowPos(hwnd, 0, x, y, w, h, flags);
+  return user32.symbols.SetWindowPos(hwnd, insertAfter, x, y, w, h, flags);
 }
 
 export function showWindow(hwnd: number, cmd: number): boolean {

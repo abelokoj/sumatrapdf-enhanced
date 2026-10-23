@@ -3082,7 +3082,14 @@ static void OnMouseMove(MainWindow* win, int x, int y, WPARAM key) {
     // ReportIf(!dm); // can happen if reload fails, we delete DisplayModel
     if (!dm) return;
 
-    if (win->handTool && win->mouseAction == MouseAction::None) return;
+    if (win->handTool && win->mouseAction == MouseAction::None) {
+        int srcPageNo = -1;
+        IPageElement* el = dm->GetElementAtPos({x, y}, &srcPageNo);
+        if (el && el->Is(kindPageElementDest) && gSettings->disableLinks) el = nullptr;
+        RefHoverOnCanvasMouseMove(win->refHover, win->hwndCanvas, win->ctrl, win->linkHandler, dm, x, y, el, srcPageNo,
+                                  gSettings->citationHoverDelay);
+        return;
+    }
 
     if (LassoOnMove(win, Point{x, y}, key)) return;
 
@@ -5541,6 +5548,18 @@ static LRESULT OnSetCursorMouseNone(MainWindow* win, HWND hwnd) {
     // Do not put the old one-line comment tooltip on top of them.
     bool annotCardShown = win->pdfAnnotationsToolbarEnabled || IsAnnotationTextPopupShownFor(win, annot);
     if (annotCardShown && annot && pageEl->Is(kindPageElementComment)) {
+        win->DeleteToolTip();
+        SetCursorCached(IDC_HAND);
+        return TRUE;
+    }
+    if (gSettings->citationHoverDelay >= 0 && RefHoverIsInternalLink(pageEl, dm)) {
+        RefHoverState* hover = win->refHover;
+        bool pending = hover && hover->ctrl == win->ctrl && hover->pending.destPage > 0 &&
+                       hover->pending.srcPage == pageNo && hover->pending.srcRect == pageEl->GetRect();
+        if (!pending) {
+            RefHoverOnCanvasMouseMove(win->refHover, win->hwndCanvas, win->ctrl, win->linkHandler, dm, pt.x, pt.y,
+                                      pageEl, pageNo, gSettings->citationHoverDelay);
+        }
         win->DeleteToolTip();
         SetCursorCached(IDC_HAND);
         return TRUE;

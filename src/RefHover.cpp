@@ -53,9 +53,15 @@ void RefHoverSchedule(RefHoverState* s, HWND hwndCanvas, int delayMs, Point scre
     if (!s || delayMs < 0) {
         return;
     }
-    KillTimer(hwndCanvas, kRefHoverTimerID);
-    KillTimer(hwndCanvas, kRefHoverHideTimerID);
     if (s->resizing || s->selecting || RefHoverHasSelection(s)) return;
+    KillTimer(hwndCanvas, kRefHoverHideTimerID);
+    bool samePending = s->pending.destPage == destPage && s->pending.destX == destX && s->pending.destY == destY &&
+                       s->pending.destZoom == destZoom && s->pending.srcPage == srcPage &&
+                       s->pending.srcRect == srcRect && s->pending.pageScreenRect == pageScreenRect;
+    // Movement inside one link must not restart its delay or replace its render.
+    if (samePending && (s->showTimerArmed || s->renderInFlight)) return;
+    KillTimer(hwndCanvas, kRefHoverTimerID);
+    s->showTimerArmed = false;
 
     bool sameSrc = s->displayed.srcPage == srcPage && s->displayed.srcRect == srcRect;
     if (HwndIsVisible(s->hwndPopup) && s->displayed.destPageRaw == destPage && s->displayed.destX == destX &&
@@ -73,7 +79,7 @@ void RefHoverSchedule(RefHoverState* s, HWND hwndCanvas, int delayMs, Point scre
     if (HwndIsVisible(s->hwndPopup)) {
         delayMs = 0;
     }
-    SetTimer(hwndCanvas, kRefHoverTimerID, (UINT)delayMs, nullptr);
+    s->showTimerArmed = SetTimer(hwndCanvas, kRefHoverTimerID, (UINT)delayMs, nullptr) != 0;
 }
 
 void RefHoverHide(RefHoverState* s, HWND hwndCanvas) {
@@ -81,6 +87,7 @@ void RefHoverHide(RefHoverState* s, HWND hwndCanvas) {
         return;
     }
     KillTimer(hwndCanvas, kRefHoverTimerID);
+    s->showTimerArmed = false;
     KillTimer(hwndCanvas, kRefHoverHideTimerID);
     RefHoverClearSelection(s);
     s->pending.destPage = -1;
@@ -105,6 +112,7 @@ void RefHoverScheduleHide(RefHoverState* s, HWND hwndCanvas, int delayMs) {
         return;
     }
     KillTimer(hwndCanvas, kRefHoverTimerID);
+    s->showTimerArmed = false;
     s->pending.destPage = -1;
     s->renderGen++;
     RefHoverDropQueuedRender(s);

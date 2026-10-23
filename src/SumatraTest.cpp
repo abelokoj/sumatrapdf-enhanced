@@ -21,6 +21,7 @@ extern "C" {
 #include "gui/Gfx.h"
 #include "gui/GuiColors.h"
 #include "gui/VirtCtrl.h"
+#include "gui/win/WinGui.h"
 #include "DocController.h"
 #include "EngineBase.h"
 #include "base/GuessFileType.h"
@@ -2835,6 +2836,12 @@ TempStr RefHoverResultTemp(Str action, int x, int y, int* exitCodeOut) {
     }
     MainWindow* win = len(gWindows) > 0 ? gWindows[0] : nullptr;
     DisplayModel* dm = win ? win->AsFixed() : nullptr;
+    if (str::Eq(action, StrL("move-null")) && dm) {
+        int page = dm->GetPageNoByPoint({x, y});
+        RefHoverOnCanvasMouseMove(win->refHover, win->hwndCanvas, win->ctrl, win->linkHandler, dm, x, y, nullptr, page,
+                                  gSettings->citationHoverDelay);
+    }
+    if (str::Eq(action, StrL("hide")) && win) RefHoverHide(win->refHover, win->hwndCanvas);
     bool showText = str::Eq(action, StrL("show-text"));
     if ((str::Eq(action, StrL("show")) || showText) && dm) {
         if (!win->refHover) {
@@ -2874,13 +2881,17 @@ TempStr RefHoverResultTemp(Str action, int x, int y, int* exitCodeOut) {
     }
     RefHoverState* s = win ? win->refHover : nullptr;
     if (!s || !s->hwndPopup || !HwndIsVisible(s->hwndPopup)) {
-        return fmt("OK visible=0");
+        return fmt("OK visible=0 pending=%d hand=%d action=%d delay=%d", s ? s->pending.destPage : -1,
+                   win && win->handTool ? 1 : 0, win ? (int)win->mouseAction : -1, gSettings->citationHoverDelay);
     }
     auto& d = s->displayed;
-    return fmt("OK visible=1 hwnd=%d page=%d y=%d zoom=%d region=%.3f,%.3f,%.3f,%.3f scale=%.3f selected=%d border=%d",
-               (int)(INT_PTR)s->hwndPopup, d.destPage, (int)d.region.y, (int)(d.userZoom * 100), d.region.x, d.region.y,
-               d.region.dx, d.region.dy, d.baseZoom * d.userZoom, RefHoverHasSelection(s) ? 1 : 0,
-               MulDiv(kRefHoverBorder, DpiGetForHwnd(s->hwndPopup), 96));
+    return fmt(
+        "OK visible=1 hwnd=%d page=%d y=%d zoom=%d region=%.3f,%.3f,%.3f,%.3f scale=%.3f selected=%d border=%d gen=%d "
+        "pending=%d tip=%d",
+        (int)(INT_PTR)s->hwndPopup, d.destPage, (int)d.region.y, (int)(d.userZoom * 100), d.region.x, d.region.y,
+        d.region.dx, d.region.dy, d.baseZoom * d.userZoom, RefHoverHasSelection(s) ? 1 : 0,
+        MulDiv(kRefHoverBorder, DpiGetForHwnd(s->hwndPopup), 96), s->renderGen, s->pending.destPage,
+        win->infotip ? win->infotip->Count() : 0);
 }
 
 // The current tab's pages: each page's width, which a test gives a unique value

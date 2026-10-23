@@ -32,6 +32,7 @@ struct RefHoverState {
     // popup can hit-test links under the cursor (hand cursor + click-to-open)
     EngineBase* hitEngine = nullptr;
     bool resizing = false;
+    bool showTimerArmed = false;
     TextSelection* selection = nullptr;
     bool selecting = false;
     bool selectingWords = false;

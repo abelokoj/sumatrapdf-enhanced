@@ -94,6 +94,19 @@ void RefHoverOnCanvasMouseMove(RefHoverState*& s, HWND hwndCanvas, DocController
     s->ctrl = ctrl;
     s->linkHandler = linkHandler;
 
+    // Rendering can temporarily lock link hit-testing. Keep a known reference
+    // alive while the pointer is still inside its source rectangle.
+    if (!el && srcPageNo > 0) {
+        PointF point = dm->CvtFromScreen({x, y}, srcPageNo);
+        bool pending = s->pending.destPage > 0 && s->pending.srcPage == srcPageNo && s->pending.srcRect.Contains(point);
+        bool displayed =
+            HwndIsVisible(s->hwndPopup) && s->displayed.srcPage == srcPageNo && s->displayed.srcRect.Contains(point);
+        if (pending || displayed) {
+            KillTimer(hwndCanvas, kRefHoverHideTimerID);
+            return;
+        }
+    }
+
     bool scheduled = false;
     if (RefHoverScheduleLink(s, hwndCanvas, dm, x, y, el, hoverDelayMs)) {
         TrackMouseLeave(hwndCanvas);
@@ -131,6 +144,7 @@ void RefHoverOnCanvasLeftButtonDown(RefHoverState* s, HWND hwndCanvas) {
 
 bool RefHoverOnCanvasTimer(RefHoverState* s, HWND hwndCanvas, DisplayModel* dm, UINT_PTR timerId) {
     if (timerId == kRefHoverTimerID) {
+        if (s) s->showTimerArmed = false;
         if (s && (s->resizing || s->selecting || RefHoverHasSelection(s))) {
             KillTimer(hwndCanvas, kRefHoverTimerID);
             return true;

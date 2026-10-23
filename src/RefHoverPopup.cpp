@@ -180,7 +180,7 @@ static void RefHoverRoundPopup(HWND hwnd) {
 }
 
 static void RefHoverDrawEdge(HDC hdc, HWND hwnd) {
-    constexpr float edgePoints = 0.5f;
+    constexpr float edgePoints = 0.6f;
     int dpi = DpiGetForHwnd(hwnd);
     float width = edgePoints * (float)dpi / 72.f;
     Rect client = HwndClientRect(hwnd);
@@ -193,7 +193,7 @@ static void RefHoverDrawEdge(HDC hdc, HWND hwnd) {
     Gdiplus::Graphics gfx(hdc);
     gfx.SetPageUnit(Gdiplus::UnitPixel);
     gfx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    Color edgeCol = ThemeEdgeColor();
+    Color edgeCol = ThemeUsesHighContrastColors() ? ThemeEdgeColor() : MkRgb(255, 48, 48);
     Gdiplus::Pen edge(Gdiplus::Color(255, GetRValue(edgeCol), GetGValue(edgeCol), GetBValue(edgeCol)), width);
     if (diameter <= 0.f) {
         gfx.DrawRectangle(&edge, inset, inset, dx, dy);
