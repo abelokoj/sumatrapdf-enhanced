@@ -141,6 +141,7 @@ import { testit as xmpProperties } from "./xmp-properties.ts";
 import { testit as documentPropertiesCopy } from "./document-properties-copy.ts";
 import { testit as refHoverDescriptions } from "./ref-hover-descriptions.ts";
 import { testit as refHoverLive } from "./ref-hover-live.ts";
+import { testit as refHoverHighlight } from "./ref-hover-highlight.ts";
 import { testit as refHoverSelection } from "./ref-hover-selection.ts";
 import { testit as refHoverFalsePositive } from "./ref-hover-false-positive.ts";
 import { testit as issue5950 } from "./issue-5950.ts";
@@ -640,6 +641,7 @@ export const tests: NamedTest[] = [
   ["xmp-properties", xmpProperties],
   ["document-properties-copy", documentPropertiesCopy],
   ["ref-hover-selection", refHoverSelection],
+  ["ref-hover-highlight", refHoverHighlight],
   ["ref-hover-live", refHoverLive],
   ["ref-hover-descriptions", refHoverDescriptions],
   ["ref-hover-false-positive", refHoverFalsePositive],

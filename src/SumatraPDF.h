@@ -3,6 +3,7 @@
 
 struct AnnotCreateArgs;
 struct CustomCommand;
+struct TextSelection;
 enum class FileType : u8;
 
 #include "OverlayScrollbar.h"
@@ -99,6 +100,7 @@ bool AreLoadThreadsActive();
 // with their panes)
 void FrameSyncSplitters(MainWindow*);
 void SetAnnotCreateArgs(AnnotCreateArgs&, CustomCommand*);
+bool CreateHighlightFromSelection(MainWindow*, TextSelection*);
 void BeginPdfEditOperation(MainWindow*, const char* name);
 void EndPdfEditOperation(MainWindow*);
 struct NotificationWnd;

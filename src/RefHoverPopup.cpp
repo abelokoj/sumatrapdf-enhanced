@@ -13,8 +13,12 @@
 #include "Theme.h"
 #include "DocController.h"
 #include "EngineBase.h"
+#include "DisplayModel.h"
 #include "TextSelection.h"
+#include "SumatraPDF.h"
+#include "MainWindow.h"
 #include "Commands.h"
+#include "CommandAvailability.h"
 #include "Translations.h"
 enum class TouchSelHandle;
 enum class SelectionDragEdge;
@@ -93,6 +97,32 @@ static bool RefHoverCopySelection(RefHoverState* s) {
     bool copied = CopyTextToClipboard(text);
     str::Free(text);
     return copied;
+}
+
+static MainWindow* RefHoverOwner(RefHoverState* s) {
+    MainWindow* win = s ? FindMainWindowByHwnd(s->hwndCanvas) : nullptr;
+    DisplayModel* dm = win ? win->AsFixed() : nullptr;
+    return dm && win->ctrl == s->ctrl && dm->GetEngine() == s->hitEngine ? win : nullptr;
+}
+
+static bool RefHoverCanHighlight(RefHoverState* s) {
+    MainWindow* win = RefHoverHasSelection(s) ? RefHoverOwner(s) : nullptr;
+    if (!win) return false;
+    AppCommandCtx ctx = NewAppCommandCtx(win);
+    ctx.hasSelection = true;
+    ctx.hasTextSelection = true;
+    return GetCommandVisibility(CmdCreateAnnotHighlight, ctx, CommandSurface::Menu) == CommandVisibility::Show;
+}
+
+static void RefHoverHighlight(RefHoverState* s) {
+    MainWindow* win = RefHoverCanHighlight(s) ? RefHoverOwner(s) : nullptr;
+    if (!win || !CreateHighlightFromSelection(win, s->selection)) return;
+    RefHoverState::RenderRequest req;
+    req.pageNo = s->displayed.destPage;
+    req.zoom = s->displayed.baseZoom * s->displayed.userZoom;
+    req.region = s->displayed.region;
+    req.continuationRegion = s->displayed.continuationRegion;
+    RefHoverRequestRender(s, s->hitEngine, req);
 }
 
 static void RefHoverSelectVisible(RefHoverState* s) {
@@ -370,6 +400,7 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             }
             if (IsCtrlPressed() && wp == 'C') command = CmdCopySelection;
             if (IsCtrlPressed() && wp == 'A') command = CmdSelectAll;
+            if (IsCtrlPressed() && wp == 'S') command = CmdSaveAnnotations;
         }
         if (command == CmdCopySelection) {
             RefHoverCopySelection(state);
@@ -379,12 +410,24 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             RefHoverSelectVisible(state);
             return 0;
         }
+        if (command == CmdCreateAnnotHighlight) {
+            RefHoverHighlight(state);
+            return 0;
+        }
+        if (command == CmdSaveAnnotations) {
+            MainWindow* win = RefHoverOwner(state);
+            if (win) SendMessageW(win->hwndFrame, WM_COMMAND, CmdSaveAnnotations, 0);
+            return 0;
+        }
     }
     if (msg == WM_CONTEXTMENU && state) {
         HMENU menu = CreatePopupMenu();
         AppendMenuW(menu, MF_STRING | (RefHoverHasSelection(state) ? 0 : MF_GRAYED), CmdCopySelection,
                     CWStrTemp(Tr("Copy")));
         AppendMenuW(menu, MF_STRING, CmdSelectAll, CWStrTemp(Tr("Select All")));
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING | (RefHoverCanHighlight(state) ? 0 : MF_GRAYED), CmdCreateAnnotHighlight,
+                    CWStrTemp(Tr("Highlight")));
         POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
         if (point.x == -1 && point.y == -1) {
             point = {DpiScale(20), DpiScale(20)};

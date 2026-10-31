@@ -69,6 +69,7 @@
 #include "UpdateCheck.h"
 #include "resource.h"
 #include "Commands.h"
+#include "CommandAvailability.h"
 #include "Flags.h"
 #include "AppSettings.h"
 #include "AppTools.h"
@@ -10117,65 +10118,28 @@ static void AddUniquePageNo(Vec<int>& v, int pageNo) {
     VecAppend(v, pageNo);
 }
 
-// create one or more markup annotations from the current text selection.
-// The selection (and the floating selection toolbar) stay so the user can
-// copy the same span or apply another markup without selecting again.
-static Annotation* MakeAnnotationsFromSelection(WindowTab* tab, AnnotCreateArgs* args) {
-    DisplayModel* dm = tab->AsFixed();
-    if (!dm) {
-        return nullptr;
-    }
-    auto* engine = dm->GetEngine();
-    bool supportsAnnots = EngineSupportsAnnotations(engine);
-    MainWindow* win = tab->win;
-    bool ok = supportsAnnots && win->showSelection && tab->selectionOnPage;
-    if (!ok) {
-        return nullptr;
-    }
-    bool isTextSelection = dm->textSelection && dm->textSelection->result.len > 0;
-    // Only a highlight can mark the complete Ctrl-drag region, including whitespace.
-    if (!isTextSelection && args->annotType != AnnotationType::Highlight) {
-        return nullptr;
-    }
-
-    Vec<SelectionOnPage>* s = tab->selectionOnPage;
+static Annotation* MakeAnnotationsFromRegions(DisplayModel* dm, const Vec<SelectionOnPage>& selections,
+                                              AnnotCreateArgs* args) {
+    EngineBase* engine = dm->GetEngine();
+    if (!EngineSupportsAnnotations(engine)) return nullptr;
     Vec<int> pageNos;
-    for (auto& sel : *s) {
-        int pageNo = sel.pageNo;
-        if (!dm->ValidPageNo(pageNo)) {
-            continue;
-        }
-        AddUniquePageNo(pageNos, pageNo);
+    for (auto& sel : selections) {
+        if (dm->ValidPageNo(sel.pageNo)) AddUniquePageNo(pageNos, sel.pageNo);
     }
-    if (len(pageNos) == 0) {
-        return nullptr;
-    }
-
-    if (args->setContentToSelection) {
-        bool isTextOnlySelection = false;
-        args->content = GetSelectedTextTemp(tab, StrL("\r\n"), isTextOnlySelection);
-    }
+    if (len(pageNos) == 0) return nullptr;
 
     Annotation* annot = nullptr;
     Vec<Annotation*> created;
-    // creating the annotation and setting its quad points are separate journal
-    // operations; one gesture must be one undo step (issue #6217)
+    // Creation and quad updates must remain one undo step.
     EngineMupdfBeginOperation(engine, "Mark up selection");
     for (auto pageNo : pageNos) {
         Vec<RectF> rects;
-        for (auto& sel : *s) {
-            if (pageNo != sel.pageNo) {
-                continue;
-            }
-            VecAppend(rects, sel.rect);
+        for (auto& sel : selections) {
+            if (pageNo == sel.pageNo) VecAppend(rects, sel.rect);
         }
         annot = EngineMupdfCreateAnnotation(engine, pageNo, PointF{}, args);
         if (!annot) {
-            // Roll back annots created earlier in this call so we do not leave
-            // partial multi-page selections as untracked annotations.
-            for (Annotation* a : created) {
-                DeleteAnnotation(a);
-            }
+            for (Annotation* a : created) DeleteAnnotation(a);
             EngineMupdfEndOperation(engine);
             return nullptr;
         }
@@ -10184,13 +10148,56 @@ static Annotation* MakeAnnotationsFromSelection(WindowTab* tab, AnnotCreateArgs*
         VecAppend(created, annot);
     }
     EngineMupdfEndOperation(engine);
-
-    // copy selection to clipboard so that user can use Ctrl-V to set contents
-    if (args->copyToClipboard) {
-        CopySelectionToClipboard(win);
-    }
-    // callers refresh lists and rerender; doing it here too aborted and redid the page render
     return annot;
+}
+
+// The ordinary canvas selection and popup selection share creation and undo,
+// without replacing each other's selection state.
+static Annotation* MakeAnnotationsFromSelection(WindowTab* tab, AnnotCreateArgs* args) {
+    DisplayModel* dm = tab->AsFixed();
+    MainWindow* win = tab->win;
+    if (!dm || !EngineSupportsAnnotations(dm->GetEngine()) || !win->showSelection || !tab->selectionOnPage)
+        return nullptr;
+    bool isTextSelection = dm->textSelection && dm->textSelection->result.len > 0;
+    // Only a highlight can mark the complete Ctrl-drag region, including whitespace.
+    if (!isTextSelection && args->annotType != AnnotationType::Highlight) return nullptr;
+    if (args->setContentToSelection) {
+        bool isTextOnlySelection = false;
+        args->content = GetSelectedTextTemp(tab, StrL("\r\n"), isTextOnlySelection);
+    }
+    Annotation* annot = MakeAnnotationsFromRegions(dm, *tab->selectionOnPage, args);
+    if (annot && args->copyToClipboard) CopySelectionToClipboard(win);
+    return annot;
+}
+
+bool CreateHighlightFromSelection(MainWindow* win, TextSelection* selection) {
+    if (!IsMainWindowValidAndNotClosing(win) || !selection || selection->result.len <= 0) return false;
+    DisplayModel* dm = win->AsFixed();
+    WindowTab* tab = win->CurrentTab();
+    if (!dm || !tab || tab->AsFixed() != dm || selection->engine != dm->GetEngine()) return false;
+    AppCommandCtx ctx = NewAppCommandCtx(win);
+    ctx.hasSelection = true;
+    ctx.hasTextSelection = true;
+    if (GetCommandVisibility(CmdCreateAnnotHighlight, ctx, CommandSurface::Toolbar) != CommandVisibility::Show)
+        return false;
+    Vec<int> pages;
+    for (int i = 0; i < selection->result.len; i++) {
+        int page = selection->result.pages[i];
+        if (!dm->ValidPageNo(page)) return false;
+        AddUniquePageNo(pages, page);
+    }
+    Vec<SelectionOnPage>* regions = SelectionOnPage::FromTextSelect(&selection->result);
+    if (!regions) return false;
+    AnnotCreateArgs args{AnnotationType::Highlight};
+    SetAnnotCreateArgs(args, nullptr);
+    Annotation* annot = MakeAnnotationsFromRegions(dm, *regions, &args);
+    delete regions;
+    if (!annot) return false;
+    NotifyAnnotationsChanged(tab);
+    RefreshAnnotationLists(tab);
+    for (int page : pages) RerenderTabPage(tab, page);
+    ToolbarUpdateStateForWindow(win, true);
+    return true;
 }
 
 // what CmdToggleCursorPosition would switch to. The tip cycles pt -> mm -> in
