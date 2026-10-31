@@ -140,6 +140,11 @@ void RefHoverOnTimer(RefHoverState* s, HWND hwndCanvas, EngineBase* engine, floa
             popupWCap = std::max(dyn, popupWCap);
         }
     }
+    int sourcePageWidth = s->pending.pageScreenRect.dx;
+    if (sourcePageWidth > 0) {
+        int pageWidthCap = (int)((i64)sourcePageWidth * 95 / 100);
+        popupWCap = std::min(popupWCap, pageWidthCap);
+    }
     // Combined content extent (region stacked above continuation, if any) used
     // for sizing below; req.region itself stays just the primary crop.
     float contentDy = region.dy + (hasContinuation ? continuation.dy : 0.f);

@@ -250,7 +250,12 @@ static LRESULT CALLBACK RefHoverWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     }
     if (msg == WM_GETMINMAXINFO) {
         auto info = (MINMAXINFO*)lp;
-        info->ptMinTrackSize = {DpiScale(160), DpiScale(100)};
+        int minWidth = DpiScale(160);
+        if (state && state->pending.pageScreenRect.dx > 0) {
+            int pageWidthCap = (int)((i64)state->pending.pageScreenRect.dx * 95 / 100);
+            minWidth = std::min(minWidth, std::max(1, pageWidthCap));
+        }
+        info->ptMinTrackSize = {minWidth, DpiScale(100)};
         return 0;
     }
     if (msg == WM_ENTERSIZEMOVE && state) {
@@ -490,6 +495,7 @@ void RefHoverShowPopup(RefHoverState* s, Point screenPt) {
     int topBound = mi.rcWork.top;
     int bottomBound = mi.rcWork.bottom;
     Rect pr = s->pending.pageScreenRect;
+    if (pr.dx > 0) popupW = std::min(popupW, (int)((i64)pr.dx * 95 / 100));
     if (pr.dy > 0) {
         topBound = std::max(pr.y, topBound);
         bottomBound = std::min(pr.y + pr.dy, bottomBound);
