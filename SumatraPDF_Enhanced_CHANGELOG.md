@@ -1,5 +1,10 @@
 # SumatraPDF Enhanced changelog
 
+## Local test build 2026-10-23.8
+
+- Add Highlight to the reference-preview selection menu, using the configured PDF highlight color, ordinary Undo/Redo, and normal annotation saving while preserving the main document selection.
+- Cap the initial popup width at 95% of the source PDF page width, including the frame; keep manual resizing beyond this limit in all directions.
+
 ## Testing release 2026-10-23.7
 
 - Restore reliable reference and document contents-page hover previews in reading and hand-tool modes.
