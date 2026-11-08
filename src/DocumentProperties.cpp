@@ -34,6 +34,7 @@
 #include "EutlTrust.h"
 
 #include <wincrypt.h>
+#include <richedit.h>
 #include "DocumentProperties.h"
 
 constexpr int kButtonPadding = 8;
@@ -961,11 +962,10 @@ void PropertiesWnd::UpdateEutl(VirtMouseEvent*) {
 }
 
 void PropertiesWnd::SetPropsText(Str text) {
-    if (!editProps) {
-        return;
-    }
+    if (!editProps) return;
     str::Builder display;
     int labelWidth = 0;
+    bool inProperty = false;
     for (int off = 0; off < len(text);) {
         Str rest(text.s + off, len(text) - off);
         int newline = str::IndexOfChar(rest, '\n');
@@ -976,32 +976,67 @@ void PropertiesWnd::SetPropsText(Str text) {
             GetPropertyLabelWidth(line, &labelBytes);
             Str label(line.s, labelBytes);
             labelWidth = std::max(labelWidth, PlatformFontMeasureText(propsFont, label).dx);
+            display.AppendChar('\t');
             display.Append(label);
             display.AppendChar('\t');
             int value = labelBytes;
             while (value < len(line) && line.s[value] == ' ') value++;
             display.Append(Str(line.s + value, len(line) - value));
+            inProperty = true;
         } else {
+            if (len(line) == 0 || line.s[len(line) - 1] == ':') inProperty = false;
+            if (inProperty) display.Append(StrL("\t\t"));
             display.Append(line);
         }
-        if (newline >= 0) display.AppendChar('\n');
+        if (newline >= 0) display.AppendChar('\r');
         off += (newline >= 0 ? newline + 1 : len(rest));
     }
-    int tab = MulDiv(labelWidth + propsFont->averageCharWidth * 2, 4, std::max(1, propsFont->averageCharWidth));
-    SendMessageW(editProps->hwnd, EM_SETTABSTOPS, 1, (LPARAM)&tab);
-    text = ToStr(display);
-    str::Builder crlfText;
-    for (int i = 0; i < text.len; i++) {
-        char c = text.s[i];
-        if (c == '\n' && (i == 0 || text.s[i - 1] != '\r')) {
-            crlfText.AppendChar('\r');
+    HWND edit = editProps->hwnd;
+    CHARRANGE selection{};
+    POINT scroll{};
+    SendMessageW(edit, EM_EXGETSEL, 0, (LPARAM)&selection);
+    SendMessageW(edit, EM_GETSCROLLPOS, 0, (LPARAM)&scroll);
+    SendMessageW(edit, WM_SETREDRAW, FALSE, 0);
+    editProps->SetText(ToStr(display));
+    SendMessageW(edit, EM_SETSEL, 0, -1);
+    PARAFORMAT2 paragraph{};
+    paragraph.cbSize = sizeof(paragraph);
+    paragraph.dwMask = PFM_STARTINDENT | PFM_OFFSET | PFM_RIGHTINDENT | PFM_TABSTOPS | PFM_ALIGNMENT | PFM_SPACEBEFORE |
+                       PFM_SPACEAFTER;
+    paragraph.wAlignment = PFA_LEFT;
+    SendMessageW(edit, EM_SETPARAFORMAT, 0, (LPARAM)&paragraph);
+    CHARFORMAT2W color{};
+    color.cbSize = sizeof(color);
+    color.dwMask = CFM_COLOR;
+    color.crTextColor = ThemeWindowTextColor();
+    SendMessageW(edit, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&color);
+    SendMessageW(edit, EM_SETBKGNDCOLOR, 0, ThemeWindowBackgroundColor());
+
+    int dpi = DpiGetForHwnd(edit);
+    int labelEnd = MulDiv(labelWidth + propsFont->averageCharWidth, 1440, dpi);
+    int valueStart = labelEnd + MulDiv(propsFont->averageCharWidth * 2, 1440, dpi);
+    constexpr LONG rightTab = 2 << 24;
+    // A wrapped tab must still reach the value stop, not the next default stop.
+    paragraph.dxOffset = valueStart - MulDiv(1, 1440, dpi);
+    paragraph.cTabCount = 2;
+    paragraph.rgxTabs[0] = labelEnd | rightTab;
+    paragraph.rgxTabs[1] = valueStart;
+    // Right-align labels at the first tab; wrapped values hang at the second.
+    TempWStr wide = ToWStrTemp(ToStr(display));
+    for (int start = 0; start < len(wide);) {
+        int end = start;
+        while (end < len(wide) && wide.s[end] != '\r') end++;
+        if (wide.s[start] == '\t') {
+            CHARRANGE range{start, end};
+            SendMessageW(edit, EM_EXSETSEL, 0, (LPARAM)&range);
+            SendMessageW(edit, EM_SETPARAFORMAT, 0, (LPARAM)&paragraph);
         }
-        crlfText.AppendChar(c);
+        start = end + 1;
     }
-    if (!str::Eq(editProps->GetTextTemp(), ToStr(crlfText))) {
-        editProps->SetText(ToStr(crlfText));
-        SendMessageW(editProps->hwnd, EM_SETSEL, 0, 0);
-    }
+    SendMessageW(edit, EM_EXSETSEL, 0, (LPARAM)&selection);
+    SendMessageW(edit, EM_SETSCROLLPOS, 0, (LPARAM)&scroll);
+    SendMessageW(edit, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(edit, nullptr, TRUE);
 }
 
 void PropertiesWnd::SizeToContent() {
@@ -1129,6 +1164,8 @@ static void OnPropertiesDestroy(WindowBase::DestroyEvent* ev) {
 }
 
 bool PropertiesWnd::Create(HWND parent) {
+    static HMODULE richEdit = LoadLibraryExW(L"Msftedit.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!richEdit) return false;
     hwndParent = parent;
     onTimer = MkFunc1Void<WindowBase::TimerEvent*>([](WindowBase::TimerEvent* ev) {
         if (ev->timerId != kCopyFeedbackTimer) return;
@@ -1165,19 +1202,21 @@ bool PropertiesWnd::Create(HWND parent) {
     vbox->alignCross = CrossAxisAlign::Stretch;
 
     {
-        Edit::CreateArgs args;
+        CreateControlArgs args;
         args.parent = hwnd;
         args.font = propsFont;
-        args.isMultiLine = true;
-        args.withBorder = true;
+        args.className = WStrL(MSFTEDIT_CLASS);
+        args.style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL;
         args.isRtl = isRtl;
         editProps = new Edit();
-        editProps->Create(args);
-        SendMessageW(editProps->hwnd, EM_SETREADONLY, TRUE, 0);
-        // multi-line edit default can still cap text; font lists may be large
-        SendMessageW(editProps->hwnd, EM_SETLIMITTEXT, 0, 0);
-        DWORD tabStop = 16;
-        SendMessageW(editProps->hwnd, EM_SETTABSTOPS, 1, (LPARAM)&tabStop);
+        editProps->createdWithBorder = true;
+        editProps->createdWithFrame = true;
+        editProps->onWndProc = MkMethod1<Edit, ControlBase::WndProcEvent*, &Edit::WndProc>(editProps);
+        editProps->onMessageReflect =
+            MkMethod1<Edit, ControlBase::MessageReflectEvent*, &Edit::OnMessageReflect>(editProps);
+        if (!editProps->CreateControl(args)) return false;
+        SetWindowTheme(editProps->hwnd, L"", L"");
+        SendMessageW(editProps->hwnd, EM_EXLIMITTEXT, 0, 0x7ffffffe);
         vbox->AddChild(editProps, 1);
     }
 

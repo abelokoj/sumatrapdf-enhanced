@@ -74,7 +74,7 @@ function makePng(w: number, h: number, dpi: number): Buffer {
 function findFirstEdit(parent: number): number {
   let found = 0;
   enumChildWindows(parent, (hwnd) => {
-    if (getClassName(hwnd) === "Edit") {
+    if (["Edit", "RICHEDIT50W"].includes(getClassName(hwnd))) {
       found = hwnd;
       return false;
     }

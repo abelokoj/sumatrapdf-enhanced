@@ -73,7 +73,7 @@ async function checkCopy(theme: string, scale: number): Promise<void> {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
       properties = findProperties(proc.pid!);
-      edit = properties ? findChildWindow(properties, "Edit") : 0;
+      edit = properties ? findChildWindow(properties, "RICHEDIT50W") || findChildWindow(properties, "Edit") : 0;
       text = edit ? getControlText(edit) : "";
       if (text.includes("InfoTitle") && !text.includes("Getting font information")) break;
       await Bun.sleep(50);

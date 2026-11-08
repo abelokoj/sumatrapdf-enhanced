@@ -138,6 +138,7 @@ import { testit as issue2155 } from "./issue-2155.ts";
 import { testit as issue2254 } from "./issue-2254.ts";
 import { testit as issue1846 } from "./issue-1846.ts";
 import { testit as xmpProperties } from "./xmp-properties.ts";
+import { testit as documentPropertiesLayout } from "./document-properties-layout.ts";
 import { testit as documentPropertiesCopy } from "./document-properties-copy.ts";
 import { testit as refHoverDescriptions } from "./ref-hover-descriptions.ts";
 import { testit as refHoverLive } from "./ref-hover-live.ts";
@@ -641,6 +642,7 @@ export const tests: NamedTest[] = [
   ["issue-1846", issue1846],
   ["xmp-properties", xmpProperties],
   ["document-properties-copy", documentPropertiesCopy],
+  ["document-properties-layout", documentPropertiesLayout],
   ["ref-hover-selection", refHoverSelection],
   ["ref-hover-width", refHoverWidth],
   ["ref-hover-highlight", refHoverHighlight],
