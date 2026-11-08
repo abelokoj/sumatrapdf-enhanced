@@ -1,5 +1,12 @@
 # SumatraPDF Enhanced changelog
 
+## Maintenance release 2026-11-08.8
+
+- Align Document Properties labels to the right and values to the left; keep wrapped and multiline values inside their column when resizing or using larger interface fonts.
+- Add saved PDF highlights to reference previews, preserving the main document selection and ordinary Undo/Redo and saving.
+- Limit initial reference previews to 95% of the source PDF page width while retaining manual resizing on all four edges.
+- Build the Windows packages with GitHub Actions. See [release notes](docs/releases/2026-11-08.8.md) for downloads and validation.
+
 ## Local test build 2026-10-23.8
 
 - Add Highlight to the reference-preview selection menu, using the configured PDF highlight color, ordinary Undo/Redo, and normal annotation saving while preserving the main document selection.
