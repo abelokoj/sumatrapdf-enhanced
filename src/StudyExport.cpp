@@ -1146,11 +1146,11 @@ void StudyExport_UnitTests() {
 
     str::Builder mdOut;
     utassert(RenderStudy(mdOut, doc, notes, StudyFormat::Markdown));
-    utassert(str::Contains(mdOut, StrL("## Highlight, page ii (2)")));
-    utassert(str::Contains(mdOut, StrL("*Date: 2023-11-14 22:13:20")));
-    utassert(str::Contains(mdOut, StrL("> α + β < 2")));
+    utassert(str::Contains(mdOut, StrL("## Highlight, page ii \\(2\\)")));
+    utassert(str::Contains(mdOut, StrL("*Date: 2023\\-11\\-14 22:13:20")));
+    utassert(str::Contains(mdOut, StrL("> α \\+ β \\< 2")));
     utassert(str::Contains(mdOut, StrL("**Note:**")));
-    utassert(str::Contains(mdOut, StrL("## Ink, page i (1)")));
+    utassert(str::Contains(mdOut, StrL("## Ink, page i \\(1\\)")));
     utassert(str::Contains(mdOut, StrL("*(Drawing annotation)*")));
 
     StudyNote p1;
