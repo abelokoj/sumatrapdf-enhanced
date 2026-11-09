@@ -833,8 +833,10 @@ struct ToolbarLine : HBox {
     int MinIntrinsicHeight(int) override {
         if (tb->vertical) return tb->rowDy;
         int height = tb->rowDy - 2 * ToolbarOuterPad();
-        for (auto& child : children) {
-            if (!IsCollapsed(child.layout)) height = std::max(height, child.layout->MinIntrinsicHeight(Inf));
+        for (int i = 0; i < len(children); i++) {
+            ILayout* child = children[i].layout;
+            // Overflow must not shrink the row when it hides the two-line brand.
+            if (i == brandIdx || !IsCollapsed(child)) height = std::max(height, child->MinIntrinsicHeight(Inf));
         }
         return height;
     }
