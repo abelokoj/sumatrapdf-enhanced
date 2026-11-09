@@ -5162,27 +5162,30 @@ void VocabularyDialog_UnitTests() {
             DestroyWindow(hub->hwnd);
         }
 
+        // The fixture parent stays hidden; inspect each child's own visibility.
         // Test Design 1 (Curated Lexicon / Mastery Dashboard)
         gSettings->dictionaryUI.dictionaryDesign = 1;
         gSettings->dictionaryUI.learningHubDesign = 1;
         auto* dictD1 = OpenLearningForTest(true);
         utassert(dictD1 != nullptr);
         if (dictD1) {
-            utassert(!IsWindowVisible(Control(dictD1, lcGuideStart)));
-            utassert(!IsWindowVisible(Control(dictD1, lcQueryLabel)));
-            utassert(IsWindowVisible(Control(dictD1, lcQuery)));
-            utassert(IsWindowVisible(Control(dictD1, lcPronounce)));
-            utassert(IsWindowVisible(Control(dictD1, lcSave)));
-            utassert(!IsWindowVisible(Control(dictD1, lcSenseLabel)));
+            utassert(!IsWindowVisible(dictD1->hwnd));
+            utassert((GetWindowLongPtrW(Control(dictD1, lcGuideStart), GWL_STYLE) & WS_VISIBLE) == 0);
+            utassert((GetWindowLongPtrW(Control(dictD1, lcQueryLabel), GWL_STYLE) & WS_VISIBLE) == 0);
+            utassert((GetWindowLongPtrW(Control(dictD1, lcQuery), GWL_STYLE) & WS_VISIBLE) != 0);
+            utassert((GetWindowLongPtrW(Control(dictD1, lcPronounce), GWL_STYLE) & WS_VISIBLE) != 0);
+            utassert((GetWindowLongPtrW(Control(dictD1, lcSave), GWL_STYLE) & WS_VISIBLE) != 0);
+            utassert((GetWindowLongPtrW(Control(dictD1, lcSenseLabel), GWL_STYLE) & WS_VISIBLE) == 0);
             DestroyWindow(dictD1->hwnd);
         }
         auto* hubD1 = OpenLearningForTest(false);
         utassert(hubD1 != nullptr);
         if (hubD1) {
-            utassert(!IsWindowVisible(Control(hubD1, lcGuideStart)));
-            utassert(!IsWindowVisible(Control(hubD1, lcReviewHelp)));
-            utassert(IsWindowVisible(Control(hubD1, lcPractice)));
-            utassert(IsWindowVisible(Control(hubD1, lcLibrary)));
+            utassert(!IsWindowVisible(hubD1->hwnd));
+            utassert((GetWindowLongPtrW(Control(hubD1, lcGuideStart), GWL_STYLE) & WS_VISIBLE) == 0);
+            utassert((GetWindowLongPtrW(Control(hubD1, lcReviewHelp), GWL_STYLE) & WS_VISIBLE) == 0);
+            utassert((GetWindowLongPtrW(Control(hubD1, lcPractice), GWL_STYLE) & WS_VISIBLE) != 0);
+            utassert((GetWindowLongPtrW(Control(hubD1, lcLibrary), GWL_STYLE) & WS_VISIBLE) != 0);
             DestroyWindow(hubD1->hwnd);
         }
 
@@ -5192,21 +5195,23 @@ void VocabularyDialog_UnitTests() {
         auto* dictD2 = OpenLearningForTest(true);
         utassert(dictD2 != nullptr);
         if (dictD2) {
-            utassert(IsWindowVisible(Control(dictD2, lcTitle)));
-            utassert(!IsWindowVisible(Control(dictD2, lcGuideStart)));
-            utassert(IsWindowVisible(Control(dictD2, lcQuery)));
-            utassert(IsWindowVisible(Control(dictD2, lcLookupSource)));
-            utassert(IsWindowVisible(Control(dictD2, lcManageToggle)));
+            utassert(!IsWindowVisible(dictD2->hwnd));
+            utassert((GetWindowLongPtrW(Control(dictD2, lcTitle), GWL_STYLE) & WS_VISIBLE) != 0);
+            utassert((GetWindowLongPtrW(Control(dictD2, lcGuideStart), GWL_STYLE) & WS_VISIBLE) == 0);
+            utassert((GetWindowLongPtrW(Control(dictD2, lcQuery), GWL_STYLE) & WS_VISIBLE) != 0);
+            utassert((GetWindowLongPtrW(Control(dictD2, lcLookupSource), GWL_STYLE) & WS_VISIBLE) != 0);
+            utassert((GetWindowLongPtrW(Control(dictD2, lcManageToggle), GWL_STYLE) & WS_VISIBLE) != 0);
             DestroyWindow(dictD2->hwnd);
         }
         auto* hubD2 = OpenLearningForTest(false);
         utassert(hubD2 != nullptr);
         if (hubD2) {
-            utassert(IsWindowVisible(Control(hubD2, lcTitle)));
-            utassert(IsWindowVisible(Control(hubD2, lcDeckLabel)));
-            utassert(IsWindowVisible(Control(hubD2, lcActivityLabel)));
-            utassert(IsWindowVisible(Control(hubD2, lcSchedulerLabel)));
-            utassert(IsWindowVisible(Control(hubD2, lcLibrary)));
+            utassert(!IsWindowVisible(hubD2->hwnd));
+            utassert((GetWindowLongPtrW(Control(hubD2, lcTitle), GWL_STYLE) & WS_VISIBLE) != 0);
+            utassert((GetWindowLongPtrW(Control(hubD2, lcDeckLabel), GWL_STYLE) & WS_VISIBLE) != 0);
+            utassert((GetWindowLongPtrW(Control(hubD2, lcActivityLabel), GWL_STYLE) & WS_VISIBLE) != 0);
+            utassert((GetWindowLongPtrW(Control(hubD2, lcSchedulerLabel), GWL_STYLE) & WS_VISIBLE) != 0);
+            utassert((GetWindowLongPtrW(Control(hubD2, lcLibrary), GWL_STYLE) & WS_VISIBLE) != 0);
             DestroyWindow(hubD2->hwnd);
         }
         gSettings->dictionaryUI.dictionaryDesign = 0;
@@ -5591,7 +5596,7 @@ void VocabularyDialog_UnitTests() {
     Str displayed = RichText(Read(&window, lcDetails));
     utassert(str::Contains(displayed, StrL("1. Having unlimited power, force or authority.\r")));
     utassert(str::Contains(displayed, StrL("2. Capable of developing into any type of cell.\r")));
-    utassert(str::Contains(displayed, StrL("Example: An omnipotent ruler.\r")));
+    utassert(str::Contains(displayed, StrL("Example: \"An omnipotent ruler.\"\r")));
     utassert(IsRichDetails(details));
     for (const auto& run : window.detailRuns) {
         CHARRANGE range{run.start, run.start + run.length};
