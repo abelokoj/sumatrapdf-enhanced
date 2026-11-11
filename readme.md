@@ -15,7 +15,7 @@
 
 <p align="center"><strong>Read, annotate and learn in one place.</strong><br>A native Windows document reader with customizable pen tools, offline dictionaries and vocabulary practice.<br><em>Built on <a href="https://github.com/sumatrapdfreader/sumatrapdf">SumatraPDF</a>, with visual inspiration from <a href="https://github.com/JaviLendi/PrettySumatraPDF">PrettySumatraPDF</a>.</em></p>
 
-<p align="center"><a href="#why-i-built-this">Why I built this</a> · <a href="#overview">Overview</a> · <a href="#download">Download</a> · <a href="#features">Features</a> · <a href="#get-started">Get started</a> · <a href="#upstream">Upstream source</a> · <a href="#development">Development</a> · <a href="#support">Support</a></p>
+<p align="center"><a href="#why-i-built-this">Why I built this</a> · <a href="#overview">Overview</a> · <a href="#screenshots">Screenshots</a> · <a href="#download">Download</a> · <a href="#features">Features</a> · <a href="#get-started">Get started</a> · <a href="#upstream">Upstream source</a> · <a href="#development">Development</a> · <a href="#support">Support</a></p>
 
 ---
 
@@ -56,6 +56,30 @@ Keep SumatraPDF's document-reading foundation and add tools for studying, writin
 | 🎨 Appearance   | Pretty themes, bundled UI fonts and expanded appearance controls             | Native Windows reader and settings          |
 
 This comparison refers to the upstream source snapshot recorded below. Reference previews, native annotations and document inversion are upstream capabilities that Enhanced retains and extends.
+
+---
+
+<a id="screenshots"></a>
+
+## See the app in action
+
+Here are some images of SumatraPDF Enhanced and its extra features. Select an image to view it at full size.
+
+### A closer look at recent files
+
+[![SumatraPDF Enhanced home page with larger document thumbnails, pinned files and reading progress.](website/assets/screenshots/home-large-thumbnails-preview.webp)](website/assets/screenshots/home-large-thumbnails.png)
+
+### Your document library
+
+[![SumatraPDF Enhanced home page showing document search, the Learning Hub and a compact grid of recent documents.](website/assets/screenshots/home-overview-preview.webp)](website/assets/screenshots/home-overview.png)
+
+### Reading in a light theme
+
+[![PDF reading in a warm light theme, with bookmarks, highlighted passages and the text-selection toolbar.](website/assets/screenshots/reading-light-preview.webp)](website/assets/screenshots/reading-light.png)
+
+### Reading in a dark theme
+
+[![PDF reading in a purple dark theme, with bookmarks, yellow highlights and the text-selection toolbar.](website/assets/screenshots/reading-dark-preview.webp)](website/assets/screenshots/reading-dark.png)
 
 ---
 
