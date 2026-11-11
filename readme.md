@@ -89,10 +89,7 @@ Here are some images of SumatraPDF Enhanced and its extra features. Select an im
 
 **[Latest release and notes](https://github.com/abelokoj/sumatrapdf-enhanced/releases/latest)**
 
-| Device              | Installer                                                                                                                                       | Standalone portable                                                                                                                             | Portable ZIP                                                                                                                                    |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| x64 (Intel and AMD) | [Installer EXE](https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.1.2/SumatraPDF-Enhanced-v0.1.2-x64-install.exe)   | [Portable EXE](https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.1.2/SumatraPDF-Enhanced-v0.1.2-x64-portable.exe)   | [Portable ZIP](https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.1.2/SumatraPDF-Enhanced-v0.1.2-x64-portable.zip)   |
-| ARM64               | [Installer EXE](https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.1.2/SumatraPDF-Enhanced-v0.1.2-arm64-install.exe) | [Portable EXE](https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.1.2/SumatraPDF-Enhanced-v0.1.2-arm64-portable.exe) | [Portable ZIP](https://github.com/abelokoj/sumatrapdf-enhanced/releases/download/enhanced-v0.1.2/SumatraPDF-Enhanced-v0.1.2-arm64-portable.zip) |
+Use the **[download selector](https://abelokoj.github.io/sumatrapdf-enhanced/#download)** for the latest stable x64 or ARM64 installer, portable EXE or portable ZIP. It checks GitHub for the current release and uses its uploaded files. If automatic selection is unavailable, open the **[latest stable release on GitHub](https://github.com/abelokoj/sumatrapdf-enhanced/releases/latest)** and choose a package there.
 
 Run the installer to install the application, or run the standalone portable EXE directly. Both include the offline dictionary. The ZIP includes the reader, dictionary data, license notices and optional shell integration helpers; extract the entire folder before running **SumatraPDF.exe**.
 
@@ -165,7 +162,7 @@ Dictionary and vocabulary learning, the temporary laser, pen profiles, pinned pr
 
 ### 1. Choose your download
 
-Use **x64** for most Intel and AMD computers, or **ARM64** for a device running Windows on ARM. Choose the installer for a normal installation, the standalone portable EXE to run directly, or the ZIP for the reader with optional shell helpers. The download table above links to **v0.1.1**; the latest-release link always opens the current release.
+Use **x64** for most Intel and AMD computers, or **ARM64** for a device running Windows on ARM. Choose the installer for a normal installation, the standalone portable EXE to run directly, or the ZIP for the reader with optional shell helpers. The download selector follows the latest stable GitHub release; testing releases are listed separately under [all releases](https://github.com/abelokoj/sumatrapdf-enhanced/releases).
 
 ### 2. Set up your reading interface
 

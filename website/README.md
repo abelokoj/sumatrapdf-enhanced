@@ -19,11 +19,13 @@ publish automatically. It can also be run manually from Actions.
 
 Expected project URL: https://abelokoj.github.io/sumatrapdf-enhanced/
 
-The download selector loads the latest GitHub release only when all six x64 and
-ARM64 packages match the existing naming convention. If the API is unavailable,
-it keeps the verified v0.1.1 links and labels them with that version. Update
-`FALLBACK_VERSION` in `site.js` and the static download links in `index.html`
-when replacing the fallback. All paths are relative for project Pages hosting.
+The download selector checks GitHub's latest stable release and accepts both
+date-based and legacy version tags. It uses uploaded assets only when the
+complete x64 and ARM64 installer, portable EXE and portable ZIP set is present.
+If the API is unavailable or the release is incomplete, the links open
+GitHub's latest stable release page instead of guessing a file URL. Prereleases
+and drafts are excluded. Without JavaScript, the same release-page links work.
+All local paths are relative for project Pages hosting.
 
 Manrope is included under the license in `assets/Manrope-OFL.txt`. Application
 logos retain the repository's existing licensing.

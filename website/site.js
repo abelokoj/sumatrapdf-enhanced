@@ -1,64 +1,87 @@
 const REPOSITORY = "abelokoj/sumatrapdf-enhanced";
 const RELEASES_URL = `https://github.com/${REPOSITORY}/releases`;
+const LATEST_RELEASE_URL = `${RELEASES_URL}/latest`;
 const PACKAGE_TYPES = ["install.exe", "portable.exe", "portable.zip"];
 const ARCHITECTURES = ["x64", "arm64"];
-const FALLBACK_VERSION = "v0.1.1";
-const FALLBACK_TAG = `enhanced-${FALLBACK_VERSION}`;
 
-let release = { version: FALLBACK_VERSION, tag: FALLBACK_TAG, assets: null };
+let release = null;
+
+function parseRelease(latest) {
+  if (
+    typeof latest?.tag_name !== "string" ||
+    latest.draft !== false ||
+    latest.prerelease !== false ||
+    !Array.isArray(latest.assets)
+  )
+    return null;
+
+  const match = /^enhanced-(v\d+\.\d+\.\d+|(\d{4}-\d{2}-\d{2})\.\d+)$/.exec(latest.tag_name);
+  if (!match) return null;
+  if (match[2]) {
+    const date = Date.parse(match[2]);
+    if (!Number.isFinite(date) || new Date(date).toISOString().slice(0, 10) !== match[2]) return null;
+  }
+
+  const version = match[1];
+  const assets = [];
+  for (const architecture of ARCHITECTURES) {
+    for (const type of PACKAGE_TYPES) {
+      const name = `SumatraPDF-Enhanced-${version}-${architecture}-${type}`;
+      const asset = latest.assets.find(
+        (item) =>
+          item?.name === name &&
+          item.state === "uploaded" &&
+          item.browser_download_url === `${RELEASES_URL}/download/${latest.tag_name}/${name}`,
+      );
+      if (!asset) return null;
+      assets.push(asset);
+    }
+  }
+  return { version, tag: latest.tag_name, assets };
+}
 
 function updateDownloads() {
   const architecture = document.querySelector('input[name="architecture"]:checked').value;
 
   document.querySelectorAll("[data-package]").forEach((link) => {
     const type = link.dataset.package;
-    const assetName = `SumatraPDF-Enhanced-${release.version}-${architecture}-${type}`;
-    const asset = release.assets?.find((item) => item.name === assetName);
-    link.href = asset?.browser_download_url ?? `${RELEASES_URL}/download/${release.tag}/${assetName}`;
+    const assetName = release && `SumatraPDF-Enhanced-${release.version}-${architecture}-${type}`;
+    const asset = release?.assets.find((item) => item.name === assetName);
+    link.href = asset?.browser_download_url ?? LATEST_RELEASE_URL;
     link.setAttribute(
       "aria-label",
-      `Download ${link.querySelector("strong").textContent} for Windows ${architecture}, ${release.version}`,
+      asset
+        ? `Download ${link.querySelector("strong").textContent} for Windows ${architecture}, ${release.version}`
+        : `View the latest stable release for ${link.querySelector("strong").textContent} for Windows ${architecture}`,
     );
   });
 
-  document.getElementById("release-version").textContent = release.version;
+  document.getElementById("release-version").textContent = release?.version ?? "Latest stable";
 }
 
 async function loadRelease() {
   try {
     const response = await fetch(`https://api.github.com/repos/${REPOSITORY}/releases/latest`, {
+      cache: "no-store",
       headers: { Accept: "application/vnd.github+json" },
-      signal: AbortSignal.timeout(8000),
+      signal: globalThis.AbortSignal?.timeout?.(8000),
     });
-    if (!response.ok) return;
-
-    const latest = await response.json();
-    if (!/^enhanced-v\d+\.\d+\.\d+$/.test(latest.tag_name) || !Array.isArray(latest.assets)) return;
-
-    const version = latest.tag_name.slice("enhanced-".length);
-    const complete = ARCHITECTURES.every((architecture) =>
-      PACKAGE_TYPES.every((type) =>
-        latest.assets.some(
-          (asset) =>
-            asset.name === `SumatraPDF-Enhanced-${version}-${architecture}-${type}` &&
-            typeof asset.browser_download_url === "string" &&
-            asset.browser_download_url.startsWith(`${RELEASES_URL}/download/`),
-        ),
-      ),
-    );
-    if (!complete) return;
-
-    release = { version, tag: latest.tag_name, assets: latest.assets };
-    updateDownloads();
-    const status = document.getElementById("release-status");
-    status.replaceChildren(document.createTextNode(`Latest release: ${version}. `));
-    const notes = document.createElement("a");
-    notes.href = `${RELEASES_URL}/tag/${latest.tag_name}`;
-    notes.textContent = "Read the release notes";
-    status.append(notes, document.createTextNode("."));
+    if (response.ok) release = parseRelease(await response.json());
   } catch {
-    // Keep the verified release links available when GitHub cannot be reached.
+    // Keep the official stable release page available if metadata cannot be loaded.
   }
+
+  updateDownloads();
+  const status = document.getElementById("release-status");
+  status.replaceChildren(
+    document.createTextNode(
+      release ? `Latest stable release: ${release.version}. ` : "Could not check the latest stable version. ",
+    ),
+  );
+  const notes = document.createElement("a");
+  notes.href = release ? `${RELEASES_URL}/tag/${release.tag}` : LATEST_RELEASE_URL;
+  notes.textContent = release ? "Read the release notes" : "View the latest stable release for downloads";
+  status.append(notes, document.createTextNode("."));
 }
 
 const stage = document.querySelector(".document-stage");
