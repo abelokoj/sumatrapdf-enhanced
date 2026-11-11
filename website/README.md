@@ -1,8 +1,9 @@
 # SumatraPDF Enhanced website
 
 Static project website for GitHub Pages. The site has no build step and serves
-local branding and licensed Manrope fonts. Feature illustrations are examples,
-not application screenshots.
+local branding and licensed Manrope fonts. The hero feature illustration is an
+example; the screenshot gallery shows the actual application. Gallery images
+use lazy-loaded WebP previews and link to the original full-size PNGs.
 
 ## Preview
 

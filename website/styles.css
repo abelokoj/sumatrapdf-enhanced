@@ -483,6 +483,51 @@ mark {
   font-weight: 600;
   color: #56635c;
 }
+.screenshots {
+  padding-top: 76px;
+}
+.screenshot-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 32px 24px;
+}
+.screenshot {
+  margin: 0;
+  min-width: 0;
+}
+.screenshot > a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 2881 / 1861;
+  background: var(--mist);
+  cursor: zoom-in;
+}
+.screenshot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.screenshot figcaption {
+  margin-top: 12px;
+  font-size: 14px;
+}
+.screenshot figcaption strong,
+.screenshot figcaption span {
+  display: block;
+}
+.screenshot figcaption span {
+  color: var(--muted);
+}
+@media (max-width: 800px) {
+  .screenshots {
+    padding-top: 52px;
+  }
+  .screenshot-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .features {
   padding-top: 90px;
   padding-bottom: 86px;
